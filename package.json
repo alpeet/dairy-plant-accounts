@@ -1,0 +1,78 @@
+{
+  "name": "godhuli-dairy-plant",
+  "version": "1.0.0",
+  "description": "Godhuli Dairy Plant - Accounts & Stock Management (Desktop + Web)",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:electron": "electron .",
+    "start:web": "node server.js",
+    "seed": "electron database/seed-electron.js",
+    "seed:web": "node database/seed.js",
+    "seed:demo": "node database/seed.js",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "verify": "node verify.js",
+    "data:export": "node data-exchange.js export",
+    "data:import": "node data-exchange.js import",
+    "data:export-csv": "node data-exchange.js export --csv",
+    "data:import-csv": "node data-exchange.js import --csv"
+  },
+  "build": {
+    "appId": "com.godhuli.dairyplant",
+    "productName": "Godhuli Dairy Plant",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "database/**/*",
+      "shared/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png",
+      "extraResources": []
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "keywords": [
+    "dairy",
+    "accounts",
+    "stock",
+    "management",
+    "desktop",
+    "web"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^22.3.27",
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "xlsx": "^0.18.5"
+  }
+}

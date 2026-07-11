@@ -1,0 +1,26 @@
+# Godhuli Dairy Plant - Render Blueprint
+# Deploy config for Render.com free tier
+# See https://render.com/docs/blueprint-spec for more info
+
+services:
+  - type: web
+    name: godhuli-dairy-plant
+    env: node
+    buildCommand: npm install --omit=optional
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: AUTH_USERNAME
+        value: admin
+      - key: AUTH_PASSWORD
+        value: admin123
+      - key: DB_DIR
+        value: /opt/render/project/src/data
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

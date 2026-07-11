@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a3c2a"/>
+      <stop offset="50%" stop-color="#2d5a3d"/>
+      <stop offset="100%" stop-color="#1a3c2a"/>
+    </linearGradient>
+    <linearGradient id="sun-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f4a460"/>
+      <stop offset="40%" stop-color="#e8832a"/>
+      <stop offset="100%" stop-color="#d4691a"/>
+    </linearGradient>
+    <linearGradient id="body-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#faf5eb"/>
+      <stop offset="100%" stop-color="#f0e6d0"/>
+    </linearGradient>
+    <linearGradient id="spot-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5a3a2a"/>
+      <stop offset="100%" stop-color="#3a2215"/>
+    </linearGradient>
+    <linearGradient id="horn-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8a6a50"/>
+      <stop offset="100%" stop-color="#6a4a30"/>
+    </linearGradient>
+    <linearGradient id="grass-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a8a3a"/>
+      <stop offset="100%" stop-color="#2d6a1a"/>
+    </linearGradient>
+    <linearGradient id="milk-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e8f0e8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="512" cy="512" r="500" fill="url(#bg-gradient)"/>
+
+  <!-- Subtle inner glow ring -->
+  <circle cx="512" cy="512" r="460" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
+  <circle cx="512" cy="512" r="420" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+
+  <!-- Sun circle (dusk/Godhuli theme) -->
+  <circle cx="512" cy="380" r="90" fill="url(#sun-gradient)" opacity="0.3"/>
+  <circle cx="512" cy="380" r="70" fill="url(#sun-gradient)" opacity="0.5"/>
+  <circle cx="512" cy="380" r="50" fill="url(#sun-gradient)" opacity="0.8"/>
+
+  <!-- Sun rays -->
+  <g opacity="0.12" stroke="#f4a460" stroke-width="3" fill="none">
+    <line x1="512" y1="260" x2="512" y2="230"/>
+    <line x1="512" y1="500" x2="512" y2="530"/>
+    <line x1="380" y1="380" x2="350" y2="380"/>
+    <line x1="644" y1="380" x2="674" y2="380"/>
+    <line x1="420" y1="290" x2="398" y2="268"/>
+    <line x1="604" y1="290" x2="626" y2="268"/>
+    <line x1="420" y1="470" x2="398" y2="492"/>
+    <line x1="604" y1="470" x2="626" y2="492"/>
+  </g>
+
+  <!-- Ground / grass base -->
+  <ellipse cx="512" cy="680" rx="260" ry="30" fill="url(#grass-gradient)" opacity="0.4"/>
+  <ellipse cx="512" cy="685" rx="180" ry="12" fill="#3a7a2a" opacity="0.3"/>
+
+  <!-- Cow body -->
+  <g transform="translate(512, 560)">
+    <!-- Back legs -->
+    <rect x="-60" y="30" width="28" height="70" rx="10" fill="#c8b89a"/>
+    <rect x="32" y="30" width="28" height="70" rx="10" fill="#c8b89a"/>
+
+    <!-- Hooves back -->
+    <rect x="-62" y="88" width="32" height="16" rx="6" fill="#4a3530"/>
+    <rect x="30" y="88" width="32" height="16" rx="6" fill="#4a3530"/>
+
+    <!-- Udder -->
+    <ellipse cx="10" cy="45" rx="25" ry="15" fill="#e8b8b0"/>
+    <ellipse cx="2" cy="50" rx="6" ry="8" fill="#d8a898"/>
+    <ellipse cx="12" cy="52" rx="5" ry="7" fill="#d8a898"/>
+    <ellipse cx="22" cy="50" rx="5" ry="7" fill="#d8a898"/>
+
+    <!-- Body -->
+    <ellipse cx="0" cy="-10" rx="100" ry="55" fill="url(#body-gradient)"/>
+
+    <!-- Brown spots on body -->
+    <ellipse cx="-50" cy="-25" rx="22" ry="18" fill="url(#spot-gradient)" opacity="0.8"/>
+    <ellipse cx="30" cy="-35" rx="18" ry="15" fill="url(#spot-gradient)" opacity="0.7"/>
+    <ellipse cx="60" cy="-10" rx="20" ry="14" fill="url(#spot-gradient)" opacity="0.6"/>
+    <ellipse cx="-15" cy="-5" rx="15" ry="12" fill="url(#spot-gradient)" opacity="0.5"/>
+    <ellipse cx="-70" cy="-5" rx="12" ry="10" fill="url(#spot-gradient)" opacity="0.5"/>
+
+    <!-- Tail -->
+    <path d="M-95,-10 Q-130,-20 -140,10 Q-145,25 -130,20" stroke="#5a3a2a" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <ellipse cx="-130" cy="20" rx="8" ry="5" fill="#5a3a2a"/>
+
+    <!-- Front legs -->
+    <rect x="-75" y="25" width="28" height="65" rx="10" fill="#e8dcc8"/>
+    <rect x="55" y="25" width="28" height="65" rx="10" fill="#e8dcc8"/>
+
+    <!-- Hooves front -->
+    <rect x="-77" y="78" width="32" height="16" rx="6" fill="#4a3530"/>
+    <rect x="53" y="78" width="32" height="16" rx="6" fill="#4a3530"/>
+
+    <!-- Neck -->
+    <path d="M80,-20 Q110,-30 120,-50 Q125,-65 115,-70 Q100,-75 85,-60" fill="url(#body-gradient)"/>
+
+    <!-- Head -->
+    <ellipse cx="110" cy="-85" rx="45" ry="38" fill="url(#body-gradient)"/>
+
+    <!-- Snout -->
+    <ellipse cx="145" cy="-75" rx="25" ry="20" fill="#f0dcc8"/>
+    <ellipse cx="145" cy="-70" rx="8" ry="5" fill="#e8c8b0"/>
+
+    <!-- Nostrils -->
+    <circle cx="140" cy="-73" r="3" fill="#8a6a50"/>
+    <circle cx="150" cy="-73" r="3" fill="#8a6a50"/>
+
+    <!-- Eyes -->
+    <circle cx="125" cy="-95" r="7" fill="#2a1a10"/>
+    <circle cx="125" cy="-95" r="3" fill="white" opacity="0.6"/>
+    <circle cx="100" cy="-95" r="7" fill="#2a1a10"/>
+    <circle cx="100" cy="-95" r="3" fill="white" opacity="0.6"/>
+
+    <!-- Ears -->
+    <ellipse cx="80" cy="-110" rx="15" ry="10" fill="#d8c8b0" transform="rotate(-20, 80, -110)"/>
+    <ellipse cx="80" cy="-110" rx="8" ry="6" fill="#e8b8a0" transform="rotate(-20, 80, -110)"/>
+
+    <!-- Horns -->
+    <path d="M85,-115 Q80,-140 90,-155" stroke="url(#horn-gradient)" stroke-width="10" fill="none" stroke-linecap="round"/>
+    <path d="M115,-115 Q120,-140 130,-155" stroke="url(#horn-gradient)" stroke-width="10" fill="none" stroke-linecap="round"/>
+
+    <!-- Bell on neck -->
+    <circle cx="110" cy="-65" r="10" fill="#d4a030"/>
+    <circle cx="110" cy="-65" r="6" fill="#e8c040"/>
+    <circle cx="110" cy="-62" r="3" fill="#a07820"/>
+    <line x1="110" y1="-75" x2="110" y2="-65" stroke="#8a6a30" stroke-width="2"/>
+  </g>
+
+  <!-- Milk drop -->
+  <g transform="translate(512, 440)" opacity="0.9">
+    <path d="M0,-30 Q15,-10 15,5 Q15,25 0,30 Q-15,25 -15,5 Q-15,-10 0,-30Z" fill="url(#milk-gradient)"/>
+    <ellipse cx="0" cy="5" rx="8" ry="12" fill="white" opacity="0.3"/>
+  </g>
+
+  <!-- Small milk splash dots -->
+  <circle cx="540" cy="455" r="4" fill="white" opacity="0.5"/>
+  <circle cx="485" cy="450" r="3" fill="white" opacity="0.4"/>
+  <circle cx="550" cy="435" r="2.5" fill="white" opacity="0.3"/>
+</svg>

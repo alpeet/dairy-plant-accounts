@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <!-- CSP removed for web version - browser handles security natively -->
+    <title>Godhuli Dairy Plant</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="shortcut icon" type="image/png" href="favicon.png">
+    <link rel="stylesheet" href="css/style.css?v=2">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h1>
+                    <svg class="sidebar-logo" viewBox="0 0 1024 1024" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="bg-g" x1="0" y1="0" x2="1" y2="1">
+                                <stop offset="0%" stop-color="#1a3c2a"/>
+                                <stop offset="50%" stop-color="#2d5a3d"/>
+                                <stop offset="100%" stop-color="#1a3c2a"/>
+                            </linearGradient>
+                            <linearGradient id="sun-g" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="#f4a460"/>
+                                <stop offset="100%" stop-color="#d4691a"/>
+                            </linearGradient>
+                            <linearGradient id="body-g" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="#faf5eb"/>
+                                <stop offset="100%" stop-color="#f0e6d0"/>
+                            </linearGradient>
+                            <linearGradient id="spot-g" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stop-color="#5a3a2a"/>
+                                <stop offset="100%" stop-color="#3a2215"/>
+                            </linearGradient>
+                            <linearGradient id="milk-g" x1="0" y1="0" x2="1" y2="1">
+                                <stop offset="0%" stop-color="#ffffff"/>
+                                <stop offset="100%" stop-color="#e8f0e8"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="512" cy="512" r="500" fill="url(#bg-g)"/>
+                        <circle cx="512" cy="380" r="50" fill="url(#sun-g)" opacity="0.8"/>
+                        <g transform="translate(512, 560)">
+                            <ellipse cx="0" cy="-10" rx="100" ry="55" fill="url(#body-g)"/>
+                            <ellipse cx="-50" cy="-25" rx="22" ry="18" fill="url(#spot-g)" opacity="0.8"/>
+                            <ellipse cx="30" cy="-35" rx="18" ry="15" fill="url(#spot-g)" opacity="0.7"/>
+                            <ellipse cx="60" cy="-10" rx="20" ry="14" fill="url(#spot-g)" opacity="0.6"/>
+                            <ellipse cx="110" cy="-85" rx="45" ry="38" fill="url(#body-g)"/>
+                            <ellipse cx="145" cy="-75" rx="25" ry="20" fill="#f0dcc8"/>
+                            <ellipse cx="145" cy="-70" rx="8" ry="5" fill="#e8c8b0"/>
+                            <circle cx="125" cy="-95" r="7" fill="#2a1a10"/>
+                            <circle cx="100" cy="-95" r="7" fill="#2a1a10"/>
+                            <path d="M85,-115 Q80,-140 90,-155" stroke="#8a6a50" stroke-width="10" fill="none" stroke-linecap="round"/>
+                            <path d="M115,-115 Q120,-140 130,-155" stroke="#8a6a50" stroke-width="10" fill="none" stroke-linecap="round"/>
+                        </g>
+                        <path d="M512,410 Q527,430 527,445 Q527,465 512,470 Q497,465 497,445 Q497,430 512,410Z" fill="url(#milk-g)" opacity="0.9"/>
+                    </svg>
+                    <span class="app-name">Godhuli Dairy Plant</span>
+                </h1>
+                <div class="subtitle">Accounts &amp; Stock Management</div>
+            </div>
+            <ul class="nav-list" id="navList">
+                <li class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">Dashboard</span>
+                </li>
+                <li class="nav-item" data-page="sales">
+                    <span class="nav-icon">💰</span>
+                    <span class="nav-text">Sales</span>
+                </li>
+                <li class="nav-item" data-page="purchases">
+                    <span class="nav-icon">📦</span>
+                    <span class="nav-text">Purchases</span>
+                </li>
+                <li class="nav-item" data-page="milk">
+                    <span class="nav-icon">🥛</span>
+                    <span class="nav-text">Milk Collection</span>
+                </li>
+                <li class="nav-item" data-page="stock">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">Stock</span>
+                </li>
+                <li class="nav-item" data-page="parties">
+                    <span class="nav-icon">👥</span>
+                    <span class="nav-text">Parties</span>
+                </li>
+                <li class="nav-item" data-page="farmer-payments">
+                    <span class="nav-icon">💵</span>
+                    <span class="nav-text">Farmer Payments</span>
+                </li>
+                <li class="nav-item" data-page="reports">
+                    <span class="nav-icon">📈</span>
+                    <span class="nav-text">Reports</span>
+                </li>
+                <li class="nav-item" data-page="settings">
+                    <span class="nav-icon">⚙️</span>
+                    <span class="nav-text">Settings</span>
+                </li>
+            </ul>
+            <div class="sidebar-footer">
+                <div class="sidebar-footer-info">
+                    Godhuli Dairy Plant v1.0.0
+                </div>
+                <button class="sidebar-logout-btn" id="logoutBtn" title="Logout">
+                    <span class="logout-icon">🚪</span>
+                    <span class="nav-text">Logout</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Top Bar -->
+            <header class="top-bar">
+                <h2 class="page-title" id="pageTitle">Dashboard</h2>
+                <div class="top-actions" id="topActions"></div>
+            </header>
+
+            <!-- Page Content -->
+            <div class="page-content" id="pageContent">
+                <!-- Dashboard -->
+                <div class="page-section active" id="page-dashboard"></div>
+
+                <!-- Sales -->
+                <div class="page-section" id="page-sales"></div>
+
+                <!-- Purchases -->
+                <div class="page-section" id="page-purchases"></div>
+
+                <!-- Milk Collection -->
+                <div class="page-section" id="page-milk"></div>
+
+                <!-- Stock -->
+                <div class="page-section" id="page-stock"></div>
+
+                <!-- Parties -->
+                <div class="page-section" id="page-parties"></div>
+
+                <!-- Farmer Payments -->
+                <div class="page-section" id="page-farmer-payments"></div>
+
+                <!-- Reports -->
+                <div class="page-section" id="page-reports"></div>
+
+                <!-- Settings -->
+                <div class="page-section" id="page-settings"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Container -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="modalContent"></div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Scripts (v=2 cache-bust) -->
+    <script src="js/api.js?v=2"></script>
+    <script src="js/utils.js?v=2"></script>
+    <script src="js/dashboard.js?v=2"></script>
+    <script src="js/sales.js?v=2"></script>
+    <script src="js/purchases.js?v=2"></script>
+    <script src="js/stock.js?v=2"></script>
+    <script src="js/milk_collection.js?v=2"></script>
+    <script src="js/party.js?v=2"></script>
+    <script src="js/farmer_payment.js?v=2"></script>
+    <script src="js/reports.js?v=2"></script>
+    <script src="js/settings.js?v=2"></script>
+    <script src="js/app.js?v=2"></script>
+</body>
+</html>

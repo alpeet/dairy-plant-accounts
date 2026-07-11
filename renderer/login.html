@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Godhuli Dairy Plant - Login</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="shortcut icon" type="image/png" href="favicon.png">
+    <link rel="stylesheet" href="css/login.css?v=2">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <!-- Logo -->
+            <div class="login-logo">
+                <svg viewBox="0 0 1024 1024" width="64" height="64" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="bg-g" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#1a3c2a"/>
+                            <stop offset="50%" stop-color="#2d5a3d"/>
+                            <stop offset="100%" stop-color="#1a3c2a"/>
+                        </linearGradient>
+                        <linearGradient id="sun-g" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#f4a460"/>
+                            <stop offset="100%" stop-color="#d4691a"/>
+                        </linearGradient>
+                        <linearGradient id="body-g" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#faf5eb"/>
+                            <stop offset="100%" stop-color="#f0e6d0"/>
+                        </linearGradient>
+                        <linearGradient id="spot-g" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#5a3a2a"/>
+                            <stop offset="100%" stop-color="#3a2215"/>
+                        </linearGradient>
+                        <linearGradient id="milk-g" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#ffffff"/>
+                            <stop offset="100%" stop-color="#e8f0e8"/>
+                        </linearGradient>
+                    </defs>
+                    <circle cx="512" cy="512" r="500" fill="url(#bg-g)"/>
+                    <circle cx="512" cy="380" r="50" fill="url(#sun-g)" opacity="0.8"/>
+                    <g transform="translate(512, 560)">
+                        <ellipse cx="0" cy="-10" rx="100" ry="55" fill="url(#body-g)"/>
+                        <ellipse cx="-50" cy="-25" rx="22" ry="18" fill="url(#spot-g)" opacity="0.8"/>
+                        <ellipse cx="30" cy="-35" rx="18" ry="15" fill="url(#spot-g)" opacity="0.7"/>
+                        <ellipse cx="60" cy="-10" rx="20" ry="14" fill="url(#spot-g)" opacity="0.6"/>
+                        <ellipse cx="110" cy="-85" rx="45" ry="38" fill="url(#body-g)"/>
+                        <ellipse cx="145" cy="-75" rx="25" ry="20" fill="#f0dcc8"/>
+                        <ellipse cx="145" cy="-70" rx="8" ry="5" fill="#e8c8b0"/>
+                        <circle cx="125" cy="-95" r="7" fill="#2a1a10"/>
+                        <circle cx="100" cy="-95" r="7" fill="#2a1a10"/>
+                        <path d="M85,-115 Q80,-140 90,-155" stroke="#8a6a50" stroke-width="10" fill="none" stroke-linecap="round"/>
+                        <path d="M115,-115 Q120,-140 130,-155" stroke="#8a6a50" stroke-width="10" fill="none" stroke-linecap="round"/>
+                    </g>
+                    <path d="M512,410 Q527,430 527,445 Q527,465 512,470 Q497,465 497,445 Q497,430 512,410Z" fill="url(#milk-g)" opacity="0.9"/>
+                </svg>
+            </div>
+
+            <h1 class="login-title" id="formTitle">Godhuli Dairy Plant</h1>
+            <p class="login-subtitle" id="formSubtitle">Accounts &amp; Stock Management System</p>
+
+            <!-- ========== LOGIN FORM ========== -->
+            <div id="loginView">
+                <form id="loginForm" class="login-form" autocomplete="off">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" class="form-control" placeholder="Enter your username" required autofocus autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" class="form-control" placeholder="Enter your password" required autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="login-btn" id="loginBtn">
+                        <span class="login-btn-text">Sign In</span>
+                        <span class="login-btn-spinner" style="display:none">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round">
+                                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                                </circle>
+                            </svg>
+                        </span>
+                    </button>
+                    <div id="loginError" class="login-error" style="display:none"></div>
+                </form>
+
+                <div class="login-links">
+                    <a href="#" id="forgotPasswordLink" class="login-link">Forgot Password?</a>
+                    <a href="#" id="registerLink" class="login-link">Create New Account</a>
+                </div>
+            </div>
+
+            <!-- ========== REGISTER FORM ========== -->
+            <div id="registerView" style="display:none">
+                <form id="registerForm" class="login-form" autocomplete="off">
+                    <div class="form-group">
+                        <label for="regUsername">Choose a Username</label>
+                        <input type="text" id="regUsername" class="form-control" placeholder="At least 3 characters" required minlength="3" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="regPassword">Choose a Password</label>
+                        <input type="password" id="regPassword" class="form-control" placeholder="At least 4 characters" required minlength="4" autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="login-btn" id="registerBtn">
+                        <span class="login-btn-text">Create Account</span>
+                        <span class="login-btn-spinner" style="display:none">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round">
+                                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                                </circle>
+                            </svg>
+                        </span>
+                    </button>
+                    <div id="registerError" class="login-error" style="display:none"></div>
+                </form>
+
+                <div class="login-links">
+                    <a href="#" id="backToLoginFromRegister" class="login-link">← Back to Login</a>
+                </div>
+            </div>
+
+            <!-- ========== FORGOT PASSWORD FORM ========== -->
+            <div id="forgotPasswordView" style="display:none">
+                <form id="forgotPasswordForm" class="login-form" autocomplete="off">
+                    <div class="auth-info">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="12" y1="16" x2="12" y2="12"/>
+                            <line x1="12" y1="8" x2="12.01" y2="8"/>
+                        </svg>
+                        <span>Enter your username and a new password to reset.</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="resetUsername">Username</label>
+                        <input type="text" id="resetUsername" class="form-control" placeholder="Enter your username" required autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="resetPassword">New Password</label>
+                        <input type="password" id="resetPassword" class="form-control" placeholder="At least 4 characters" required minlength="4" autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="login-btn" id="resetBtn">
+                        <span class="login-btn-text">Reset Password</span>
+                        <span class="login-btn-spinner" style="display:none">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round">
+                                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                                </circle>
+                            </svg>
+                        </span>
+                    </button>
+                    <div id="resetError" class="login-error" style="display:none"></div>
+                </form>
+
+                <div class="login-links">
+                    <a href="#" id="backToLoginFromReset" class="login-link">← Back to Login</a>
+                </div>
+            </div>
+
+            <div class="login-footer">
+                <p>Godhuli Dairy Plant v1.0.0</p>
+                <p class="login-hint">Default: admin / admin123</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/login.js?v=2"></script>
+</body>
+</html>

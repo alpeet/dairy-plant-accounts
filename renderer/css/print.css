@@ -1,0 +1,422 @@
+/* ============================================================
+   Godhuli Dairy Plant - Print Stylesheet
+   Used by printHTML() and printToPDF() for all print/PDF output
+   ============================================================ */
+
+@page {
+    margin: 15mm 12mm 20mm 12mm;
+    size: A4;
+    @bottom-right {
+        content: "Page " counter(page);
+        font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+        font-size: 7.5pt;
+        color: #888;
+    }
+}
+
+/* ============================================================
+   Base Reset & Typography
+   ============================================================ */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10pt;
+    color: #222;
+    line-height: 1.55;
+    margin: 0;
+    padding: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+/* ============================================================
+   Print Header
+   ============================================================ */
+.header {
+    text-align: center;
+    margin-bottom: 18px;
+    border-bottom: 3px double #1a5276;
+    padding-bottom: 12px;
+}
+
+.header h1 {
+    font-size: 22pt;
+    margin: 0;
+    color: #1a5276;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.header h2 {
+    font-size: 13pt;
+    margin: 6px 0 2px;
+    color: #333;
+    font-weight: 600;
+}
+
+.header p {
+    font-size: 8.5pt;
+    color: #666;
+    margin: 2px 0;
+}
+
+.header .business-detail {
+    font-size: 8pt;
+    color: #888;
+    margin-top: 4px;
+}
+
+/* ============================================================
+   Info Rows (key-value pairs below header)
+   ============================================================ */
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    margin: 8px 0;
+    padding: 6px 0;
+    border-bottom: 1px dashed #ddd;
+    font-size: 9pt;
+}
+
+.info-row strong {
+    color: #333;
+}
+
+/* ============================================================
+   Summary Stats Bar
+   ============================================================ */
+.stats-bar {
+    display: flex;
+    gap: 16px;
+    margin: 10px 0 14px;
+    padding: 8px 12px;
+    background: #f0f4f8;
+    border: 1px solid #d0d8e0;
+    border-radius: 4px;
+    font-size: 9pt;
+}
+
+.stats-bar .stat-item {
+    flex: 1;
+    text-align: center;
+}
+
+.stats-bar .stat-item .stat-label {
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    color: #666;
+    letter-spacing: 0.3px;
+}
+
+.stats-bar .stat-item .stat-value {
+    font-size: 10pt;
+    font-weight: 700;
+    color: #1a5276;
+    font-family: 'Consolas', 'Courier New', monospace;
+    margin-top: 2px;
+}
+
+/* ============================================================
+   Tables
+   ============================================================ */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+    page-break-inside: auto;
+    font-size: 9pt;
+}
+
+thead {
+    display: table-header-group;
+}
+
+tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+}
+
+th, td {
+    padding: 5px 8px;
+    text-align: left;
+    border: 1px solid #bbb;
+    vertical-align: middle;
+}
+
+th {
+    background: #1a5276 !important;
+    color: white !important;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    font-size: 7.5pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+td {
+    font-size: 8.5pt;
+}
+
+/* Alternating row colors */
+tbody tr:nth-child(even) {
+    background: #f5f7fa;
+}
+
+tbody tr:last-child td {
+    border-bottom: 1px solid #bbb;
+}
+
+/* Column alignments */
+.text-right {
+    text-align: right;
+    font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.text-center {
+    text-align: center;
+}
+
+/* Table footer / totals row */
+tfoot td {
+    background: #e8edf2 !important;
+    font-weight: 600;
+    border-top: 2px solid #bbb;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+/* ============================================================
+   Summary Section (totals, subtotals, etc.)
+   ============================================================ */
+.summary {
+    margin: 14px 0;
+    padding: 10px 14px;
+    background: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 9pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+.summary-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 9pt;
+}
+
+.summary-row.total {
+    font-weight: 700;
+    font-size: 10pt;
+    border-top: 2px solid #999;
+    padding-top: 6px;
+    margin-top: 4px;
+}
+
+/* ============================================================
+   Key-Value Detail Grid (for single-record views)
+   ============================================================ */
+.detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 20px;
+    margin: 10px 0;
+    padding: 10px 12px;
+    background: #fafafa;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.detail-grid .detail-item {
+    display: flex;
+    gap: 6px;
+    font-size: 9pt;
+}
+
+.detail-grid .detail-item .detail-label {
+    color: #666;
+    min-width: 90px;
+}
+
+.detail-grid .detail-item .detail-value {
+    font-weight: 600;
+    color: #333;
+}
+
+/* ============================================================
+   Value Cards (for metrics display)
+   ============================================================ */
+.value-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin: 10px 0;
+}
+
+.value-card {
+    padding: 10px 12px;
+    background: #f5f7fa;
+    border: 1px solid #d0d8e0;
+    border-radius: 3px;
+    text-align: center;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
+.value-card .value-label {
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    color: #666;
+    letter-spacing: 0.3px;
+}
+
+.value-card .value-number {
+    font-size: 14pt;
+    font-weight: 700;
+    color: #1a5276;
+    font-family: 'Consolas', 'Courier New', monospace;
+    margin-top: 4px;
+}
+
+.value-card .value-sub {
+    font-size: 7.5pt;
+    color: #888;
+    margin-top: 2px;
+}
+
+/* Color variants for value cards */
+.value-card.card-green { border-left: 3px solid #27ae60; }
+.value-card.card-red { border-left: 3px solid #e74c3c; }
+.value-card.card-orange { border-left: 3px solid #f39c12; }
+.value-card.card-blue { border-left: 3px solid #3498db; }
+
+/* ============================================================
+   Status Indicators
+   ============================================================ */
+.status-paid {
+    color: #155724;
+    font-weight: 600;
+}
+
+.status-unpaid {
+    color: #721c24;
+    font-weight: 700;
+}
+
+.status-partial {
+    color: #856404;
+    font-weight: 600;
+}
+
+/* ============================================================
+   Footer
+   ============================================================ */
+.footer {
+    margin-top: 40px;
+    padding-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 7.5pt;
+    color: #888;
+    border-top: 1px solid #ccc;
+}
+
+.footer .signature {
+    border-top: 1px solid #222;
+    padding-top: 4px;
+    min-width: 160px;
+    text-align: center;
+    font-size: 8.5pt;
+    color: #333;
+}
+
+.footer .page-info {
+    text-align: right;
+}
+
+/* ============================================================
+   Print Meta
+   ============================================================ */
+.print-meta {
+    font-size: 7pt;
+    color: #999;
+    text-align: center;
+    margin-top: 4px;
+}
+
+/* ============================================================
+   Notes section
+   ============================================================ */
+.notes-section {
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-left: 3px solid #1a5276;
+    font-size: 8.5pt;
+    color: #555;
+    background: #fafafa;
+}
+
+.notes-section .notes-label {
+    font-weight: 600;
+    color: #333;
+}
+
+/* ============================================================
+   Section headers (for multi-table documents)
+   ============================================================ */
+.section-title {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #1a5276;
+    margin: 18px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #ccc;
+}
+
+.section-title:first-of-type {
+    margin-top: 0;
+}
+
+/* ============================================================
+   Page break helpers
+   ============================================================ */
+.page-break {
+    page-break-before: always;
+}
+
+.no-break {
+    page-break-inside: avoid;
+}
+
+/* ============================================================
+   Compact table variant (for dense data)
+   ============================================================ */
+table.compact th,
+table.compact td {
+    padding: 3px 6px;
+    font-size: 7.5pt;
+}
+
+/* ============================================================
+   Watermark / Draft indicator
+   ============================================================ */
+.watermark {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-30deg);
+    font-size: 48pt;
+    color: rgba(200, 200, 200, 0.15);
+    font-weight: 700;
+    pointer-events: none;
+    z-index: -1;
+    text-transform: uppercase;
+    letter-spacing: 8px;
+}
