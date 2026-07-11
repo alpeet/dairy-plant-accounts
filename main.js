@@ -11,9 +11,14 @@ let db = null;
 // ============================================================
 // Database initialization
 // ============================================================
+
+/** Shared database directory — same as web server, so data is shared between versions */
+function getDbDir() {
+    return process.env.DB_DIR || path.join(__dirname, 'data');
+}
+
 function initAppDatabase() {
-    // Use the same database as the web version, so data is shared
-    const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
+    const dbDir = getDbDir();
     db = initDatabase(dbDir, 'dairy-plant.db');
     console.log('Desktop app - using database at:', path.join(dbDir, 'dairy-plant.db'));
     return path.join(dbDir, 'dairy-plant.db');
@@ -215,8 +220,7 @@ ipcMain.handle('db:settings:save', async (event, settings) => {
 
 // --- Backup ---
 ipcMain.handle('db:backup', async () => {
-    const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
-    return safeRun(() => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db')));
+    return safeRun(() => ops.backupDatabase(path.join(getDbDir(), 'dairy-plant.db')));
 });
 
 // --- Print handlers ---
@@ -297,8 +301,7 @@ ipcMain.handle('dialog:save', async (event, options) => {
 
 // --- Get database path ---
 ipcMain.handle('db:path', async () => {
-    const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
-    return path.join(dbDir, 'dairy-plant.db');
+    return path.join(getDbDir(), 'dairy-plant.db');
 });
 
 // ============================================================
