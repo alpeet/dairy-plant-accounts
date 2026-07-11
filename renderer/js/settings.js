@@ -76,14 +76,16 @@ async function renderSettings() {
             <div class="card-header">
                 <h2>User Management</h2>
             </div>
-            <div class="settings-section">
-                <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
-                    <button class="btn btn-primary btn-sm" onclick="showCreateUserModal()">➕ New User</button>
-                    <button class="btn btn-secondary btn-sm" onclick="showChangePasswordModal()">🔑 Change Password</button>
-                    <button class="btn btn-secondary btn-sm" onclick="loadUsersList()">🔄 Refresh</button>
-                </div>
-                <div id="usersListContainer">
-                    <p style="color:var(--text-light);font-size:13px">Loading users...</p>
+            <div class="settings-section" id="userManagementSection">
+                <div id="userMgmtContent">
+                    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" onclick="showCreateUserModal()">➕ New User</button>
+                        <button class="btn btn-secondary btn-sm" onclick="showChangePasswordModal()">🔑 Change Password</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadUsersList()">🔄 Refresh</button>
+                    </div>
+                    <div id="usersListContainer">
+                        <p style="color:var(--text-light);font-size:13px">Loading users...</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -135,12 +137,17 @@ async function renderSettings() {
 // User Management Functions
 // ============================================================
 
+// Check if user management features are available (web-only, not in Electron)
+function hasUserManagement() {
+    return typeof window.api !== 'undefined' && typeof window.api.listUsers === 'function';
+}
+
 async function loadUsersList() {
     const container = document.getElementById('usersListContainer');
     if (!container) return;
 
     // In Electron mode, user management is not available (web-only feature)
-    if (typeof window.api.listUsers !== 'function') {
+    if (!hasUserManagement()) {
         container.innerHTML = `<p style="color:var(--text-light);font-size:13px">User management is available in the web version only.</p>`;
         return;
     }
@@ -186,6 +193,10 @@ async function loadUsersList() {
 }
 
 function showCreateUserModal() {
+    if (!hasUserManagement()) {
+        showToast('User management is only available in the web version', 'error');
+        return;
+    }
     showModal(`
         <div class="modal-header">
             <h2>Create New User</h2>
@@ -250,6 +261,10 @@ async function createUser(event) {
 }
 
 async function deleteUser(id, username) {
+    if (!hasUserManagement()) {
+        showToast('User management is only available in the web version', 'error');
+        return;
+    }
     const confirmed = await confirmAction(
         `Delete user "${username}"?`,
         'This action cannot be undone. The user will no longer be able to log in.',
@@ -268,6 +283,10 @@ async function deleteUser(id, username) {
 }
 
 function showChangePasswordModal() {
+    if (!hasUserManagement()) {
+        showToast('User management is only available in the web version', 'error');
+        return;
+    }
     showModal(`
         <div class="modal-header">
             <h2>Change Password</h2>
