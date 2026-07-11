@@ -139,6 +139,12 @@ async function loadUsersList() {
     const container = document.getElementById('usersListContainer');
     if (!container) return;
 
+    // In Electron mode, user management is not available (web-only feature)
+    if (typeof window.api.listUsers !== 'function') {
+        container.innerHTML = `<p style="color:var(--text-light);font-size:13px">User management is available in the web version only.</p>`;
+        return;
+    }
+
     const result = await window.api.listUsers();
     if (!result.success) {
         container.innerHTML = `<p style="color:var(--danger);font-size:13px">Error: ${escapeHtml(result.error)}</p>`;

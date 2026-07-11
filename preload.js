@@ -56,12 +56,6 @@ contextBridge.exposeInMainWorld('api', {
     savePayment: (payment) => ipcRenderer.invoke('db:payments:save', payment),
     getPayments: (opts) => ipcRenderer.invoke('db:payments:list', opts),
 
-    // Users (auth management)
-    listUsers: () => ipcRenderer.invoke('db:auth:users/list'),
-    createUser: (data) => ipcRenderer.invoke('db:auth:users/create', data),
-    deleteUser: (id) => ipcRenderer.invoke('db:auth:users/delete', { id }),
-    changePassword: (data) => ipcRenderer.invoke('db:auth:users/change-password', data),
-
     // Settings
     getSettings: () => ipcRenderer.invoke('db:settings:get'),
     saveSettings: (settings) => ipcRenderer.invoke('db:settings:save', settings),
