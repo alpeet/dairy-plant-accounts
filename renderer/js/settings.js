@@ -16,6 +16,24 @@ async function renderSettings() {
 
     const settings = result.data;
 
+    const userManagementCard = hasUserManagement() ? `
+        <div class="card" style="max-width:600px;margin-top:20px">
+            <div class="card-header">
+                <h2>User Management</h2>
+            </div>
+            <div class="settings-section">
+                <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
+                    <button class="btn btn-primary btn-sm" onclick="showCreateUserModal()">➕ New User</button>
+                    <button class="btn btn-secondary btn-sm" onclick="showChangePasswordModal()">🔑 Change Password</button>
+                    <button class="btn btn-secondary btn-sm" onclick="loadUsersList()">🔄 Refresh</button>
+                </div>
+                <div id="usersListContainer">
+                    <p style="color:var(--text-light);font-size:13px">Loading users...</p>
+                </div>
+            </div>
+        </div>
+    ` : '';
+
     container.innerHTML = `
         <div class="card" style="max-width:600px">
             <div class="card-header">
@@ -72,23 +90,7 @@ async function renderSettings() {
             </div>
         </div>
 
-        <div class="card" style="max-width:600px;margin-top:20px">
-            <div class="card-header">
-                <h2>User Management</h2>
-            </div>
-            <div class="settings-section" id="userManagementSection">
-                <div id="userMgmtContent">
-                    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" onclick="showCreateUserModal()">➕ New User</button>
-                        <button class="btn btn-secondary btn-sm" onclick="showChangePasswordModal()">🔑 Change Password</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadUsersList()">🔄 Refresh</button>
-                    </div>
-                    <div id="usersListContainer">
-                        <p style="color:var(--text-light);font-size:13px">Loading users...</p>
-                    </div>
-                </div>
-            </div>
-        </div>
+        ${userManagementCard}
 
         <div class="card" style="max-width:600px;margin-top:20px">
             <div class="card-header">
