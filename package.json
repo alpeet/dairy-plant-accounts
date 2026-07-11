@@ -11,7 +11,7 @@
     "seed:web": "node database/seed.js",
     "seed:demo": "node database/seed.js",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "node scripts/postinstall.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
@@ -63,7 +63,7 @@
     "web"
   ],
   "engines": {
-    "node": ">=18.0.0"
+    "node": "20.x"
   },
   "author": "",
   "license": "MIT",
