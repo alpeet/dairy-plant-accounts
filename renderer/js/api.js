@@ -9,7 +9,8 @@
  */
 
 // Check if we're running in Electron — if so, preload.js via contextBridge handles the API
-if (typeof window !== 'undefined' && (window.process?.versions?.electron || window.electronAPI)) {
+// In Electron, loadFile() uses file:// protocol. In web browser, it's http:// or https://
+if (typeof location !== 'undefined' && location.protocol === 'file:') {
     console.log('Electron mode: using IPC-based API from preload.js');
 } else {
     // Web browser mode — provide fetch-based API
