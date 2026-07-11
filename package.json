@@ -68,7 +68,7 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^22.3.27",
+    "electron": "^33.4.11",
     "electron-builder": "^24.13.3",
     "electron-rebuild": "^3.2.9"
   },
