@@ -4,22 +4,26 @@
  * ===========================================
  * Runs after `npm install`.
  *
- * - If Electron is installed AND accessible → runs electron-rebuild
- *   (needed for the Electron desktop app)
- * - If Electron is NOT installed (e.g., Render, web-only deploy) → 
- *   ensures better-sqlite3 is compiled for the current Node.js version
+ * Strategy: Try to rebuild for Electron first. If that fails
+ * (which it will on cloud hosts like Render where Electron's
+ * headers don't match the system Node.js), gracefully falls
+ * back to rebuilding for the current Node.js version.
  */
 
 const { execSync } = require('child_process');
-const fs = require('fs');
 const path = require('path');
 
-// Check if better-sqlite3's native binary works with the current Node
-function checkNativeModule() {
+const ROOT = path.join(__dirname, '..');
+
+console.log('');
+console.log('  📦 Post-install: checking native modules...');
+
+// Check if better-sqlite3 already works with this Node.js version
+function nativeModuleWorks() {
     try {
         const betterSqlite3 = require('better-sqlite3');
         const db = new betterSqlite3(':memory:');
-        db.exec('SELECT 1');
+        db.exec('SELECT 1 + 1');
         db.close();
         return true;
     } catch (e) {
@@ -27,52 +31,50 @@ function checkNativeModule() {
     }
 }
 
-// Check if Electron is available
-function hasElectron() {
+// Check if electron is installed as a package
+function electronInstalled() {
     try {
-        require.resolve('electron');
+        require.resolve('electron/package.json');
         return true;
     } catch (e) {
         return false;
     }
 }
 
-console.log('');
-console.log('  📦 Post-install check...');
+// If the native module already works, we're done
+if (nativeModuleWorks()) {
+    console.log('  ✅ better-sqlite3 is already compatible — nothing to do');
+    console.log('');
+    process.exit(0);
+}
 
-// If running in a web-only context (no Electron), just rebuild better-sqlite3 for Node
-if (!hasElectron()) {
-    console.log('  → Electron not detected (web-only mode)');
-    
-    if (!checkNativeModule()) {
-        console.log('  → Rebuilding better-sqlite3 for Node.js...');
-        try {
-            execSync('npm rebuild better-sqlite3', { 
-                stdio: 'inherit',
-                cwd: path.join(__dirname, '..')
-            });
-            console.log('  ✅ better-sqlite3 rebuilt successfully');
-        } catch (err) {
-            console.error('  ❌ Failed to rebuild better-sqlite3:', err.message);
-            process.exit(1);
-        }
-    } else {
-        console.log('  ✅ better-sqlite3 native module is compatible');
-    }
-} else {
-    // Electron mode — rebuild for Electron
-    console.log('  → Electron detected (desktop mode)');
-    console.log('  → Running electron-rebuild...');
+// Try electron-rebuild first (for local Electron development)
+if (electronInstalled()) {
+    console.log('  → Trying electron-rebuild (for desktop mode)...');
     try {
         execSync('electron-rebuild -f -w better-sqlite3', { 
             stdio: 'inherit',
-            cwd: path.join(__dirname, '..')
+            cwd: ROOT
         });
-        console.log('  ✅ Electron rebuild complete');
-    } catch (err) {
-        console.error('  ❌ Electron-rebuild failed:', err.message);
-        process.exit(1);
+        console.log('  ✅ Rebuilt for Electron successfully');
+        console.log('');
+        process.exit(0);
+    } catch (e) {
+        console.log('  → electron-rebuild not applicable (web-only mode)');
     }
+}
+
+// Fallback: rebuild for current Node.js
+console.log('  → Rebuilding better-sqlite3 for Node.js...');
+try {
+    execSync('npm rebuild better-sqlite3', { 
+        stdio: 'inherit',
+        cwd: ROOT
+    });
+    console.log('  ✅ better-sqlite3 rebuilt successfully');
+} catch (err) {
+    console.error('  ❌ Failed to rebuild better-sqlite3:', err.message);
+    process.exit(1);
 }
 
 console.log('  ✅ Post-install complete');
