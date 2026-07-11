@@ -44,7 +44,7 @@ function createWindow() {
         show: false
     });
 
-    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+        mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
@@ -312,15 +312,18 @@ app.whenReady().then(() => {
     createWindow();
 
     app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+        if (BrowserWindow.getAllWindows().length === 0) {
+            if (!db) initAppDatabase();
+            createWindow();
+        }
     });
 });
 
 app.on('window-all-closed', () => {
-    if (db) db.close();
+    if (db) { db.close(); db = null; }
     if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('will-quit', () => {
-    if (db) db.close();
+    if (db) { db.close(); db = null; }
 });
