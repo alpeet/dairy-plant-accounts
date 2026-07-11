@@ -12,10 +12,11 @@ let db = null;
 // Database initialization
 // ============================================================
 function initAppDatabase() {
-    const dbPath = path.join(app.getPath('userData'), 'dairy-plant.db');
-    const dbDir = app.getPath('userData');
+    // Use the same database as the web version, so data is shared
+    const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
     db = initDatabase(dbDir, 'dairy-plant.db');
-    return dbPath;
+    console.log('Desktop app - using database at:', path.join(dbDir, 'dairy-plant.db'));
+    return path.join(dbDir, 'dairy-plant.db');
 }
 
 // ============================================================
@@ -214,7 +215,8 @@ ipcMain.handle('db:settings:save', async (event, settings) => {
 
 // --- Backup ---
 ipcMain.handle('db:backup', async () => {
-    return safeRun(() => ops.backupDatabase(path.join(app.getPath('userData'), 'dairy-plant.db')));
+    const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
+    return safeRun(() => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db')));
 });
 
 // --- Print handlers ---
@@ -295,7 +297,8 @@ ipcMain.handle('dialog:save', async (event, options) => {
 
 // --- Get database path ---
 ipcMain.handle('db:path', async () => {
-    return path.join(app.getPath('userData'), 'dairy-plant.db');
+    const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
+    return path.join(dbDir, 'dairy-plant.db');
 });
 
 // ============================================================
