@@ -56,9 +56,15 @@ if (electronInstalled()) {
             stdio: 'inherit',
             cwd: ROOT
         });
-        console.log('  ✅ Rebuilt for Electron successfully');
-        console.log('');
-        process.exit(0);
+        // Verify the rebuilt binary actually works with THIS Node.js version
+        // electron-rebuild may succeed but compile against Electron's headers
+        // (NODE_MODULE_VERSION 110) instead of the system Node.js (v147+)
+        if (nativeModuleWorks()) {
+            console.log('  ✅ Rebuilt for Electron successfully');
+            console.log('');
+            process.exit(0);
+        }
+        console.log('  → electron-rebuild binary incompatible with system Node.js, falling back...');
     } catch (e) {
         console.log('  → electron-rebuild not applicable (web-only mode)');
     }
