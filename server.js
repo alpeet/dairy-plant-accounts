@@ -34,7 +34,10 @@ const ops = require('./shared/operations');
 const {
     validateParty, validateProduct, validateSale, validatePurchase,
     validateMilkCollection, validatePayment, validateStockAdjust,
-    validateBulkPayment, validateSettings
+    validateBulkPayment, validateSettings,
+    validateDenomination, validatePettyCash, validateSalary,
+    validateVehicleExpense, validateOtherExpense,
+    validateRoute, validateRateChart, validateProductionBatch, validatePartnerCapital
 } = require('./shared/validate');
 
 const app = express();
@@ -85,10 +88,33 @@ app.use((req, res, next) => {
 // Database Initialization
 // ──────────────────────────────────────────────────────────────
 const dbDir = process.env.DB_DIR || path.join(__dirname, 'data');
+const dbPath = path.join(dbDir, 'dairy-plant.db');
+
+// ⚠️  Check if running on Render without persistent disk
+const isRender = process.env.RENDER === 'true';
+if (isRender && !process.env.DB_DIR) {
+    console.warn('  ⚠️  WARNING: Running on Render without persistent disk configured!');
+    console.warn('     Data will be LOST on every restart.');
+    console.warn('     Set DB_DIR env var to the persistent disk mount path.');
+}
+
+// Check if the database already exists (data persistence indicator)
+const dbExists = fs.existsSync(dbPath);
+
 let db;
 try {
     db = initDatabase(dbDir);
-    console.log('Database directory:', dbDir);
+    console.log('  📁 Database:');
+    console.log(`     Directory: ${dbDir}`);
+    console.log(`     File:      ${dbPath}`);
+    console.log(`     Status:    ${dbExists ? '🟢 Existing (data will persist)' : '🆕 New (created fresh)'}`);
+    if (dbExists) {
+        // Count registered users to confirm persistence
+        try {
+            const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get();
+            console.log(`     Users:     ${userCount.count} registered`);
+        } catch (e) { /* ignore */ }
+    }
 } catch (err) {
     console.error('FATAL: Could not initialize database:', err.message);
     process.exit(1);
@@ -195,12 +221,31 @@ app.post('/api/auth/verify', (req, res) => {
     res.json({ success: valid, data: valid ? { valid: true } : null, error: valid ? undefined : 'Invalid or expired token' });
 });
 
+// POST /api/auth/me — Get current user info (id, username, role)
+app.post('/api/auth/me', (req, res) => {
+    const token = extractToken(req);
+    const tokenData = tokenStore.get(token);
+    if (!tokenData) {
+        return res.json({ success: false, error: 'Not authenticated' });
+    }
+    // Get full user info from DB
+    const userId = tokenData.userId;
+    if (userId) {
+        const user = db.prepare("SELECT id, username, role FROM users WHERE id = ?").get(userId);
+        if (user) {
+            return res.json({ success: true, data: { id: user.id, username: user.username, role: user.role } });
+        }
+    }
+    // Fallback for env-var based auth (no userId in token)
+    return res.json({ success: true, data: { id: null, username: tokenData.username || 'admin', role: 'admin' } });
+});
+
 // ──────────────────────────────────────────────────────────────
 // User Management Routes (auth required, admin-only for writes)
 // ──────────────────────────────────────────────────────────────
 
-// POST /api/auth/users/list — List all users
-app.post('/api/auth/users/list', (req, res) => {
+// POST /api/auth/users/list — List all users (admin only)
+app.post('/api/auth/users/list', requireRole('admin'), (req, res) => {
     try {
         const users = db.prepare("SELECT id, username, role, is_active, created_at FROM users ORDER BY id").all();
         return res.json({ success: true, data: users });
@@ -210,7 +255,7 @@ app.post('/api/auth/users/list', (req, res) => {
 });
 
 // POST /api/auth/users/create — Create a new user (admin only)
-app.post('/api/auth/users/create', (req, res) => {
+app.post('/api/auth/users/create', requireRole('admin'), (req, res) => {
     const token = extractToken(req);
     const tokenData = tokenStore.get(token);
     const isAdmin = tokenData && tokenData.role === 'admin';
@@ -247,7 +292,7 @@ app.post('/api/auth/users/create', (req, res) => {
 });
 
 // POST /api/auth/users/delete — Delete a user (admin only)
-app.post('/api/auth/users/delete', (req, res) => {
+app.post('/api/auth/users/delete', requireRole('admin'), (req, res) => {
     const token = extractToken(req);
     const tokenData = tokenStore.get(token);
     const isAdmin = tokenData && tokenData.role === 'admin';
@@ -275,7 +320,7 @@ app.post('/api/auth/users/delete', (req, res) => {
 });
 
 // POST /api/auth/users/change-password — Change own password
-app.post('/api/auth/users/change-password', (req, res) => {
+app.post('/api/auth/users/change-password', requireRole('operator'), (req, res) => {
     const token = extractToken(req);
     const tokenData = tokenStore.get(token);
     if (!tokenData) {
@@ -417,7 +462,39 @@ function requireAuth(req, res, next) {
     if (!isValidToken(token)) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
     }
+    // Set req.user with user info from token for audit logging
+    const tokenData = tokenStore.get(token);
+    if (tokenData && tokenData.userId) {
+        const user = db.prepare("SELECT id, username, role FROM users WHERE id = ?").get(tokenData.userId);
+        if (user) {
+            req.user = user;
+        }
+    }
+    // Fallback: no userId in token (env-var auth) — use generic admin
+    if (!req.user) {
+        req.user = { id: null, username: tokenData?.username || 'admin', role: 'admin' };
+    }
     next();
+}
+
+/**
+ * Role-based authorization middleware.
+ * Returns 403 if the authenticated user's role is below the minimum required level.
+ * Role hierarchy: agent (1) < staff (2) < operator (3) < accountant (4) < admin (5)
+ */
+function requireRole(minRole) {
+    const hierarchy = { agent: 1, staff: 2, operator: 3, accountant: 4, admin: 5 };
+    return (req, res, next) => {
+        const userLevel = hierarchy[req.user?.role] || 0;
+        const requiredLevel = hierarchy[minRole];
+        if (!requiredLevel || userLevel < requiredLevel) {
+            return res.status(403).json({ 
+                success: false, 
+                error: `Access denied. Requires '${minRole}' role or higher. Your role: '${req.user?.role || 'none'}'` 
+            });
+        }
+        next();
+    };
 }
 
 function webAuthRedirect(req, res, next) {
@@ -467,8 +544,8 @@ app.post('/api/parties/save', (req, res) => {
     res.json(safeRun(() => ops.saveParty(db, req.body)));
 });
 
-app.post('/api/parties/delete', (req, res) => {
-    res.json(safeRun(() => ops.deleteParty(db, req.body.id)));
+app.post('/api/parties/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteParty(db, req.body.id, req.user?.id)));
 });
 
 app.post('/api/parties/ledger', (req, res) => {
@@ -492,8 +569,8 @@ app.post('/api/products/save', (req, res) => {
     res.json(safeRun(() => ops.saveProduct(db, req.body)));
 });
 
-app.post('/api/products/delete', (req, res) => {
-    res.json(safeRun(() => ops.deleteProduct(db, req.body.id)));
+app.post('/api/products/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteProduct(db, req.body.id, req.user?.id)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -507,7 +584,7 @@ app.post('/api/stock/movements', (req, res) => {
     res.json(safeRun(() => ops.getStockMovements(db, req.body || {})));
 });
 
-app.post('/api/stock/adjust', (req, res) => {
+app.post('/api/stock/adjust', requireRole('operator'), (req, res) => {
     const validationError = validateStockAdjust(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.adjustStock(db, req.body)));
@@ -530,8 +607,8 @@ app.post('/api/sales/save', (req, res) => {
     res.json(safeRun(() => ops.saveSale(db, req.body)));
 });
 
-app.post('/api/sales/delete', (req, res) => {
-    res.json(safeRun(() => ops.deleteSale(db, req.body.id)));
+app.post('/api/sales/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteSale(db, req.body.id, req.user?.id)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -551,8 +628,8 @@ app.post('/api/purchases/save', (req, res) => {
     res.json(safeRun(() => ops.savePurchase(db, req.body)));
 });
 
-app.post('/api/purchases/delete', (req, res) => {
-    res.json(safeRun(() => ops.deletePurchase(db, req.body.id)));
+app.post('/api/purchases/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deletePurchase(db, req.body.id, req.user?.id)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -572,8 +649,8 @@ app.post('/api/milk/save', (req, res) => {
     res.json(safeRun(() => ops.saveMilkCollection(db, req.body)));
 });
 
-app.post('/api/milk/delete', (req, res) => {
-    res.json(safeRun(() => ops.deleteMilkCollection(db, req.body.id)));
+app.post('/api/milk/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteMilkCollection(db, req.body.id, req.user?.id)));
 });
 
 app.post('/api/milk/summary', (req, res) => {
@@ -587,7 +664,7 @@ app.post('/api/farmer/outstanding', (req, res) => {
     res.json(safeRun(() => ops.getFarmerOutstanding(db)));
 });
 
-app.post('/api/farmer/bulk-pay', (req, res) => {
+app.post('/api/farmer/bulk-pay', requireRole('operator'), (req, res) => {
     const validationError = validateBulkPayment(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.bulkPayFarmers(db, req.body)));
@@ -630,22 +707,307 @@ app.post('/api/payments/list', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// Settings
+// Settings (admin only — business configuration)
 // ──────────────────────────────────────────────────────────────
-app.post('/api/settings/get', (req, res) => {
+app.post('/api/settings/get', requireRole('admin'), (req, res) => {
     res.json(safeRun(() => ops.getSettings(db)));
 });
 
-app.post('/api/settings/save', (req, res) => {
+// ──────────────────────────────────────────────────────────────
+// Customer / Supplier Statements
+// ──────────────────────────────────────────────────────────────
+app.post('/api/statements/party', (req, res) => {
+    res.json(safeRun(() => ops.getPartyStatement(db, req.body || {})));
+});
+
+app.post('/api/statements/parties-with-balance', (req, res) => {
+    res.json(safeRun(() => ops.listPartiesWithBalance(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Daily Cash Collection
+// ──────────────────────────────────────────────────────────────
+app.post('/api/cash/daily-collection', (req, res) => {
+    res.json(safeRun(() => ops.getDailyCashCollection(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Denomination Count
+// ──────────────────────────────────────────────────────────────
+app.post('/api/denominations/list', (req, res) => {
+    res.json(safeRun(() => ops.listDenominations(db, req.body || {})));
+});
+
+app.post('/api/denominations/get', (req, res) => {
+    res.json(safeRun(() => ops.getDenomination(db, req.body.id)));
+});
+
+app.post('/api/denominations/get-by-date', (req, res) => {
+    res.json(safeRun(() => ops.getDenominationByDate(db, req.body.date)));
+});
+
+app.post('/api/denominations/save', (req, res) => {
+    const validationError = validateDenomination(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveDenomination(db, req.body)));
+});
+
+app.post('/api/denominations/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteDenomination(db, req.body.id, req.user?.id)));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Petty Cash
+// ──────────────────────────────────────────────────────────────
+app.post('/api/petty-cash/list', (req, res) => {
+    res.json(safeRun(() => ops.listPettyCash(db, req.body || {})));
+});
+
+app.post('/api/petty-cash/get', (req, res) => {
+    res.json(safeRun(() => ops.getPettyCash(db, req.body.id)));
+});
+
+app.post('/api/petty-cash/save', (req, res) => {
+    const validationError = validatePettyCash(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.savePettyCash(db, req.body)));
+});
+
+app.post('/api/petty-cash/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deletePettyCash(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/petty-cash/summary', (req, res) => {
+    res.json(safeRun(() => ops.getPettyCashSummary(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Salary Records
+// ──────────────────────────────────────────────────────────────
+app.post('/api/salary/list', (req, res) => {
+    res.json(safeRun(() => ops.listSalaryRecords(db, req.body || {})));
+});
+
+app.post('/api/salary/get', (req, res) => {
+    res.json(safeRun(() => ops.getSalaryRecord(db, req.body.id)));
+});
+
+app.post('/api/salary/save', (req, res) => {
+    const validationError = validateSalary(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveSalaryRecord(db, req.body)));
+});
+
+app.post('/api/salary/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteSalaryRecord(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/salary/summary', (req, res) => {
+    res.json(safeRun(() => ops.getSalarySummary(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Vehicle Expenses
+// ──────────────────────────────────────────────────────────────
+app.post('/api/vehicle-expenses/list', (req, res) => {
+    res.json(safeRun(() => ops.listVehicleExpenses(db, req.body || {})));
+});
+
+app.post('/api/vehicle-expenses/get', (req, res) => {
+    res.json(safeRun(() => ops.getVehicleExpense(db, req.body.id)));
+});
+
+app.post('/api/vehicle-expenses/save', (req, res) => {
+    const validationError = validateVehicleExpense(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveVehicleExpense(db, req.body)));
+});
+
+app.post('/api/vehicle-expenses/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteVehicleExpense(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/vehicle-expenses/summary', (req, res) => {
+    res.json(safeRun(() => ops.getVehicleExpensesSummary(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Other Expenses
+// ──────────────────────────────────────────────────────────────
+app.post('/api/other-expenses/list', (req, res) => {
+    res.json(safeRun(() => ops.listOtherExpenses(db, req.body || {})));
+});
+
+app.post('/api/other-expenses/get', (req, res) => {
+    res.json(safeRun(() => ops.getOtherExpense(db, req.body.id)));
+});
+
+app.post('/api/other-expenses/save', (req, res) => {
+    const validationError = validateOtherExpense(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveOtherExpense(db, req.body)));
+});
+
+app.post('/api/other-expenses/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteOtherExpense(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/other-expenses/categories', (req, res) => {
+    res.json(safeRun(() => ops.getExpenseCategories(db)));
+});
+
+app.post('/api/other-expenses/summary', (req, res) => {
+    res.json(safeRun(() => ops.getExpensesSummary(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Routes / Collection Centers
+// ──────────────────────────────────────────────────────────────
+app.post('/api/routes/list', (req, res) => {
+    res.json(safeRun(() => ops.listRoutes(db, req.body || {})));
+});
+
+app.post('/api/routes/get', (req, res) => {
+    res.json(safeRun(() => ops.getRoute(db, req.body.id)));
+});
+
+app.post('/api/routes/save', (req, res) => {
+    const validationError = validateRoute(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveRoute(db, req.body)));
+});
+
+app.post('/api/routes/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteRoute(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/routes/summary', (req, res) => {
+    res.json(safeRun(() => ops.getRouteSummary(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Milk Rate Charts
+// ──────────────────────────────────────────────────────────────
+app.post('/api/rates/list', (req, res) => {
+    res.json(safeRun(() => ops.listRateCharts(db)));
+});
+
+app.post('/api/rates/get', (req, res) => {
+    res.json(safeRun(() => ops.getRateChart(db, req.body.id)));
+});
+
+app.post('/api/rates/save', (req, res) => {
+    const validationError = validateRateChart(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveRateChart(db, req.body)));
+});
+
+app.post('/api/rates/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteRateChart(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/rates/effective', (req, res) => {
+    res.json(safeRun(() => ops.getEffectiveRate(db, req.body.date)));
+});
+
+app.post('/api/rates/calculate', (req, res) => {
+    res.json(safeRun(() => {
+        const { fat, snf, rateChart } = req.body || {};
+        const rate = ops.calculateMilkRate(fat, snf, rateChart);
+        return { rate };
+    }));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Production / Batch Processing
+// ──────────────────────────────────────────────────────────────
+app.post('/api/production/list', (req, res) => {
+    res.json(safeRun(() => ops.listProductionBatches(db, req.body || {})));
+});
+
+app.post('/api/production/get', (req, res) => {
+    res.json(safeRun(() => ops.getProductionBatch(db, req.body.id)));
+});
+
+app.post('/api/production/save', (req, res) => {
+    const validationError = validateProductionBatch(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.saveProductionBatch(db, req.body)));
+});
+
+app.post('/api/production/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteProductionBatch(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/production/process-types', (req, res) => {
+    res.json(safeRun(() => ops.getProcessTypes(db)));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Partner Capital (accountant+ only — sensitive financial data)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/partners/capital-list', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.listPartnerCapital(db, req.body || {})));
+});
+
+app.post('/api/partners/capital-get', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.getPartnerCapital(db, req.body.id)));
+});
+
+app.post('/api/partners/capital-save', requireRole('accountant'), (req, res) => {
+    const validationError = validatePartnerCapital(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.savePartnerCapital(db, req.body)));
+});
+
+app.post('/api/partners/capital-delete', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.deletePartnerCapital(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/partners/statement', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.getPartnerStatement(db, req.body || {})));
+});
+
+app.post('/api/partners/with-balance', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.listPartnersWithBalance(db)));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Audit Logs (accountant+ only — sensitive audit trail)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/audit/logs', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.getAuditLogs(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Today Summary (for dashboard)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/reports/farmer-statement', (req, res) => {
+    res.json(safeRun(() => ops.getFarmerStatement(db, req.body || {})));
+});
+
+app.post('/api/reports/today-summary', (req, res) => {
+    res.json(safeRun(() => ops.getTodaySummary(db)));
+});
+
+app.post('/api/reports/sales-register', (req, res) => {
+    res.json(safeRun(() => ops.getSalesRegister(db, req.body || {})));
+});
+
+app.post('/api/reports/purchase-register', (req, res) => {
+    res.json(safeRun(() => ops.getPurchaseRegister(db, req.body || {})));
+});
+
+app.post('/api/settings/save', requireRole('admin'), (req, res) => {
     const validationError = validateSettings(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveSettings(db, req.body)));
 });
 
 // ──────────────────────────────────────────────────────────────
-// Backup
+// Backup (admin only — database export)
 // ──────────────────────────────────────────────────────────────
-app.post('/api/backup', (req, res) => {
+app.post('/api/backup', requireRole('admin'), (req, res) => {
     res.json(safeRun(() => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'))));
 });
 

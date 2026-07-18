@@ -1,10 +1,22 @@
 # Godhuli Dairy Plant - Render Blueprint
-# Deploy config for Render.com free tier
+# ===============================================
+# Deploy config for Render.com (free tier compatible)
 # See https://render.com/docs/blueprint-spec for more info
 #
-# IMPORTANT AFTER DEPLOY:
-#   1. Go to Render Dashboard → Environment → Set AUTH_PASSWORD to a strong password
-#   2. The free tier sleeps after 15 min idle — data persists via mounted disk
+# IMPORTANT AFTER FIRST DEPLOY:
+#   1. Go to Render Dashboard → Your Service → Environment
+#   2. Add AUTH_PASSWORD with a strong secret value (never use defaults in production!)
+#   3. The app will auto-deploy on every push to the connected git branch
+#
+# PERSISTENT DATA:
+#   A 1GB persistent disk is mounted at /opt/render/project/src/data
+#   The SQLite database is stored there → data survives restarts & sleep cycles
+#   Free tier: service sleeps after 15 min idle, wakes on first request (a few sec delay)
+#
+# ENVIRONMENT VARIABLES (set in Render Dashboard):
+#   AUTH_PASSWORD   - REQUIRED: Set a strong admin password after deploy
+#   AUTH_USERNAME   - Optional: Default is 'admin'
+#   PORT            - Render sets this automatically (10000)
 
 services:
   - type: web
@@ -13,6 +25,7 @@ services:
     buildCommand: npm install --production --ignore-scripts && npm rebuild better-sqlite3
     startCommand: npm start
     healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: "20"
@@ -24,6 +37,11 @@ services:
         value: admin
       - key: DB_DIR
         value: /opt/render/project/src/data
+      # ⚠️  IMPORTANT: Set AUTH_PASSWORD in Render Dashboard's Environment tab!
+      #    The app creates a default user with password 'admin123' if AUTH_PASSWORD
+      #    is not set. This is a security risk in production.
+      - key: AUTH_PASSWORD
+        sync: false  # Don't expose in blueprint — set manually in Dashboard
     disk:
       name: data
       mountPath: /opt/render/project/src/data
