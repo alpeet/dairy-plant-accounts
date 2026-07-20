@@ -8,6 +8,8 @@
  * and ledger entries atomically.
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * List purchases with optional filters.
  */
@@ -100,6 +102,7 @@ function savePurchase(db, purchaseData) {
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, 'purchase', ?, ?, ?, 0, ?)"
             ).run(party_id, date, id, `Purchase Bill ${bill_no}`, grand_total, outstanding);
 
+            logAudit(db, 'purchases', id, 'update', oldPurchase, purchaseData, purchaseData.created_by);
             return { id };
         } else {
             // ── New purchase ──
@@ -130,6 +133,7 @@ function savePurchase(db, purchaseData) {
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, 'purchase', ?, ?, ?, 0, ?)"
             ).run(party_id, date, purchaseId, `Purchase Bill ${bill_no}`, grand_total, outstanding);
 
+            logAudit(db, 'purchases', purchaseId, 'create', null, purchaseData, purchaseData.created_by);
             return { id: purchaseId };
         }
     });
@@ -139,7 +143,7 @@ function savePurchase(db, purchaseData) {
 /**
  * Delete a purchase with stock reversal and ledger cleanup.
  */
-function deletePurchase(db, id) {
+function deletePurchase(db, id, changedBy = null) {
     const trx = db.transaction(() => {
         const purchase = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
         const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
@@ -159,6 +163,7 @@ function deletePurchase(db, id) {
         // Remove ledger and purchase
         db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'purchase' AND reference_id = ?").run(id);
         db.prepare("DELETE FROM purchases WHERE id = ?").run(id);
+        logAudit(db, 'purchases', id, 'delete', purchase, null, changedBy);
         return { deleted: true };
     });
     return trx();

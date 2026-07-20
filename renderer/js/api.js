@@ -105,11 +105,92 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         bulkPayFarmers: (data) => apiPost('/farmer/bulk-pay', data),
 
         // Reports
+        // Reports
         getSalesReport: (opts) => apiPost('/reports/sales', opts || {}),
         getPurchasesReport: (opts) => apiPost('/reports/purchases', opts || {}),
-        getDayBook: (date) => apiPost('/reports/daybook', { date }),
+        getDayBook: (opts) => apiPost('/reports/daybook', opts || {}),
+        getFarmerStatement: (opts) => apiPost('/reports/farmer-statement', opts || {}),
         getReceivables: () => apiPost('/reports/receivables'),
         getPayables: () => apiPost('/reports/payables'),
+        getSalesRegister: (opts) => apiPost('/reports/sales-register', opts || {}),
+        getPurchaseRegister: (opts) => apiPost('/reports/purchase-register', opts || {}),
+        getTodaySummary: () => apiPost('/reports/today-summary'),
+
+        // Statements
+        getPartyStatement: (opts) => apiPost('/statements/party', opts || {}),
+        getPartiesWithBalance: (opts) => apiPost('/statements/parties-with-balance', opts || {}),
+
+        // Daily Cash Collection
+        getDailyCashCollection: (opts) => apiPost('/cash/daily-collection', opts || {}),
+
+        // Denomination
+        getDenominations: (opts) => apiPost('/denominations/list', opts || {}),
+        getDenomination: (id) => apiPost('/denominations/get', { id }),
+        getDenominationByDate: (date) => apiPost('/denominations/get-by-date', { date }),
+        saveDenomination: (data) => apiPost('/denominations/save', data),
+        deleteDenomination: (id) => apiPost('/denominations/delete', { id }),
+
+        // Petty Cash
+        getPettyCashList: (opts) => apiPost('/petty-cash/list', opts || {}),
+        getPettyCash: (id) => apiPost('/petty-cash/get', { id }),
+        savePettyCash: (data) => apiPost('/petty-cash/save', data),
+        deletePettyCash: (id) => apiPost('/petty-cash/delete', { id }),
+        getPettyCashSummary: (opts) => apiPost('/petty-cash/summary', opts || {}),
+
+        // Salary
+        getSalaryList: (opts) => apiPost('/salary/list', opts || {}),
+        getSalaryRecord: (id) => apiPost('/salary/get', { id }),
+        saveSalaryRecord: (data) => apiPost('/salary/save', data),
+        deleteSalaryRecord: (id) => apiPost('/salary/delete', { id }),
+        getSalarySummary: (opts) => apiPost('/salary/summary', opts || {}),
+
+        // Vehicle Expenses
+        getVehicleExpenses: (opts) => apiPost('/vehicle-expenses/list', opts || {}),
+        getVehicleExpense: (id) => apiPost('/vehicle-expenses/get', { id }),
+        saveVehicleExpense: (data) => apiPost('/vehicle-expenses/save', data),
+        deleteVehicleExpense: (id) => apiPost('/vehicle-expenses/delete', { id }),
+        getVehicleExpensesSummary: (opts) => apiPost('/vehicle-expenses/summary', opts || {}),
+
+        // Other Expenses
+        getOtherExpenses: (opts) => apiPost('/other-expenses/list', opts || {}),
+        getOtherExpense: (id) => apiPost('/other-expenses/get', { id }),
+        saveOtherExpense: (data) => apiPost('/other-expenses/save', data),
+        deleteOtherExpense: (id) => apiPost('/other-expenses/delete', { id }),
+        getExpenseCategories: () => apiPost('/other-expenses/categories'),
+        getExpensesSummary: (opts) => apiPost('/other-expenses/summary', opts || {}),
+
+        // Routes
+        getRoutes: (opts) => apiPost('/routes/list', opts || {}),
+        getRoute: (id) => apiPost('/routes/get', { id }),
+        saveRoute: (data) => apiPost('/routes/save', data),
+        deleteRoute: (id) => apiPost('/routes/delete', { id }),
+        getRouteSummary: (opts) => apiPost('/routes/summary', opts || {}),
+
+        // Rate Charts
+        getRateCharts: () => apiPost('/rates/list'),
+        getRateChart: (id) => apiPost('/rates/get', { id }),
+        saveRateChart: (data) => apiPost('/rates/save', data),
+        deleteRateChart: (id) => apiPost('/rates/delete', { id }),
+        getEffectiveRate: (date) => apiPost('/rates/effective', { date }),
+        calculateMilkRate: (data) => apiPost('/rates/calculate', data),
+
+        // Production
+        getProductionBatches: (opts) => apiPost('/production/list', opts || {}),
+        getProductionBatch: (id) => apiPost('/production/get', { id }),
+        saveProductionBatch: (data) => apiPost('/production/save', data),
+        deleteProductionBatch: (id) => apiPost('/production/delete', { id }),
+        getProcessTypes: () => apiPost('/production/process-types'),
+
+        // Partner Capital
+        getPartnerCapitalList: (opts) => apiPost('/partners/capital-list', opts || {}),
+        getPartnerCapital: (id) => apiPost('/partners/capital-get', { id }),
+        savePartnerCapital: (data) => apiPost('/partners/capital-save', data),
+        deletePartnerCapital: (id) => apiPost('/partners/capital-delete', { id }),
+        getPartnerStatement: (opts) => apiPost('/partners/statement', opts || {}),
+        getPartnersWithBalance: () => apiPost('/partners/with-balance'),
+
+        // Audit
+        getAuditLogs: (opts) => apiPost('/audit/logs', opts || {}),
 
         // Payments
         savePayment: (payment) => apiPost('/payments/save', payment),

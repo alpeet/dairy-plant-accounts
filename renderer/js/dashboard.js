@@ -7,9 +7,10 @@ async function renderDashboard() {
     const container = document.getElementById('page-dashboard');
     container.innerHTML = '<div class="loading" style="text-align:center;padding:40px">Loading dashboard...</div>';
 
-    const [result, milkResult] = await Promise.all([
+    const [result, milkResult, todayResult] = await Promise.all([
         window.api.getDashboard(),
-        window.api.getMilkSummary({ date: today() })
+        window.api.getMilkSummary({ date: today() }),
+        window.api.getTodaySummary()
     ]);
 
     if (!result.success) {
@@ -19,6 +20,7 @@ async function renderDashboard() {
 
     const d = result.data;
     const milk = milkResult.success ? milkResult.data : { todayTotal: { total_liters: 0, total_amount: 0, collection_count: 0 } };
+    const t = todayResult.success ? todayResult.data : { todaySales: { total: 0, paid: 0 }, todayPurchases: { total: 0, paid: 0 }, todayPettyCash: { total: 0 }, todayExpenses: { total: 0 }, todayVehicleExpenses: { total: 0 } };
     const settings = await getSettingsCached();
 
     container.innerHTML = `
@@ -40,14 +42,14 @@ async function renderDashboard() {
                 <span class="sub">${formatCurrency(milk.todayTotal.total_amount)} | ${milk.todayTotal.collection_count} collections</span>
             </div>
             <div class="summary-card card-warning">
-                <span class="label">Outstanding Receivables</span>
-                <span class="value">${formatCurrency(d.receivables.total)}</span>
-                <span class="sub">Due from customers</span>
+                <span class="label">Today Petty Cash</span>
+                <span class="value" style="font-size:22px">${formatCurrency(t.todayPettyCash.total)}</span>
+                <span class="sub">Expenses today</span>
             </div>
             <div class="summary-card card-danger">
-                <span class="label">Outstanding Payables</span>
-                <span class="value">${formatCurrency(d.payables.total)}</span>
-                <span class="sub">Due to suppliers</span>
+                <span class="label">Today Expenses</span>
+                <span class="value" style="font-size:22px">${formatCurrency(t.todayExpenses.total)}</span>
+                <span class="sub">+ Vehicle: ${formatCurrency(t.todayVehicleExpenses.total)}</span>
             </div>
         </div>
 

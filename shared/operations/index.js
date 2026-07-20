@@ -47,7 +47,8 @@ const {
 } = require('./payments');
 
 const {
-    getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables
+    getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,
+    getSalesRegister, getPurchaseRegister, getTodaySummary
 } = require('./reports');
 
 const {
@@ -55,6 +56,35 @@ const {
 } = require('./settings');
 
 const { backupDatabase } = require('./backup');
+
+// ── New modules ──
+const { getPartyStatement, listPartiesWithBalance } = require('./statements');
+const { getDailyCashCollection } = require('./cash');
+const {
+    listDenominations, getDenomination, getDenominationByDate,
+    saveDenomination, deleteDenomination
+} = require('./denominations');
+const {
+    listPettyCash, getPettyCash, savePettyCash, deletePettyCash, getPettyCashSummary
+} = require('./petty_cash');
+const {
+    listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary
+} = require('./salary');
+const {
+    listVehicleExpenses, getVehicleExpense, saveVehicleExpense,
+    deleteVehicleExpense, getVehicleExpensesSummary
+} = require('./vehicle');
+const {
+    listOtherExpenses, getOtherExpense, saveOtherExpense,
+    deleteOtherExpense, getExpenseCategories, getExpensesSummary
+} = require('./expenses');
+const { logAudit, getAuditLogs } = require('./audit');
+
+// ── Routes, Rates, Production, Partners ──
+const { listRoutes, getRoute, saveRoute, deleteRoute, getRouteSummary } = require('./routes');
+const { listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffectiveRate, calculateMilkRate } = require('./rates');
+const { listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes } = require('./production');
+const { listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance } = require('./partners');
 
 module.exports = {
     // Dashboard
@@ -88,10 +118,51 @@ module.exports = {
 
     // Reports
     getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,
+    getSalesRegister, getPurchaseRegister, getTodaySummary,
 
     // Settings
     getSettings, saveSettings,
 
     // Backup
     backupDatabase,
+
+    // ── New modules ──
+    // Statements
+    getPartyStatement, listPartiesWithBalance,
+
+    // Cash
+    getDailyCashCollection,
+
+    // Denominations
+    listDenominations, getDenomination, getDenominationByDate,
+    saveDenomination, deleteDenomination,
+
+    // Petty Cash
+    listPettyCash, getPettyCash, savePettyCash, deletePettyCash, getPettyCashSummary,
+
+    // Salary
+    listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
+
+    // Vehicle Expenses
+    listVehicleExpenses, getVehicleExpense, saveVehicleExpense,
+    deleteVehicleExpense, getVehicleExpensesSummary,
+
+    // Other Expenses
+    listOtherExpenses, getOtherExpense, saveOtherExpense,
+    deleteOtherExpense, getExpenseCategories, getExpensesSummary,
+
+    // Audit
+    logAudit, getAuditLogs,
+
+    // Routes
+    listRoutes, getRoute, saveRoute, deleteRoute, getRouteSummary,
+
+    // Rate Charts
+    listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffectiveRate, calculateMilkRate,
+
+    // Production
+    listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes,
+
+    // Partner Capital
+    listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance,
 };

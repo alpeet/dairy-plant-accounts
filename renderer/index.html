@@ -64,39 +64,83 @@
                 <div class="subtitle">Accounts &amp; Stock Management</div>
             </div>
             <ul class="nav-list" id="navList">
-                <li class="nav-item active" data-page="dashboard">
+                <li class="nav-item active" data-page="dashboard" data-min-role="staff">
                     <span class="nav-icon">📊</span>
                     <span class="nav-text">Dashboard</span>
                 </li>
-                <li class="nav-item" data-page="sales">
+                <li class="nav-item" data-page="sales" data-min-role="staff">
                     <span class="nav-icon">💰</span>
                     <span class="nav-text">Sales</span>
                 </li>
-                <li class="nav-item" data-page="purchases">
+                <li class="nav-item" data-page="purchases" data-min-role="staff">
                     <span class="nav-icon">📦</span>
                     <span class="nav-text">Purchases</span>
                 </li>
-                <li class="nav-item" data-page="milk">
+                <li class="nav-item" data-page="milk" data-min-role="agent">
                     <span class="nav-icon">🥛</span>
                     <span class="nav-text">Milk Collection</span>
                 </li>
-                <li class="nav-item" data-page="stock">
+                <li class="nav-item" data-page="production" data-min-role="staff">
+                    <span class="nav-icon">🏭</span>
+                    <span class="nav-text">Production</span>
+                </li>
+                <li class="nav-item" data-page="stock" data-min-role="staff">
                     <span class="nav-icon">📋</span>
                     <span class="nav-text">Stock</span>
                 </li>
-                <li class="nav-item" data-page="parties">
+                <li class="nav-item" data-page="parties" data-min-role="staff">
                     <span class="nav-icon">👥</span>
                     <span class="nav-text">Parties</span>
                 </li>
-                <li class="nav-item" data-page="farmer-payments">
+                <li class="nav-item" data-page="farmer-payments" data-min-role="operator">
                     <span class="nav-icon">💵</span>
                     <span class="nav-text">Farmer Payments</span>
                 </li>
-                <li class="nav-item" data-page="reports">
+                <li class="nav-item" data-page="routes" data-min-role="operator">
+                    <span class="nav-icon">🛣️</span>
+                    <span class="nav-text">Routes</span>
+                </li>
+                <li class="nav-item" data-page="reports" data-min-role="staff">
                     <span class="nav-icon">📈</span>
                     <span class="nav-text">Reports</span>
                 </li>
-                <li class="nav-item" data-page="settings">
+                <li class="nav-item" data-page="statements" data-min-role="operator">
+                    <span class="nav-icon">📄</span>
+                    <span class="nav-text">Statements</span>
+                </li>
+                <li class="nav-item" data-page="cash" data-min-role="operator">
+                    <span class="nav-icon">💵</span>
+                    <span class="nav-text">Cash & Denom</span>
+                </li>
+                <li class="nav-item" data-page="petty-cash" data-min-role="operator">
+                    <span class="nav-icon">💰</span>
+                    <span class="nav-text">Petty Cash</span>
+                </li>
+                <li class="nav-item" data-page="salary" data-min-role="operator">
+                    <span class="nav-icon">👷</span>
+                    <span class="nav-text">Salary</span>
+                </li>
+                <li class="nav-item" data-page="vehicle" data-min-role="operator">
+                    <span class="nav-icon">🚛</span>
+                    <span class="nav-text">Vehicle Exp</span>
+                </li>
+                <li class="nav-item" data-page="expenses" data-min-role="operator">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">Expenses</span>
+                </li>
+                <li class="nav-item" data-page="partner-capital" data-min-role="accountant">
+                    <span class="nav-icon">🤝</span>
+                    <span class="nav-text">Partner Capital</span>
+                </li>
+                <li class="nav-item" data-page="rate-charts" data-min-role="operator">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-text">Rate Charts</span>
+                </li>
+                <li class="nav-item" data-page="audit-log" data-min-role="accountant">
+                    <span class="nav-icon">📝</span>
+                    <span class="nav-text">Audit Log</span>
+                </li>
+                <li class="nav-item" data-page="settings" data-min-role="admin">
                     <span class="nav-icon">⚙️</span>
                     <span class="nav-text">Settings</span>
                 </li>
@@ -143,8 +187,41 @@
                 <!-- Farmer Payments -->
                 <div class="page-section" id="page-farmer-payments"></div>
 
+                <!-- Routes -->
+                <div class="page-section" id="page-routes"></div>
+
                 <!-- Reports -->
                 <div class="page-section" id="page-reports"></div>
+
+                <!-- Production -->
+                <div class="page-section" id="page-production"></div>
+
+                <!-- Statements -->
+                <div class="page-section" id="page-statements"></div>
+
+                <!-- Cash & Denomination -->
+                <div class="page-section" id="page-cash"></div>
+
+                <!-- Petty Cash -->
+                <div class="page-section" id="page-petty-cash"></div>
+
+                <!-- Salary -->
+                <div class="page-section" id="page-salary"></div>
+
+                <!-- Vehicle Expenses -->
+                <div class="page-section" id="page-vehicle"></div>
+
+                <!-- Other Expenses -->
+                <div class="page-section" id="page-expenses"></div>
+
+                <!-- Partner Capital -->
+                <div class="page-section" id="page-partner-capital"></div>
+
+                <!-- Rate Charts -->
+                <div class="page-section" id="page-rate-charts"></div>
+
+                <!-- Audit Log -->
+                <div class="page-section" id="page-audit-log"></div>
 
                 <!-- Settings -->
                 <div class="page-section" id="page-settings"></div>
@@ -171,6 +248,17 @@
     <script src="js/party.js?v=2"></script>
     <script src="js/farmer_payment.js?v=2"></script>
     <script src="js/reports.js?v=2"></script>
+    <script src="js/statements.js?v=2"></script>
+    <script src="js/cash.js?v=2"></script>
+    <script src="js/petty_cash.js?v=2"></script>
+    <script src="js/salary.js?v=2"></script>
+    <script src="js/vehicle.js?v=2"></script>
+    <script src="js/expenses.js?v=2"></script>
+    <script src="js/routes_mgmt.js?v=2"></script>
+    <script src="js/rate_charts.js?v=2"></script>
+    <script src="js/production.js?v=2"></script>
+    <script src="js/partner_capital.js?v=2"></script>
+    <script src="js/audit_log.js?v=2"></script>
     <script src="js/settings.js?v=2"></script>
     <script src="js/app.js?v=2"></script>
 </body>

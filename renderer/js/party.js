@@ -52,6 +52,8 @@ async function renderParties() {
                         <option value="customer" ${partyFilter.type === 'customer' ? 'selected' : ''}>Customer</option>
                         <option value="supplier" ${partyFilter.type === 'supplier' ? 'selected' : ''}>Supplier</option>
                         <option value="both" ${partyFilter.type === 'both' ? 'selected' : ''}>Both</option>
+                        <option value="farmer" ${partyFilter.type === 'farmer' ? 'selected' : ''}>🧑‍🌾 Farmer</option>
+                        <option value="partner" ${partyFilter.type === 'partner' ? 'selected' : ''}>🤝 Partner</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -73,6 +75,7 @@ async function renderParties() {
                             <th>Name</th>
                             <th>Phone</th>
                             <th>Type</th>
+                            <th>Route/Details</th>
                             <th class="text-right">Opening Balance</th>
                             <th class="text-right">Outstanding</th>
                             <th class="actions">Actions</th>
@@ -80,14 +83,23 @@ async function renderParties() {
                     </thead>
                     <tbody>
                         ${parties.length === 0
-                            ? '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
+                            ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
                             : parties.map(p => {
                                 const out = outstandingMap[p.id];
+                                let detailHtml = '-';
+                                if (p.type === 'farmer') {
+                                    detailHtml = escapeHtml(p.route_name || '') || '<span style="color:var(--text-light)">No route</span>';
+                                } else if (p.type === 'partner') {
+                                    const ptype = p.partner_type || 'active';
+                                    const share = p.profit_share_percent ? p.profit_share_percent + '%' : '';
+                                    detailHtml = `<span class="badge ${ptype === 'active' ? 'badge-success' : 'badge-info'}">${escapeHtml(ptype)}</span> ${share ? share : ''}`;
+                                }
                                 return `
                                     <tr>
                                         <td><strong>${escapeHtml(p.name)}</strong></td>
                                         <td>${escapeHtml(p.phone || '-')}</td>
-                                        <td><span class="badge ${p.type === 'customer' ? 'badge-info' : p.type === 'supplier' ? 'badge-warning' : 'badge-success'}">${escapeHtml(p.type)}</span></td>
+                                        <td><span class="badge ${p.type === 'customer' ? 'badge-info' : p.type === 'supplier' ? 'badge-warning' : p.type === 'farmer' ? 'badge-success' : p.type === 'partner' ? 'badge-primary' : 'badge-secondary'}">${escapeHtml(p.type)}</span></td>
+                                        <td style="font-size:12px">${detailHtml}</td>
                                         <td class="text-right ${p.opening_balance > 0 ? 'positive' : p.opening_balance < 0 ? 'negative' : ''}">${formatCurrency(p.opening_balance)}</td>
                                         <td class="text-right">
                                             ${out ? (out.receivable > 0 && out.payable > 0
@@ -136,7 +148,7 @@ function resetPartyFilter() {
 }
 
 // ============================================================
-// Party Form
+// Party Form (Extended: farmer/partner support)
 // ============================================================
 async function showPartyForm(partyId = null) {
     let party = null;
@@ -147,12 +159,16 @@ async function showPartyForm(partyId = null) {
 
     const isEdit = !!party;
 
+    // Load routes for farmer type
+    const routesResult = await window.api.getRoutes({});
+    const routes = routesResult.success ? routesResult.data : [];
+
     showModal(`
         <div class="modal-header">
             <h2>${isEdit ? 'Edit Party' : 'New Party'}</h2>
             <button class="close-btn" onclick="closeModal()">&times;</button>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" style="max-height:70vh;overflow-y:auto">
             <form id="partyForm">
                 <div class="form-group">
                     <label>Party Name *</label>
@@ -175,10 +191,12 @@ async function showPartyForm(partyId = null) {
                 <div class="form-row">
                     <div class="form-group">
                         <label>Type</label>
-                        <select class="form-control" name="type">
-                            <option value="customer" ${party && party.type === 'customer' ? 'selected' : ''}>Customer</option>
+                        <select class="form-control" name="type" id="partyTypeSelect" onchange="togglePartyExtraFields()">
+                            <option value="customer" ${(!party || party.type === 'customer') ? 'selected' : ''}>Customer</option>
                             <option value="supplier" ${party && party.type === 'supplier' ? 'selected' : ''}>Supplier</option>
                             <option value="both" ${party && party.type === 'both' ? 'selected' : ''}>Both (Customer & Supplier)</option>
+                            <option value="farmer" ${party && party.type === 'farmer' ? 'selected' : ''}>🧑‍🌾 Farmer / Milk Producer</option>
+                            <option value="partner" ${party && party.type === 'partner' ? 'selected' : ''}>🤝 Partner / Investor</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -187,7 +205,38 @@ async function showPartyForm(partyId = null) {
                         <small style="color:var(--text-light)">Positive = receivable (due from them)</small>
                     </div>
                 </div>
-                <div class="form-group">
+
+                <!-- Farmer Fields -->
+                <div id="partyFarmerFields" ${!party || party.type !== 'farmer' ? 'style="display:none"' : ''}>
+                    <div class="form-section-title">🧑‍🌾 Farmer Details</div>
+                    <div class="form-group">
+                        <label>Route / Collection Center</label>
+                        <select class="form-control" name="route_id">
+                            <option value="">-- No Route --</option>
+                            ${routes.map(r => `<option value="${r.id}" ${party && party.route_id === r.id ? 'selected' : ''}>${escapeHtml(r.name)} ${r.area ? '(' + escapeHtml(r.area) + ')' : ''}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Partner Fields -->
+                <div id="partyPartnerFields" ${!party || party.type !== 'partner' ? 'style="display:none"' : ''}>
+                    <div class="form-section-title">🤝 Partner Details</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Partner Type</label>
+                            <select class="form-control" name="partner_type">
+                                <option value="active" ${!party || party.partner_type === 'active' ? 'selected' : ''}>Active Partner</option>
+                                <option value="silent" ${party && party.partner_type === 'silent' ? 'selected' : ''}>Silent Partner</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Profit Share %</label>
+                            <input type="number" class="form-control" name="profit_share_percent" value="${party ? party.profit_share_percent || 0 : 0}" min="0" max="100" step="0.1">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top:12px">
                     <label>Notes</label>
                     <textarea class="form-control" name="notes">${escapeHtml(party ? party.notes : '')}</textarea>
                 </div>
@@ -200,6 +249,14 @@ async function showPartyForm(partyId = null) {
     `);
 }
 
+function togglePartyExtraFields() {
+    const type = document.getElementById('partyTypeSelect')?.value || 'customer';
+    const farmerFields = document.getElementById('partyFarmerFields');
+    const partnerFields = document.getElementById('partyPartnerFields');
+    if (farmerFields) farmerFields.style.display = type === 'farmer' ? 'block' : 'none';
+    if (partnerFields) partnerFields.style.display = type === 'partner' ? 'block' : 'none';
+}
+
 async function saveParty(partyId) {
     const form = document.getElementById('partyForm');
     const formData = new FormData(form);
@@ -209,15 +266,19 @@ async function saveParty(partyId) {
         return;
     }
 
+    const type = formData.get('type') || 'customer';
     const data = {
         id: partyId || null,
         name: formData.get('name'),
         phone: formData.get('phone'),
         address: formData.get('address'),
         pan_vat: formData.get('pan_vat'),
-        type: formData.get('type'),
+        type: type,
         opening_balance: parseFloat(formData.get('opening_balance') || 0),
-        notes: formData.get('notes')
+        notes: formData.get('notes'),
+        route_id: type === 'farmer' ? (formData.get('route_id') ? parseInt(formData.get('route_id')) : null) : null,
+        partner_type: type === 'partner' ? (formData.get('partner_type') || 'active') : '',
+        profit_share_percent: type === 'partner' ? parseFloat(formData.get('profit_share_percent') || 0) : 0
     };
 
     const result = await window.api.saveParty(data);
@@ -522,6 +583,7 @@ async function exportPartiesPDF() {
 window.applyPartyFilter = applyPartyFilter;
 window.resetPartyFilter = resetPartyFilter;
 window.showPartyForm = showPartyForm;
+window.togglePartyExtraFields = togglePartyExtraFields;
 window.saveParty = saveParty;
 window.editParty = editParty;
 window.deleteParty = deleteParty;

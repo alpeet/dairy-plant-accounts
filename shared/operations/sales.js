@@ -8,6 +8,8 @@
  * and ledger entries atomically.
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * List sales with optional filters.
  */
@@ -103,6 +105,7 @@ function saveSale(db, saleData) {
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'sale', ?, ?, ?, 0, ?)"
             ).run(party_id, date, id, `Sale Invoice ${invoice_no}`, grand_total, outstanding);
 
+            logAudit(db, 'sales', id, 'update', oldSale, saleData, saleData.created_by);
             return { id };
         } else {
             // ── New sale ──
@@ -134,6 +137,7 @@ function saveSale(db, saleData) {
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'sale', ?, ?, ?, 0, ?)"
             ).run(party_id, date, saleId, `Sale Invoice ${invoice_no}`, grand_total, outstanding);
 
+            logAudit(db, 'sales', saleId, 'create', null, saleData, saleData.created_by);
             return { id: saleId };
         }
     });
@@ -143,7 +147,7 @@ function saveSale(db, saleData) {
 /**
  * Delete a sale with stock reversal and ledger cleanup.
  */
-function deleteSale(db, id) {
+function deleteSale(db, id, changedBy = null) {
     const trx = db.transaction(() => {
         const sale = db.prepare("SELECT * FROM sales WHERE id = ?").get(id);
         const items = db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id);
@@ -156,13 +160,14 @@ function deleteSale(db, id) {
             const currentBal = lastBalance ? lastBalance.balance_after : 0;
             const newBalance = currentBal + item.quantity;
             db.prepare(
-                "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'sale', ?, 0, ?, ?, 'Deleted Sale ' || ?, 'sale', ?)"
+                "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'adjustment', ?, 0, ?, ?, 'Deleted Sale ' || ?, 'sale', ?)"
             ).run(item.product_id, sale.date, item.quantity, newBalance, item.rate, sale.invoice_no, id);
         }
 
         // Remove ledger and sale
         db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'sale' AND reference_id = ?").run(id);
         db.prepare("DELETE FROM sales WHERE id = ?").run(id);
+        logAudit(db, 'sales', id, 'delete', sale, null, changedBy);
         return { deleted: true };
     });
     return trx();

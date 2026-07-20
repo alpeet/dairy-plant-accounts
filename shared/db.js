@@ -151,6 +151,123 @@ function runMigrations(db) {
         console.log('Migrated stock_movements table to include milk_collection constraint');
     }
     db.pragma('foreign_keys = ON');
+
+    // Migration 3: Add created_by column to sales, purchases, payments, milk_collections
+    try {
+        db.prepare("SELECT created_by FROM sales LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`
+                ALTER TABLE sales ADD COLUMN created_by INTEGER DEFAULT NULL REFERENCES users(id);
+                ALTER TABLE purchases ADD COLUMN created_by INTEGER DEFAULT NULL REFERENCES users(id);
+                ALTER TABLE payments ADD COLUMN created_by INTEGER DEFAULT NULL REFERENCES users(id);
+                ALTER TABLE milk_collections ADD COLUMN created_by INTEGER DEFAULT NULL REFERENCES users(id);
+            `);
+            console.log('Added created_by columns to sales, purchases, payments, milk_collections');
+        } catch (e2) {
+            console.log('Migration 3 (created_by columns) skipped:', e2.message);
+        }
+    }
+
+    // Migration 4: Add new columns to parties table (route_id, route_name, profit_share_percent, partner_type)
+    try {
+        db.prepare("SELECT route_id FROM parties LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE parties ADD COLUMN route_id INTEGER DEFAULT NULL;`);
+            db.exec(`ALTER TABLE parties ADD COLUMN route_name TEXT DEFAULT '';`);
+            db.exec(`ALTER TABLE parties ADD COLUMN profit_share_percent REAL DEFAULT 0.0;`);
+            db.exec(`ALTER TABLE parties ADD COLUMN partner_type TEXT DEFAULT '';`);
+            db.exec(`ALTER TABLE parties ADD COLUMN notes TEXT DEFAULT '';`);
+            console.log('Added columns to parties table');
+        } catch (e2) {
+            console.log('Migration 4 (parties columns) skipped:', e2.message);
+        }
+    }
+
+    // Migration 5: Add new columns to milk_collections table
+    try {
+        db.prepare("SELECT route_id FROM milk_collections LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN route_id INTEGER DEFAULT NULL;`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN clr_percent REAL DEFAULT 0.0;`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN adulteration_test TEXT DEFAULT 'not_tested';`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN rate_type TEXT DEFAULT 'formula';`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN extra_per_unit REAL DEFAULT 0.0;`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN fixed_rate REAL DEFAULT 0.0;`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN fat_multiplier REAL DEFAULT 7.15;`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN snf_multiplier REAL DEFAULT 4.55;`);
+            db.exec(`ALTER TABLE milk_collections ADD COLUMN calculated_rate REAL DEFAULT 0.0;`);
+            console.log('Added columns to milk_collections table');
+        } catch (e2) {
+            console.log('Migration 5 (milk_collections columns) skipped:', e2.message);
+        }
+    }
+
+    // Migration 6: Add expiry_days to products table
+    try {
+        db.prepare("SELECT expiry_days FROM products LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE products ADD COLUMN expiry_days INTEGER DEFAULT 0;`);
+            console.log('Added expiry_days to products table');
+        } catch (e2) {
+            console.log('Migration 6 (products expiry_days) skipped:', e2.message);
+        }
+    }
+
+    // Migration 7: Add assigned_route_id to users table and update role CHECK
+    try {
+        db.prepare("SELECT assigned_route_id FROM users LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE users ADD COLUMN assigned_route_id INTEGER DEFAULT NULL REFERENCES routes(id);`);
+            console.log('Added assigned_route_id to users table');
+        } catch (e2) {
+            console.log('Migration 7 (users assigned_route_id) skipped:', e2.message);
+        }
+    }
+
+    // Migration 8: Update users role CHECK to include accountant, staff, agent
+    db.pragma('foreign_keys = OFF');
+    try {
+        db.prepare(
+            "INSERT INTO users (username, password_hash, role) VALUES ('_migration_test_', '_test_', 'accountant')"
+        ).run();
+        db.prepare("DELETE FROM users WHERE username = '_migration_test_'").run();
+    } catch (e) {
+        try {
+            db.prepare("DELETE FROM users WHERE username = '_migration_test_'").run();
+        } catch (e2) { /* ignore */ }
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS users_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'operator' CHECK(role IN ('admin', 'operator', 'accountant', 'staff', 'agent')),
+                    assigned_route_id INTEGER DEFAULT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                    FOREIGN KEY (assigned_route_id) REFERENCES routes(id)
+                );
+                INSERT INTO users_new SELECT id, username, password_hash, 
+                    CASE WHEN role IN ('admin','operator','accountant','staff','agent') THEN role ELSE 'operator' END,
+                    assigned_route_id, is_active, created_at, updated_at 
+                FROM users;
+                DROP TABLE users;
+                ALTER TABLE users_new RENAME TO users;
+            `);
+            console.log('Updated users table to include new roles');
+        } catch (e2) {
+            console.log('Migration 8 (users role CHECK) skipped:', e2.message);
+        }
+    }
+    db.pragma('foreign_keys = ON');
+
+    console.log('Migrations complete');
 }
 
 // ──────────────────────────────────────────────────────────────

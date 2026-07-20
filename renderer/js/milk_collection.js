@@ -1,6 +1,8 @@
 /**
  * Milk Collection Module
  * Track daily milk intake from farmers with quality parameters
+ * Enhanced: Rate type (FORMULA / FIXED), CLR, adulteration test, route/collection center,
+ * rate chart integration with date-effective rate lookup.
  */
 
 let milkFilter = { search: '', from_date: '', to_date: '' };
@@ -85,10 +87,12 @@ async function renderMilkCollection() {
                             <th>Collection #</th>
                             <th>Date</th>
                             <th>Farmer</th>
+                            <th>Route</th>
                             <th>Type</th>
                             <th>Shift</th>
                             <th class="text-right">Liters</th>
                             <th class="text-right">Fat %</th>
+                            <th>Rate Type</th>
                             <th class="text-right">Rate</th>
                             <th class="text-right">Amount</th>
                             <th>Status</th>
@@ -97,16 +101,18 @@ async function renderMilkCollection() {
                     </thead>
                     <tbody>
                         ${records.length === 0
-                            ? '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No milk collections found. Record your first collection!</td></tr>'
+                            ? '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text-light)">No milk collections found. Record your first collection!</td></tr>'
                             : records.map(r => `
                                 <tr>
                                     <td><strong>${escapeHtml(r.collection_no)}</strong></td>
                                     <td>${formatDate(r.date)}</td>
                                     <td>${escapeHtml(r.farmer_name)}</td>
+                                    <td style="font-size:11px">${escapeHtml(r.route_name || '-')}</td>
                                     <td><span class="badge ${r.milk_type === 'cow' ? 'badge-info' : r.milk_type === 'buffalo' ? 'badge-warning' : 'badge-success'}">${escapeHtml(r.milk_type)}</span></td>
                                     <td>${escapeHtml(r.shift)}</td>
                                     <td class="text-right"><strong>${formatNumber(r.quantity_liters)}</strong></td>
                                     <td class="text-right">${r.fat_percent ? r.fat_percent.toFixed(1) : '-'}</td>
+                                    <td><span class="badge ${r.rate_type === 'formula' ? 'badge-info' : 'badge-success'}">${r.rate_type || 'formula'}</span></td>
                                     <td class="text-right">${formatCurrency(r.rate)}</td>
                                     <td class="text-right">${formatCurrency(r.amount)}</td>
                                     <td>${statusBadge(r.status)}</td>
@@ -147,7 +153,6 @@ function resetMilkFilter() {
     renderMilkCollection();
 }
 
-// Generate collection number
 function generateCollectionNo() {
     const date = new Date();
     const y = date.getFullYear().toString().slice(-2);
@@ -158,11 +163,19 @@ function generateCollectionNo() {
 }
 
 // ============================================================
-// Milk Collection Form
+// Milk Collection Form (Enhanced)
 // ============================================================
 async function showMilkCollectionForm(recordId = null) {
-    const partiesResult = await window.api.getParties({ type: 'supplier' });
-    const parties = partiesResult.success ? partiesResult.data : [];
+    // Load farmers (type=farmer) and routes
+    const [farmersResult, routesResult, rateChartsResult] = await Promise.all([
+        window.api.getParties({ type: 'farmer' }),
+        window.api.getRoutes({}),
+        window.api.getRateCharts()
+    ]);
+
+    const farmers = farmersResult.success ? farmersResult.data : [];
+    const routes = routesResult.success ? routesResult.data : [];
+    const rateCharts = rateChartsResult.success ? rateChartsResult.data : [];
 
     let record = null;
     if (recordId) {
@@ -171,13 +184,14 @@ async function showMilkCollectionForm(recordId = null) {
     }
 
     const isEdit = !!record;
+    const todayStr = today();
 
     showModal(`
         <div class="modal-header">
             <h2>${isEdit ? 'Edit Milk Collection' : 'New Milk Collection'}</h2>
             <button class="close-btn" onclick="closeModal()">&times;</button>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" style="max-height:75vh;overflow-y:auto">
             <form id="milkCollectionForm">
                 <div class="form-row">
                     <div class="form-group">
@@ -186,17 +200,25 @@ async function showMilkCollectionForm(recordId = null) {
                     </div>
                     <div class="form-group">
                         <label>Date</label>
-                        <input type="date" class="form-control" name="date" value="${record ? record.date : today()}" required>
+                        <input type="date" class="form-control" name="date" id="mcDate" value="${record ? record.date : todayStr}" required onchange="refreshEffectiveRate()">
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Farmer / Supplier</label>
-                    <select class="form-control" name="party_id" required>
+                    <label>Farmer *</label>
+                    <select class="form-control" name="party_id" id="mcFarmer" required>
                         <option value="">-- Select Farmer --</option>
-                        ${parties.map(p => `<option value="${p.id}" ${record && record.party_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} ${p.phone ? '- ' + escapeHtml(p.phone) : ''}</option>`).join('')}
+                        ${farmers.map(p => `<option value="${p.id}" ${record && record.party_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} ${p.phone ? '- ' + escapeHtml(p.phone) : ''}</option>`).join('')}
                     </select>
+                    <small style="color:var(--text-light)">Add farmers in Party Management with type "farmer"</small>
                 </div>
                 <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Route / Collection Center</label>
+                        <select class="form-control" name="route_id" id="mcRoute">
+                            <option value="">-- No Route --</option>
+                            ${routes.map(r => `<option value="${r.id}" ${record && record.route_id === r.id ? 'selected' : ''}>${escapeHtml(r.name)} ${r.area ? '(' + escapeHtml(r.area) + ')' : ''}</option>`).join('')}
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label>Milk Type</label>
                         <select class="form-control" name="milk_type">
@@ -213,6 +235,84 @@ async function showMilkCollectionForm(recordId = null) {
                             <option value="combined" ${record && record.shift === 'combined' ? 'selected' : ''}>Combined</option>
                         </select>
                     </div>
+                </div>
+
+                <div class="form-section-title">Rate Calculation</div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Rate Type</label>
+                        <select class="form-control" name="rate_type" id="mcRateType" onchange="toggleMilkRateType()">
+                            <option value="formula" ${(!record || record.rate_type === 'formula') ? 'selected' : ''}>Formula (FAT × Mult + SNF × Mult)</option>
+                            <option value="fixed" ${record && record.rate_type === 'fixed' ? 'selected' : ''}>Fixed Rate Per Liter</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="mcRateChartInfo" style="grid-column:span 2">
+                        <div id="mcRateChartDisplay" style="padding:6px 10px;background:var(--bg);border-radius:4px;font-size:12px;color:var(--text-light)">
+                            Loading effective rate for ${formatDate(record ? record.date : todayStr)}...
+                        </div>
+                    </div>
+                </div>
+
+                <div id="mcFormulaFields" ${record && record.rate_type === 'fixed' ? 'style="display:none"' : ''}>
+                    <div class="form-section-title">Formula Parameters</div>
+                    <div class="form-row-4">
+                        <div class="form-group">
+                            <label>FAT %</label>
+                            <input type="number" class="form-control" name="fat_percent" id="mcFat" value="${record ? record.fat_percent : 3.5}" min="0" step="0.1" oninput="calcMilkAmount()">
+                        </div>
+                        <div class="form-group">
+                            <label>SNF %</label>
+                            <input type="number" class="form-control" name="snf_percent" id="mcSnf" value="${record ? record.snf_percent : 8.5}" min="0" step="0.1" oninput="calcMilkAmount()">
+                        </div>
+                        <div class="form-group">
+                            <label>CLR (optional)</label>
+                            <input type="number" class="form-control" name="clr_percent" id="mcClr" value="${record ? record.clr_percent || '' : ''}" min="0" step="0.1" placeholder="e.g., 28.5">
+                        </div>
+                        <div class="form-group">
+                            <label>Extra / Unit</label>
+                            <input type="number" class="form-control" name="extra_per_unit" id="mcExtra" value="${record ? record.extra_per_unit || 0 : 0}" min="0" step="0.01" oninput="calcMilkAmount()">
+                        </div>
+                    </div>
+                    <div style="padding:8px 12px;background:#e8f4f8;border-radius:4px;font-size:13px;margin-bottom:12px">
+                        <strong>Formula:</strong> Rate = (FAT × <span id="mcFatMultDisplay">7.15</span>) + (SNF × <span id="mcSnfMultDisplay">4.55</span>) + Extra/Unit
+                        = <strong id="mcCalcRateDisplay" style="color:var(--accent)">—</strong>/L
+                    </div>
+                </div>
+
+                <div id="mcFixedFields" ${(!record || record.rate_type === 'formula') ? 'style="display:none"' : ''}>
+                    <div class="form-section-title">Fixed Rate</div>
+                    <div class="form-group">
+                        <label>Fixed Rate Per Liter</label>
+                        <input type="number" class="form-control" name="fixed_rate" id="mcFixedRate" value="${record ? record.fixed_rate || 0 : 0}" min="0" step="0.01" oninput="calcMilkAmount()">
+                    </div>
+                </div>
+
+                <div class="form-section-title">Quantity & Total</div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Quantity (Liters) *</label>
+                        <input type="number" class="form-control" name="quantity_liters" id="mcLiters" value="${record ? record.quantity_liters : 0}" min="0" step="0.01" required oninput="calcMilkAmount()">
+                    </div>
+                    <div class="form-group">
+                        <label>Calculated Rate / L</label>
+                        <input type="text" class="form-control" id="mcCalcRate" readonly style="background:#f5f5f5;font-weight:700;font-size:15px;color:var(--accent)">
+                    </div>
+                    <div class="form-group">
+                        <label>Total Amount</label>
+                        <input type="text" class="form-control" name="amount" id="mcAmount" readonly style="background:#f5f5f5;font-weight:700;font-size:18px;color:var(--primary)">
+                    </div>
+                </div>
+
+                <div class="form-section-title">Quality Checks</div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Adulteration Test</label>
+                        <select class="form-control" name="adulteration_test">
+                            <option value="not_tested" ${!record || record.adulteration_test === 'not_tested' ? 'selected' : ''}>Not Tested</option>
+                            <option value="pass" ${record && record.adulteration_test === 'pass' ? 'selected' : ''}>✅ Pass</option>
+                            <option value="fail" ${record && record.adulteration_test === 'fail' ? 'selected' : ''}>❌ Fail</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label>Status</label>
                         <select class="form-control" name="status">
@@ -222,40 +322,10 @@ async function showMilkCollectionForm(recordId = null) {
                         </select>
                     </div>
                 </div>
-                <div class="form-section-title">Quality & Quantity</div>
-                <div class="form-row-4">
-                    <div class="form-group">
-                        <label>Quantity (Liters)</label>
-                        <input type="number" class="form-control" name="quantity_liters" id="milkLiters" value="${record ? record.quantity_liters : 0}" min="0" step="0.01" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Fat %</label>
-                        <input type="number" class="form-control" name="fat_percent" id="milkFat" value="${record ? record.fat_percent : 3.5}" min="0" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>SNF %</label>
-                        <input type="number" class="form-control" name="snf_percent" id="milkSnf" value="${record ? record.snf_percent : 8.5}" min="0" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label>Rate (per liter)</label>
-                        <input type="number" class="form-control" name="rate" id="milkRate" value="${record ? record.rate : 60}" min="0" step="0.01" oninput="calcMilkAmount()">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Amount</label>
-                        <input type="number" class="form-control" name="amount" id="milkAmount" value="${record ? record.amount : 0}" readonly style="background:#f5f5f5;font-weight:700;font-size:16px">
-                    </div>
-                    <div class="form-group">
-                        <label>&nbsp;</label>
-                        <div style="padding-top:8px">
-                            <span style="font-size:12px;color:var(--text-light)">Price adjusts with fat %: Rate × (Fat / 3.5)</span>
-                        </div>
-                    </div>
-                </div>
+
                 <div class="form-group">
                     <label>Notes</label>
-                    <textarea class="form-control" name="notes">${escapeHtml(record ? record.notes : '')}</textarea>
+                    <textarea class="form-control" name="notes" rows="2">${escapeHtml(record ? record.notes : '')}</textarea>
                 </div>
             </form>
         </div>
@@ -265,62 +335,151 @@ async function showMilkCollectionForm(recordId = null) {
         </div>
     `);
 
-    // Auto-calculate amount
-    document.getElementById('milkLiters')?.addEventListener('input', calcMilkAmount);
-    document.getElementById('milkFat')?.addEventListener('input', calcMilkAmount);
+    // Load effective rate and set up auto-calculation
+    await refreshEffectiveRate();
+    document.getElementById('mcDate')?.addEventListener('change', refreshEffectiveRate);
     calcMilkAmount();
 }
 
+function toggleMilkRateType() {
+    const type = document.getElementById('mcRateType')?.value || 'formula';
+    document.getElementById('mcFormulaFields').style.display = type === 'formula' ? 'block' : 'none';
+    document.getElementById('mcFixedFields').style.display = type === 'fixed' ? 'block' : 'none';
+    calcMilkAmount(); // Recalculate immediately when rate type changes
+}
+
+let _effectiveRateCache = null;
+
+async function refreshEffectiveRate() {
+    const dateEl = document.getElementById('mcDate');
+    if (!dateEl) return;
+    const date = dateEl.value || today();
+
+    try {
+        const result = await window.api.getEffectiveRate(date);
+        if (result.success) {
+            _effectiveRateCache = result.data;
+            const r = result.data;
+
+            // Update rate chart info display
+            const displayEl = document.getElementById('mcRateChartDisplay');
+            if (displayEl) {
+                if (r.id) {
+                    displayEl.innerHTML = `📋 Effective rate from chart <strong>#${r.id}</strong> (effective ${formatDate(r.effective_from)}) — ` +
+                        (r.rate_type === 'formula'
+                            ? `FAT Mult: ${r.fat_multiplier}, SNF Mult: ${r.snf_multiplier}, Extra: ${formatCurrency(r.extra_per_unit || 0)}`
+                            : `Fixed Rate: ${formatCurrency(r.fixed_rate)}/L`);
+                } else {
+                    displayEl.innerHTML = `⚠️ ${escapeHtml(r.notes || 'Using default rate')} — ${r.rate_type === 'formula' ? `FAT: ${r.fat_multiplier}, SNF: ${r.snf_multiplier}` : `Fixed: ${formatCurrency(r.fixed_rate || 0)}`}`;
+                }
+            }
+
+            // Update displayed multipliers
+            const fatDisp = document.getElementById('mcFatMultDisplay');
+            const snfDisp = document.getElementById('mcSnfMultDisplay');
+            if (fatDisp) fatDisp.textContent = r.fat_multiplier;
+            if (snfDisp) snfDisp.textContent = r.snf_multiplier;
+
+            calcMilkAmount();
+        } else {
+            const displayEl = document.getElementById('mcRateChartDisplay');
+            if (displayEl) displayEl.innerHTML = `⚠️ Could not load rate: ${result.error}`;
+        }
+    } catch (e) {
+        console.error('Rate lookup failed:', e);
+    }
+}
+
 function calcMilkAmount() {
-    const liters = parseFloat(document.getElementById('milkLiters')?.value || 0);
-    const fat = parseFloat(document.getElementById('milkFat')?.value || 3.5);
-    const ratePerLiter = parseFloat(document.getElementById('milkRate')?.value || 60);
+    const liters = parseFloat(document.getElementById('mcLiters')?.value || 0);
+    const rateType = document.getElementById('mcRateType')?.value || 'formula';
 
-    // Simple fat-adjusted pricing: rate per liter adjusted by fat %
-    const adjustedRate = ratePerLiter * (fat / 3.5);
-    const amount = liters * adjustedRate;
+    let calculatedRate = 0;
+    let formulaBreakdown = '';
 
-    document.getElementById('milkAmount').value = amount.toFixed(2);
+    if (rateType === 'formula') {
+        const fat = parseFloat(document.getElementById('mcFat')?.value || 0);
+        const snf = parseFloat(document.getElementById('mcSnf')?.value || 0);
+        const extra = parseFloat(document.getElementById('mcExtra')?.value || 0);
+
+        // Use multiplier values from effective rate cache, or defaults
+        const rateChart = _effectiveRateCache || {};
+        const fatMult = parseFloat(rateChart.fat_multiplier) || 7.15;
+        const snfMult = parseFloat(rateChart.snf_multiplier) || 4.55;
+
+        calculatedRate = (fat * fatMult) + (snf * snfMult) + extra;
+        formulaBreakdown = `(${fat} × ${fatMult}) + (${snf} × ${snfMult}) + ${extra} = ${calculatedRate.toFixed(2)}`;
+    } else {
+        calculatedRate = parseFloat(document.getElementById('mcFixedRate')?.value || 0);
+        formulaBreakdown = `Fixed rate: ${calculatedRate.toFixed(2)}/L`;
+    }
+
+    const amount = liters * calculatedRate;
+
+    // Update displays
+    document.getElementById('mcCalcRate').value = formatCurrency(calculatedRate);
+    document.getElementById('mcAmount').value = formatCurrency(amount);
+
+    const calcDisplay = document.getElementById('mcCalcRateDisplay');
+    if (calcDisplay) calcDisplay.textContent = formatCurrency(calculatedRate);
 }
 
 // ============================================================
-// Save Milk Collection
+// Save Milk Collection (Enhanced)
 // ============================================================
 async function saveMilkCollection(recordId) {
     const form = document.getElementById('milkCollectionForm');
     const formData = new FormData(form);
 
     const liters = parseFloat(formData.get('quantity_liters') || 0);
-    if (liters <= 0) {
-        showToast('Quantity must be greater than 0', 'error');
-        return;
+    if (liters <= 0) { showToast('Quantity must be greater than 0', 'error'); return; }
+
+    const fat = parseFloat(formData.get('fat_percent') || 0);
+    const snf = parseFloat(formData.get('snf_percent') || 0);
+    const rateType = formData.get('rate_type') || 'formula';
+    const extraPerUnit = parseFloat(formData.get('extra_per_unit') || 0);
+    const fixedRate = parseFloat(formData.get('fixed_rate') || 0);
+
+    // Calculate rate using the active rate chart
+    const rateChart = _effectiveRateCache || {};
+    let calculatedRate = 0;
+    if (rateType === 'formula') {
+        const fatMult = parseFloat(rateChart.fat_multiplier) || 7.15;
+        const snfMult = parseFloat(rateChart.snf_multiplier) || 4.55;
+        calculatedRate = (fat * fatMult) + (snf * snfMult) + extraPerUnit;
+    } else {
+        calculatedRate = fixedRate;
     }
 
-    const ratePerLiter = parseFloat(formData.get('rate') || 60);
-    const fat = parseFloat(formData.get('fat_percent') || 3.5);
-    const adjustedRate = ratePerLiter * (fat / 3.5);
-    const amount = liters * adjustedRate;
+    const amount = liters * calculatedRate;
 
     const data = {
         id: recordId || null,
         collection_no: formData.get('collection_no'),
         date: formData.get('date') || today(),
         party_id: parseInt(formData.get('party_id')),
+        route_id: formData.get('route_id') ? parseInt(formData.get('route_id')) : null,
         milk_type: formData.get('milk_type'),
         quantity_liters: liters,
         fat_percent: fat,
-        snf_percent: parseFloat(formData.get('snf_percent') || 8.5),
-        rate: parseFloat(ratePerLiter),
+        snf_percent: snf,
+        clr_percent: formData.get('clr_percent') ? parseFloat(formData.get('clr_percent')) : null,
+        adulteration_test: formData.get('adulteration_test') || 'not_tested',
+        rate_type: rateType,
+        extra_per_unit: rateType === 'formula' ? extraPerUnit : 0,
+        fixed_rate: rateType === 'fixed' ? fixedRate : 0,
+        fat_multiplier: rateType === 'formula' ? (parseFloat(rateChart.fat_multiplier) || 7.15) : 0,
+        snf_multiplier: rateType === 'formula' ? (parseFloat(rateChart.snf_multiplier) || 4.55) : 0,
+        calculated_rate: calculatedRate,
+        rate: calculatedRate,
         amount: amount,
         shift: formData.get('shift'),
         status: formData.get('status'),
         notes: formData.get('notes')
     };
 
-    if (!data.party_id) {
-        showToast('Please select a farmer', 'error');
-        return;
-    }
+    if (!data.party_id) { showToast('Please select a farmer', 'error'); return; }
+    if (liters <= 0) { showToast('Quantity must be greater than 0', 'error'); return; }
 
     const result = await window.api.saveMilkCollection(data);
     if (result.success) {
@@ -346,6 +505,14 @@ async function viewMilkCollection(id) {
     const settings = await getSettingsCached();
     const businessName = settings.business_name || 'Godhuli Dairy Plant';
 
+    const rateType = r.rate_type || 'formula';
+    let rateDetail = '';
+    if (rateType === 'formula') {
+        rateDetail = `Formula: (${r.fat_percent || 0} × ${r.fat_multiplier || 7.15}) + (${r.snf_percent || 0} × ${r.snf_multiplier || 4.55}) + ${r.extra_per_unit || 0} = ${formatCurrency(r.calculated_rate || r.rate)}/L`;
+    } else {
+        rateDetail = `Fixed Rate: ${formatCurrency(r.fixed_rate || r.rate)}/L`;
+    }
+
     showModal(`
         <div class="modal-header">
             <h2>Milk Collection #${escapeHtml(r.collection_no)}</h2>
@@ -354,40 +521,49 @@ async function viewMilkCollection(id) {
         <div class="modal-body">
             <div style="text-align:center;margin-bottom:20px;border-bottom:2px solid var(--primary);padding-bottom:12px">
                 <h2 style="color:var(--primary)">${escapeHtml(businessName)}</h2>
-                <p style="color:var(--text-light);font-size:12px">Milk Collection Record</p>
+                <p style="color:var(--text-light);font-size:12px">Milk Collection Record — ${rateType.toUpperCase()} Rate</p>
             </div>
-            <div class="form-row">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
                 <div>
                     <p><strong>Collection No:</strong> ${escapeHtml(r.collection_no)}</p>
                     <p><strong>Date:</strong> ${formatDate(r.date)}</p>
                     <p><strong>Shift:</strong> ${escapeHtml(r.shift)}</p>
-                    <p><strong>Status:</strong> ${statusBadge(r.status)}</p>
+                    <p><strong>Route:</strong> ${escapeHtml(r.route_name || '-')}</p>
                 </div>
                 <div>
                     <p><strong>Farmer:</strong> ${escapeHtml(r.farmer_name)}</p>
                     <p style="font-size:12px;color:var(--text-light)">${escapeHtml(r.farmer_phone || '')}</p>
-                    <p style="font-size:12px;color:var(--text-light)">${escapeHtml(r.farmer_address || '')}</p>
+                    <p><strong>Status:</strong> ${statusBadge(r.status)}</p>
+                    ${r.adulteration_test && r.adulteration_test !== 'not_tested' ? `<p><strong>Adulteration:</strong> ${r.adulteration_test === 'pass' ? '✅ Pass' : '❌ Fail'}</p>` : ''}
                 </div>
             </div>
-            <div style="margin-top:16px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
-                <div style="background:var(--bg);padding:12px;border-radius:6px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-light)">Milk Type</div>
-                    <div style="font-size:18px;font-weight:700;margin-top:4px;text-transform:capitalize">${escapeHtml(r.milk_type)}</div>
+            <div style="margin-top:16px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+                <div style="background:var(--bg);padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:10px;color:var(--text-light)">Type</div>
+                    <div style="font-size:15px;font-weight:700;margin-top:4px;text-transform:capitalize">${escapeHtml(r.milk_type)}</div>
                 </div>
-                <div style="background:var(--bg);padding:12px;border-radius:6px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-light)">Quantity</div>
-                    <div style="font-size:18px;font-weight:700;margin-top:4px">${formatNumber(r.quantity_liters)} L</div>
+                <div style="background:var(--bg);padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:10px;color:var(--text-light)">Quantity</div>
+                    <div style="font-size:15px;font-weight:700;margin-top:4px">${formatNumber(r.quantity_liters)} L</div>
                 </div>
-                <div style="background:var(--bg);padding:12px;border-radius:6px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-light)">Fat</div>
-                    <div style="font-size:18px;font-weight:700;margin-top:4px">${r.fat_percent ? r.fat_percent.toFixed(1) : '-'}%</div>
+                <div style="background:var(--bg);padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:10px;color:var(--text-light)">Fat</div>
+                    <div style="font-size:15px;font-weight:700;margin-top:4px">${r.fat_percent ? r.fat_percent.toFixed(1) : '-'}%</div>
                 </div>
-                <div style="background:var(--bg);padding:12px;border-radius:6px;text-align:center">
-                    <div style="font-size:11px;color:var(--text-light)">Amount</div>
-                    <div style="font-size:18px;font-weight:700;margin-top:4px;color:var(--accent)">${formatCurrency(r.amount)}</div>
+                <div style="background:var(--bg);padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:10px;color:var(--text-light)">SNF</div>
+                    <div style="font-size:15px;font-weight:700;margin-top:4px">${r.snf_percent ? r.snf_percent.toFixed(1) : '-'}%</div>
+                </div>
+                <div style="background:var(--bg);padding:10px;border-radius:6px;text-align:center">
+                    <div style="font-size:10px;color:var(--text-light)">Amount</div>
+                    <div style="font-size:15px;font-weight:700;margin-top:4px;color:var(--accent)">${formatCurrency(r.amount)}</div>
                 </div>
             </div>
-            ${r.notes ? `<p style="margin-top:16px"><strong>Notes:</strong> ${escapeHtml(r.notes)}</p>` : ''}
+            <div style="margin-top:12px;padding:10px 14px;background:#e8f4f8;border-radius:6px;font-size:13px">
+                <strong>Rate Calculation:</strong><br>${escapeHtml(rateDetail)}
+            </div>
+            ${r.clr_percent ? `<div style="margin-top:8px;padding:6px 10px;background:var(--bg);border-radius:4px;font-size:13px"><strong>CLR:</strong> ${r.clr_percent}%</div>` : ''}
+            ${r.notes ? `<p style="margin-top:12px"><strong>Notes:</strong> ${escapeHtml(r.notes)}</p>` : ''}
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Close</button>
@@ -432,6 +608,14 @@ async function printMilkRecord(id) {
     const r = result.data;
     const settings = await getSettingsCached();
 
+    const rateType = r.rate_type || 'formula';
+    let rateDetail = '';
+    if (rateType === 'formula') {
+        rateDetail = `Formula: (${r.fat_percent || 0} × ${r.fat_multiplier || 7.15}) + (${r.snf_percent || 0} × ${r.snf_multiplier || 4.55}) + ${r.extra_per_unit || 0} = ${formatCurrency(r.calculated_rate || r.rate)}/L`;
+    } else {
+        rateDetail = `Fixed Rate: ${formatCurrency(r.fixed_rate || r.rate)}/L`;
+    }
+
     const html = `
         <div class="header">
             <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
@@ -443,6 +627,7 @@ async function printMilkRecord(id) {
                 <p><strong>Collection No:</strong> ${escapeHtml(r.collection_no)}</p>
                 <p><strong>Date:</strong> ${formatDate(r.date)}</p>
                 <p><strong>Shift:</strong> ${escapeHtml(r.shift)}</p>
+                <p><strong>Route:</strong> ${escapeHtml(r.route_name || '-')}</p>
             </div>
             <div>
                 <p><strong>Farmer:</strong> ${escapeHtml(r.farmer_name)}</p>
@@ -457,9 +642,12 @@ async function printMilkRecord(id) {
                 <tr><td>Quantity</td><td class="text-right">${formatNumber(r.quantity_liters)} Liters</td></tr>
                 <tr><td>Fat %</td><td class="text-right">${r.fat_percent ? r.fat_percent.toFixed(1) : '-'}%</td></tr>
                 <tr><td>SNF %</td><td class="text-right">${r.snf_percent ? r.snf_percent.toFixed(1) : '-'}%</td></tr>
-                <tr><td>Rate / Liter</td><td class="text-right">${formatCurrency(r.rate)}</td></tr>
+                <tr><td>${r.clr_percent ? 'CLR: ' + r.clr_percent + '%' : ''}</td><td></td></tr>
+                <tr><td>Rate Type</td><td class="text-right">${rateType.toUpperCase()}</td></tr>
+                <tr><td>Rate Detail</td><td class="text-right" style="font-size:11px">${escapeHtml(rateDetail)}</td></tr>
                 <tr><td><strong>Total Amount</strong></td><td class="text-right"><strong>${formatCurrency(r.amount)}</strong></td></tr>
                 <tr><td>Status</td><td class="text-right" style="text-transform:uppercase">${escapeHtml(r.status)}</td></tr>
+                ${r.adulteration_test && r.adulteration_test !== 'not_tested' ? `<tr><td>Adulteration Test</td><td class="text-right">${r.adulteration_test === 'pass' ? 'Passed' : 'Failed'}</td></tr>` : ''}
             </tbody>
         </table>
         ${r.notes ? `<p style="margin-top:10px"><strong>Notes:</strong> ${escapeHtml(r.notes)}</p>` : ''}
@@ -486,6 +674,7 @@ async function exportMilkPDF(id) {
             <div>
                 <p><strong>Collection No:</strong> ${escapeHtml(r.collection_no)}</p>
                 <p><strong>Date:</strong> ${formatDate(r.date)}</p>
+                <p><strong>Route:</strong> ${escapeHtml(r.route_name || '-')}</p>
             </div>
             <div>
                 <p><strong>Farmer:</strong> ${escapeHtml(r.farmer_name)}</p>
@@ -497,6 +686,7 @@ async function exportMilkPDF(id) {
                 <tr><td>Type</td><td class="text-right" style="text-transform:capitalize">${escapeHtml(r.milk_type)}</td></tr>
                 <tr><td>Quantity</td><td class="text-right">${formatNumber(r.quantity_liters)} L</td></tr>
                 <tr><td>Fat</td><td class="text-right">${r.fat_percent ? r.fat_percent.toFixed(1) : '-'}%</td></tr>
+                <tr><td>SNF</td><td class="text-right">${r.snf_percent ? r.snf_percent.toFixed(1) : '-'}%</td></tr>
                 <tr><td><strong>Amount</strong></td><td class="text-right"><strong>${formatCurrency(r.amount)}</strong></td></tr>
             </tbody>
         </table>
@@ -738,5 +928,7 @@ window.printMilkRecord = printMilkRecord;
 window.exportMilkPDF = exportMilkPDF;
 window.showMilkDashboard = showMilkDashboard;
 window.calcMilkAmount = calcMilkAmount;
+window.toggleMilkRateType = toggleMilkRateType;
+window.refreshEffectiveRate = refreshEffectiveRate;
 window.printMilkCollectionsList = printMilkCollectionsList;
 window.exportMilkCollectionsListPDF = exportMilkCollectionsListPDF;

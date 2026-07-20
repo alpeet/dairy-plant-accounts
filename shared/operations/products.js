@@ -5,6 +5,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * List products with optional search.
  */
@@ -33,6 +35,7 @@ function getProduct(db, id) {
 function saveProduct(db, product) {
     const trx = db.transaction(() => {
         if (product.id) {
+            const oldProduct = db.prepare("SELECT * FROM products WHERE id = ?").get(product.id);
             db.prepare(
                 "UPDATE products SET name=?, unit=?, category=?, opening_stock=?, reorder_level=?, rate=?, gst_rate=?, hsn_code=?, notes=?, updated_at=datetime('now','localtime') WHERE id=?"
             ).run(
@@ -41,6 +44,7 @@ function saveProduct(db, product) {
                 product.rate || 0, product.gst_rate || 0, product.hsn_code || '',
                 product.notes || '', product.id
             );
+            logAudit(db, 'products', product.id, 'update', oldProduct, product, product.created_by);
             return { id: product.id };
         } else {
             const result = db.prepare(
@@ -51,13 +55,15 @@ function saveProduct(db, product) {
                 product.rate || 0, product.gst_rate || 0, product.hsn_code || '',
                 product.notes || ''
             );
+            const newId = result.lastInsertRowid;
+            logAudit(db, 'products', newId, 'create', null, product, product.created_by);
             const opening = parseFloat(product.opening_stock || 0);
             if (opening > 0) {
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes) VALUES (?, date('now','localtime'), 'opening', ?, 0, ?, ?, 'Opening Stock')"
-                ).run(result.lastInsertRowid, opening, opening, product.rate || 0);
+                ).run(newId, opening, opening, product.rate || 0);
             }
-            return { id: result.lastInsertRowid };
+            return { id: newId };
         }
     });
     return trx();
@@ -67,7 +73,8 @@ function saveProduct(db, product) {
  * Delete a product if it has no transaction history.
  * Also cleans up opening stock movements.
  */
-function deleteProduct(db, id) {
+function deleteProduct(db, id, changedBy = null) {
+    const oldProduct = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
     const hasMovements = db.prepare(
         "SELECT COUNT(*) as count FROM stock_movements WHERE product_id = ? AND type != 'opening'"
     ).get(id);
@@ -76,6 +83,7 @@ function deleteProduct(db, id) {
     }
     db.prepare("DELETE FROM products WHERE id = ?").run(id);
     db.prepare("DELETE FROM stock_movements WHERE product_id = ?").run(id);
+    logAudit(db, 'products', id, 'delete', oldProduct, null, changedBy);
     return { deleted: true };
 }
 

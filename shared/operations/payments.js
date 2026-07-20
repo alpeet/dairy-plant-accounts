@@ -5,6 +5,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * Save a payment (receipt or payment made).
  * Also creates the corresponding ledger entry.
@@ -28,6 +30,7 @@ function savePayment(db, payment) {
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'payment_made', ?, ?, ?, 0, ?)"
             ).run(payment.party_id, payment.date, result.lastInsertRowid, `Payment Made`, payment.amount, 0);
         }
+        logAudit(db, 'payments', result.lastInsertRowid, 'create', null, payment, payment.created_by);
         return { id: result.lastInsertRowid };
     });
     return trx();

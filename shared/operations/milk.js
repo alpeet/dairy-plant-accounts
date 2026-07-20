@@ -5,6 +5,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * Find or auto-create the Raw Milk product used for stock tracking.
  */
@@ -25,8 +27,11 @@ function getOrCreateRawMilkProduct(db) {
  * List milk collections with optional filters.
  */
 function listMilkCollections(db, { search, from_date, to_date, party_id } = {}) {
-    let query = `SELECT mc.*, p.name as farmer_name, p.phone as farmer_phone
-                 FROM milk_collections mc LEFT JOIN parties p ON mc.party_id = p.id WHERE 1=1`;
+    let query = `SELECT mc.*, p.name as farmer_name, p.phone as farmer_phone, rt.name as route_name
+                 FROM milk_collections mc 
+                 LEFT JOIN parties p ON mc.party_id = p.id 
+                 LEFT JOIN routes rt ON mc.route_id = rt.id 
+                 WHERE 1=1`;
     const params = [];
     if (search) {
         query += " AND (mc.collection_no LIKE ? OR p.name LIKE ?)";
@@ -44,8 +49,11 @@ function listMilkCollections(db, { search, from_date, to_date, party_id } = {}) 
  */
 function getMilkCollection(db, id) {
     return db.prepare(
-        `SELECT mc.*, p.name as farmer_name, p.phone as farmer_phone, p.address as farmer_address
-         FROM milk_collections mc LEFT JOIN parties p ON mc.party_id = p.id WHERE mc.id = ?`
+        `SELECT mc.*, p.name as farmer_name, p.phone as farmer_phone, p.address as farmer_address, rt.name as route_name
+         FROM milk_collections mc 
+         LEFT JOIN parties p ON mc.party_id = p.id 
+         LEFT JOIN routes rt ON mc.route_id = rt.id 
+         WHERE mc.id = ?`
     ).get(id);
 }
 
@@ -56,7 +64,9 @@ function getMilkCollection(db, id) {
 function saveMilkCollection(db, data) {
     const trx = db.transaction(() => {
         const { id, collection_no, date, party_id, milk_type, quantity_liters,
-                fat_percent, snf_percent, rate, amount, shift, status, notes } = data;
+                fat_percent, snf_percent, rate, amount, shift, status, notes,
+                route_id, clr_percent, adulteration_test, rate_type,
+                extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, calculated_rate } = data;
 
         const rawMilkProduct = getOrCreateRawMilkProduct(db);
 
@@ -64,8 +74,10 @@ function saveMilkCollection(db, data) {
             // ── Revert old collection ──
             db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'milk_collection' AND reference_id = ?").run(id);
 
+            // Capture old values for audit
+            const oldCollection = db.prepare("SELECT * FROM milk_collections WHERE id = ?").get(id);
+
             // Reverse old stock movement
-            const oldCollection = db.prepare("SELECT quantity_liters FROM milk_collections WHERE id = ?").get(id);
             if (oldCollection && oldCollection.quantity_liters > 0) {
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
@@ -77,12 +89,19 @@ function saveMilkCollection(db, data) {
                 ).run(rawMilkProduct.id, date, oldCollection.quantity_liters, newBalance, rawMilkProduct.rate, collection_no, id);
             }
 
-            // Update record
+            // Update record with all fields
             db.prepare(
-                "UPDATE milk_collections SET collection_no=?, date=?, party_id=?, milk_type=?, quantity_liters=?, fat_percent=?, snf_percent=?, rate=?, amount=?, shift=?, status=?, notes=?, updated_at=datetime('now','localtime') WHERE id=?"
+                `UPDATE milk_collections SET collection_no=?, date=?, party_id=?, milk_type=?, quantity_liters=?,
+                 fat_percent=?, snf_percent=?, rate=?, amount=?, shift=?, status=?, notes=?,
+                 route_id=?, clr_percent=?, adulteration_test=?, rate_type=?,
+                 extra_per_unit=?, fixed_rate=?, fat_multiplier=?, snf_multiplier=?, calculated_rate=?,
+                 updated_at=datetime('now','localtime') WHERE id=?`
             ).run(collection_no, date, party_id, milk_type, quantity_liters,
                   fat_percent || 0, snf_percent || 0, rate || 0, amount || 0,
-                  shift || 'morning', status || 'pending', notes || '', id);
+                  shift || 'morning', status || 'pending', notes || '',
+                  route_id || null, clr_percent || null, adulteration_test || 'not_tested', rate_type || 'formula',
+                  extra_per_unit || 0, fixed_rate || 0, fat_multiplier || 7.15, snf_multiplier || 4.55, calculated_rate || 0,
+                  id);
 
             // Add new ledger entry
             const ledgerBalance = status === 'paid' ? 0 : (amount || 0);
@@ -103,14 +122,21 @@ function saveMilkCollection(db, data) {
                 ).run(rawMilkProduct.id, date, newLiters, newBalance, rawMilkProduct.rate, collection_no, id);
             }
 
+            logAudit(db, 'milk_collections', id, 'update', oldCollection, data, data.created_by);
             return { id };
         } else {
-            // ── New collection ──
+            // ── New collection with all enhanced fields ──
             const result = db.prepare(
-                "INSERT INTO milk_collections (collection_no, date, party_id, milk_type, quantity_liters, fat_percent, snf_percent, rate, amount, shift, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                `INSERT INTO milk_collections (collection_no, date, party_id, milk_type, quantity_liters,
+                 fat_percent, snf_percent, rate, amount, shift, status, notes,
+                 route_id, clr_percent, adulteration_test, rate_type,
+                 extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, calculated_rate)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).run(collection_no, date, party_id, milk_type, quantity_liters,
                   fat_percent || 0, snf_percent || 0, rate || 0, amount || 0,
-                  shift || 'morning', status || 'pending', notes || '');
+                  shift || 'morning', status || 'pending', notes || '',
+                  route_id || null, clr_percent || null, adulteration_test || 'not_tested', rate_type || 'formula',
+                  extra_per_unit || 0, fixed_rate || 0, fat_multiplier || 7.15, snf_multiplier || 4.55, calculated_rate || 0);
             const newId = result.lastInsertRowid;
 
             // Add ledger entry (credit = plant owes farmer)
@@ -132,6 +158,7 @@ function saveMilkCollection(db, data) {
                 ).run(rawMilkProduct.id, date, newLiters, newBalance, rawMilkProduct.rate, collection_no, newId);
             }
 
+            logAudit(db, 'milk_collections', newId, 'create', null, data, data.created_by);
             return { id: newId };
         }
     });
@@ -141,9 +168,9 @@ function saveMilkCollection(db, data) {
 /**
  * Delete a milk collection with ledger and stock reversal.
  */
-function deleteMilkCollection(db, id) {
+function deleteMilkCollection(db, id, changedBy = null) {
     const trx = db.transaction(() => {
-        const collection = db.prepare("SELECT collection_no, quantity_liters, date FROM milk_collections WHERE id = ?").get(id);
+        const collection = db.prepare("SELECT * FROM milk_collections WHERE id = ?").get(id);
 
         // Remove ledger entry
         db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'milk_collection' AND reference_id = ?").run(id);
@@ -161,6 +188,7 @@ function deleteMilkCollection(db, id) {
             ).run(rawMilkProduct.id, collection.date, collection.quantity_liters, newBalance, rawMilkProduct.rate, collection.collection_no, id);
         }
 
+        logAudit(db, 'milk_collections', id, 'delete', collection, null, changedBy);
         db.prepare("DELETE FROM milk_collections WHERE id = ?").run(id);
         return { deleted: true };
     });

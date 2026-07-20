@@ -87,8 +87,8 @@ function validateParty(data) {
     if (!isString(data.name, 100)) return 'Party name is required (max 100 characters)';
 
     // Type must be valid enum
-    if (data.type && !isEnum(data.type, ['customer', 'supplier', 'both'])) {
-        return 'Party type must be customer, supplier, or both';
+    if (data.type && !isEnum(data.type, ['customer', 'supplier', 'both', 'farmer', 'partner'])) {
+        return 'Party type must be customer, supplier, both, farmer, or partner';
     }
 
     // Opening balance must be a valid number
@@ -370,6 +370,122 @@ function validateSettings(data) {
     return null;
 }
 
+// ── New Validators ──
+
+function validateDenomination(data) {
+    if (!data || typeof data !== 'object') return 'Denomination data is required';
+    if (data.date && !isValidDate(data.date)) return 'Invalid date format (YYYY-MM-DD required)';
+    return null;
+}
+
+function validatePettyCash(data) {
+    if (!data || typeof data !== 'object') return 'Petty cash data is required';
+    if (!isString(data.voucher_no, 50)) return 'Voucher number is required';
+    if (!isString(data.expense_head, 100)) return 'Expense head is required';
+    if (!isPositiveNumber(data.amount)) return 'Amount must be greater than 0';
+    if (data.date && !isValidDate(data.date)) return 'Invalid date format (YYYY-MM-DD required)';
+    if (data.payment_mode && !isEnum(data.payment_mode, ['cash', 'bank', 'upi'])) {
+        return 'Payment mode must be cash, bank, or upi';
+    }
+    return null;
+}
+
+function validateSalary(data) {
+    if (!data || typeof data !== 'object') return 'Salary data is required';
+    if (!isString(data.employee_name, 100)) return 'Employee name is required';
+    if (!isString(data.month, 7)) return 'Month is required (YYYY-MM format)';
+    if (!isNonNegativeNumber(data.basic_salary)) return 'Basic salary must be a non-negative number';
+    if (data.payment_mode && !isEnum(data.payment_mode, ['cash', 'bank', 'upi'])) {
+        return 'Payment mode must be cash, bank, or upi';
+    }
+    return null;
+}
+
+function validateVehicleExpense(data) {
+    if (!data || typeof data !== 'object') return 'Vehicle expense data is required';
+    if (!isString(data.vehicle_name, 100)) return 'Vehicle name/number is required';
+    if (data.date && !isValidDate(data.date)) return 'Invalid date format (YYYY-MM-DD required)';
+    if (data.expense_type && !isEnum(data.expense_type, ['fuel', 'repair', 'maintenance', 'toll_parking', 'other'])) {
+        return 'Expense type must be fuel, repair, maintenance, toll_parking, or other';
+    }
+    return null;
+}
+
+function validateOtherExpense(data) {
+    if (!data || typeof data !== 'object') return 'Expense data is required';
+    if (!isString(data.category, 100)) return 'Category is required';
+    if (!isString(data.expense_head, 100)) return 'Expense head is required';
+    if (!isPositiveNumber(data.amount)) return 'Amount must be greater than 0';
+    if (data.date && !isValidDate(data.date)) return 'Invalid date format (YYYY-MM-DD required)';
+    if (data.payment_mode && !isEnum(data.payment_mode, ['cash', 'bank', 'upi', 'cheque'])) {
+        return 'Payment mode must be cash, bank, upi, or cheque';
+    }
+    return null;
+}
+
+// ── Route Validator ──
+function validateRoute(data) {
+    if (!data || typeof data !== 'object') return 'Route data is required';
+    if (!isString(data.name, 100)) return 'Route name is required (max 100 characters)';
+    if (data.area && data.area.length > 200) return 'Area is too long (max 200 characters)';
+    if (data.assigned_vehicle && data.assigned_vehicle.length > 100) return 'Assigned vehicle is too long';
+    if (data.assigned_staff && data.assigned_staff.length > 100) return 'Assigned staff is too long';
+    if (data.notes && data.notes.length > 500) return 'Notes is too long (max 500 characters)';
+    return null;
+}
+
+// ── Rate Chart Validator ──
+function validateRateChart(data) {
+    if (!data || typeof data !== 'object') return 'Rate chart data is required';
+    if (!isString(data.effective_from, 10)) return 'Effective date is required (YYYY-MM-DD)';
+    if (!isValidDate(data.effective_from)) return 'Invalid effective date format';
+    if (data.rate_type && !isEnum(data.rate_type, ['formula', 'fixed'])) return 'Rate type must be formula or fixed';
+    if (data.fat_multiplier !== undefined && data.fat_multiplier !== null) {
+        if (!isPositiveNumber(data.fat_multiplier)) return 'Fat multiplier must be a positive number';
+    }
+    if (data.snf_multiplier !== undefined && data.snf_multiplier !== null) {
+        if (!isPositiveNumber(data.snf_multiplier)) return 'SNF multiplier must be a positive number';
+    }
+    if (data.extra_per_unit !== undefined && data.extra_per_unit !== null) {
+        if (!isNonNegativeNumber(data.extra_per_unit)) return 'Extra per unit must be non-negative';
+    }
+    if (data.fixed_rate !== undefined && data.fixed_rate !== null) {
+        if (!isNonNegativeNumber(data.fixed_rate)) return 'Fixed rate must be non-negative';
+    }
+    if (data.notes && data.notes.length > 500) return 'Notes is too long (max 500 characters)';
+    return null;
+}
+
+// ── Production Batch Validator ──
+function validateProductionBatch(data) {
+    if (!data || typeof data !== 'object') return 'Production batch data is required';
+    if (!isString(data.batch_no, 50)) return 'Batch number is required';
+    if (data.date && !isValidDate(data.date)) return 'Invalid date format (YYYY-MM-DD required)';
+    if (data.shift && !isEnum(data.shift, ['morning', 'evening', 'combined'])) return 'Shift must be morning, evening, or combined';
+    if (data.process_type && data.process_type.length > 100) return 'Process type is too long';
+    if (!Array.isArray(data.inputs) || data.inputs.length === 0) return 'At least one input product is required';
+    if (!Array.isArray(data.outputs) || data.outputs.length === 0) return 'At least one output product is required';
+    if (data.wastage_quantity !== undefined && data.wastage_quantity !== null) {
+        if (!isNonNegativeNumber(data.wastage_quantity)) return 'Wastage quantity must be non-negative';
+    }
+    if (data.operator_name && data.operator_name.length > 100) return 'Operator name is too long';
+    if (data.remarks && data.remarks.length > 500) return 'Remarks is too long (max 500 characters)';
+    return null;
+}
+
+// ── Partner Capital Validator ──
+function validatePartnerCapital(data) {
+    if (!data || typeof data !== 'object') return 'Partner capital data is required';
+    if (!isValidId(data.party_id)) return 'Valid partner is required';
+    if (data.date && !isValidDate(data.date)) return 'Invalid date format (YYYY-MM-DD required)';
+    if (!isPositiveNumber(data.amount)) return 'Amount must be greater than 0';
+    if (!isEnum(data.type, ['contribution', 'withdrawal'])) return 'Type must be contribution or withdrawal';
+    if (data.mode && !isEnum(data.mode, ['cash', 'bank', 'upi', 'cheque'])) return 'Mode must be cash, bank, upi, or cheque';
+    if (data.reference_no && data.reference_no.length > 50) return 'Reference no is too long';
+    if (data.notes && data.notes.length > 500) return 'Notes is too long (max 500 characters)';
+    return null;
+}
+
 module.exports = {
     validateParty,
     validateProduct,
@@ -380,4 +496,15 @@ module.exports = {
     validateStockAdjust,
     validateBulkPayment,
     validateSettings,
+    // New validators
+    validateDenomination,
+    validatePettyCash,
+    validateSalary,
+    validateVehicleExpense,
+    validateOtherExpense,
+    // Module validators
+    validateRoute,
+    validateRateChart,
+    validateProductionBatch,
+    validatePartnerCapital,
 };
