@@ -210,13 +210,18 @@ function importParties(db, sheetData) {
     let ledgerCount = 0;
     const partyNameToId = {};
 
+    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
+    const DATA_START_ROW = 2;
+
     const trx = db.transaction(() => {
-        for (let i = 1; i < sheetData.length; i++) {
+        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[nameIdx]) continue;
 
             const name = toStr(row[nameIdx]);
             if (!name) continue;
+            // Skip common header-like rows
+            if (normalize(name) === 'party name') continue;
 
             const type = mapPartyType(toStr(row[typeIdx]));
             const phone = toStr(row[phoneIdx]);
@@ -285,13 +290,18 @@ function importProducts(db, sheetData) {
     let prodCount = 0;
     const productNameToId = {};
 
+    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
+    const DATA_START_ROW = 2;
+
     const trx = db.transaction(() => {
-        for (let i = 1; i < sheetData.length; i++) {
+        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[nameIdx]) continue;
 
             const name = toStr(row[nameIdx]);
             if (!name) continue;
+            // Skip common header-like rows
+            if (normalize(name) === 'product name') continue;
 
             const unit = toStr(row[unitIdx]);
             const opening = toNum(row[openingIdx]);
@@ -357,11 +367,12 @@ function importSales(db, sheetData, partyNameToId, productNameToId) {
     let skippedNoParty = 0;
     let skippedNoProduct = 0;
 
+    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
+    const DATA_START_ROW = 2;
+
     // Group by invoice_no: some invoices may have multiple products on multiple rows
-    // We'll process each row as a separate sale for simplicity since most seem to be 1-product sales
-    // But first, try to group by invoice_no
     const invoiceGroups = {};
-    for (let i = 1; i < sheetData.length; i++) {
+    for (let i = DATA_START_ROW; i < sheetData.length; i++) {
         const row = sheetData[i];
         if (!row || !row[invIdx]) continue;
 
@@ -493,9 +504,12 @@ function importPurchases(db, sheetData, partyNameToId, productNameToId) {
     let skippedNoParty = 0;
     let skippedNoProduct = 0;
 
+    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
+    const DATA_START_ROW = 2;
+
     // Group by bill_no
     const billGroups = {};
-    for (let i = 1; i < sheetData.length; i++) {
+    for (let i = DATA_START_ROW; i < sheetData.length; i++) {
         const row = sheetData[i];
         if (!row || !row[billIdx]) continue;
 
@@ -597,8 +611,11 @@ function importCashCollections(db, sheetData, partyNameToId) {
     let count = 0;
     let skipped = 0;
 
+    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
+    const DATA_START_ROW = 2;
+
     const trx = db.transaction(() => {
-        for (let i = 1; i < sheetData.length; i++) {
+        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[custIdx]) continue;
 
@@ -650,8 +667,11 @@ function importPartyLedger(db, sheetData, partyNameToId) {
     let count = 0;
     let skipped = 0;
 
+    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
+    const DATA_START_ROW = 2;
+
     const trx = db.transaction(() => {
-        for (let i = 1; i < sheetData.length; i++) {
+        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[partyIdx]) continue;
 
@@ -759,23 +779,25 @@ function main() {
     // ═══════════════════════════════════════════════════════════
     // ALL STEPS wrapped in a single outer transaction for atomicity
     // ═══════════════════════════════════════════════════════════
+    const SHEET_TOTAL_ROWS = 'title + header'; // Row 0=title, Row 1=headers, Row 2+=data
+    
     const masterTrx = db.transaction(() => {
 
         // STEP 1: Import Parties
         const partySheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Master'], { header: 1, defval: '' });
-        console.log(`  → Party_Master: ${partySheet.length - 1} rows`);
+        console.log(`  → Party_Master: ${Math.max(0, partySheet.length - 2)} data rows (${partySheet.length} total rows)`);
         const partyNameToId = importParties(db, partySheet);
 
         // STEP 2: Import Products
         const stockSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Stock_Master'], { header: 1, defval: '' });
-        console.log(`  → Stock_Master: ${stockSheet.length - 1} rows`);
+        console.log(`  → Stock_Master: ${Math.max(0, stockSheet.length - 2)} data rows (${stockSheet.length} total rows)`);
         const productNameToId = importProducts(db, stockSheet);
 
         // STEP 3: Import Sales
         if (workbook.SheetNames.includes('Sales_Entry')) {
             const saleSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Sales_Entry'], { header: 1, defval: '' });
-            if (saleSheet.length > 1) {
-                console.log(`  → Sales_Entry: ${saleSheet.length - 1} rows`);
+            if (saleSheet.length > 2) {
+                console.log(`  → Sales_Entry: ${Math.max(0, saleSheet.length - 2)} data rows (${saleSheet.length} total rows)`);
                 importSales(db, saleSheet, partyNameToId, productNameToId);
             }
         }
@@ -783,8 +805,8 @@ function main() {
         // STEP 4: Import Purchases
         if (workbook.SheetNames.includes('Purchase_Entry')) {
             const purchSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Purchase_Entry'], { header: 1, defval: '' });
-            if (purchSheet.length > 1) {
-                console.log(`  → Purchase_Entry: ${purchSheet.length - 1} rows`);
+            if (purchSheet.length > 2) {
+                console.log(`  → Purchase_Entry: ${Math.max(0, purchSheet.length - 2)} data rows (${purchSheet.length} total rows)`);
                 importPurchases(db, purchSheet, partyNameToId, productNameToId);
             }
         }
@@ -792,8 +814,8 @@ function main() {
         // STEP 5: Import Cash Collections
         if (workbook.SheetNames.includes('Cash_Collection')) {
             const cashSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Cash_Collection'], { header: 1, defval: '' });
-            if (cashSheet.length > 1) {
-                console.log(`  → Cash_Collection: ${cashSheet.length - 1} rows`);
+            if (cashSheet.length > 2) {
+                console.log(`  → Cash_Collection: ${Math.max(0, cashSheet.length - 2)} data rows (${cashSheet.length} total rows)`);
                 importCashCollections(db, cashSheet, partyNameToId);
             }
         }
@@ -801,8 +823,8 @@ function main() {
         // STEP 6: Import Party Ledger
         if (workbook.SheetNames.includes('Party_Ledger')) {
             const ledgerSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Ledger'], { header: 1, defval: '' });
-            if (ledgerSheet.length > 1) {
-                console.log(`  → Party_Ledger: ${ledgerSheet.length - 1} rows`);
+            if (ledgerSheet.length > 2) {
+                console.log(`  → Party_Ledger: ${Math.max(0, ledgerSheet.length - 2)} data rows (${ledgerSheet.length} total rows)`);
                 importPartyLedger(db, ledgerSheet, partyNameToId);
             }
         }
