@@ -376,8 +376,15 @@ function initBSDateInput(input) {
     `;
     input.readOnly = true; // Make read-only since we use the picker
     
-    // Store original value
-    if (!input.value) {
+    // Override Gregorian today() defaults with BS today
+    const yrMatch = (input.value || '').match(/^(\d{4})/);
+    if (yrMatch) {
+        const yr = parseInt(yrMatch[1], 10);
+        // If year < 2050 it's clearly Gregorian (e.g., 2026), use BS today instead
+        if (yr < 2050) {
+            input.value = getTodayBS();
+        }
+    } else if (!input.value) {
         input.value = getTodayBS();
     }
     
@@ -528,3 +535,10 @@ window.formatDateNP = formatDateNP;
 window.formatDateEN = formatDateEN;
 window.todayBS = getTodayBS;
 window.refreshBSDateInputs = refreshBSDateInputs;
+
+// Override the common today() function used throughout the app
+// Many JS files define: const today = () => new Date().toISOString().split('T')[0]
+// which returns Gregorian dates. We want BS dates instead.
+if (typeof window.today === 'undefined') {
+    window.today = window.todayBS || getTodayBS;
+}
