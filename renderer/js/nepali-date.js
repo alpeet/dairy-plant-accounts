@@ -376,15 +376,8 @@ function initBSDateInput(input) {
     `;
     input.readOnly = true; // Make read-only since we use the picker
     
-    // Override Gregorian today() defaults with BS today
-    const yrMatch = (input.value || '').match(/^(\d{4})/);
-    if (yrMatch) {
-        const yr = parseInt(yrMatch[1], 10);
-        // If year < 2050 it's clearly Gregorian (e.g., 2026), use BS today instead
-        if (yr < 2050) {
-            input.value = getTodayBS();
-        }
-    } else if (!input.value) {
+    // Only set default for empty inputs — trust existing values (they're BS dates from DB or user)
+    if (!input.value) {
         input.value = getTodayBS();
     }
     
@@ -486,31 +479,34 @@ function validateDate(dateStr) {
 // Auto-Initialize
 // ═══════════════════════════════════════════════════════════════
 
-// Run on DOM ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initAllBSDateInputs);
-} else {
+// Run on DOM ready and observe for dynamically added content
+function setupBSDateSystem() {
     initAllBSDateInputs();
+    
+    // Observe for dynamically added content (modals, new forms, etc.)
+    if (typeof MutationObserver !== 'undefined') {
+        const observer = new MutationObserver(() => {
+            const uninit = document.querySelectorAll('input[type="date"]:not([data-bs-initialized="true"])');
+            if (uninit.length > 0) {
+                uninit.forEach(input => initBSDateInput(input));
+            }
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: false
+        });
+    }
 }
 
-// Also observe for dynamically added content
-if (typeof MutationObserver !== 'undefined') {
-    const observer = new MutationObserver(() => {
-        // Only check for uninitialized date inputs
-        const uninit = document.querySelectorAll('input[type="date"]:not([data-bs-initialized="true"])');
-        if (uninit.length > 0) {
-            uninit.forEach(input => initBSDateInput(input));
-        }
-    });
-    observer.observe(document.body || document.documentElement, {
-        childList: true,
-        subtree: true,
-        attributes: false
-    });
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupBSDateSystem);
+} else {
+    setupBSDateSystem();
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Globals (exposed for inline script usage)
+// Globals
 // ═══════════════════════════════════════════════════════════════
 
 window.NepaliDate = {
@@ -529,16 +525,9 @@ window.NepaliDate = {
     MAX_YEAR: BS_MAX_YEAR,
 };
 
-// Also expose the standalone helpers for backward compatibility
+// Standalone helpers
 window.validateDate = validateDate;
 window.formatDateNP = formatDateNP;
 window.formatDateEN = formatDateEN;
 window.todayBS = getTodayBS;
 window.refreshBSDateInputs = refreshBSDateInputs;
-
-// Override the common today() function used throughout the app
-// Many JS files define: const today = () => new Date().toISOString().split('T')[0]
-// which returns Gregorian dates. We want BS dates instead.
-if (typeof window.today === 'undefined') {
-    window.today = window.todayBS || getTodayBS;
-}
