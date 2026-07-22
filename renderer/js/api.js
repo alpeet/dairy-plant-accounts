@@ -208,6 +208,8 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
 
         // Backup
         backupDatabase: () => apiPost('/backup'),
+        listBackups: () => apiPost('/backup/list'),
+        deleteBackup: (filename) => apiPost('/backup/delete', { filename }),
         getDatabasePath: () => apiPost('/db-path'),
 
         // Print / PDF (web version: returns HTML, use window.print() instead)

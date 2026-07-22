@@ -20,6 +20,85 @@ document.addEventListener('DOMContentLoaded', () => {
         .catch(() => {});
 
     // ===================================================================
+    // Database Status Check — warn if data appears lost
+    // ===================================================================
+    checkDbStatus();
+
+    async function checkDbStatus() {
+        try {
+            const resp = await fetch(`${API_BASE}/auth/db-status`, { method: 'POST' });
+            const result = await resp.json();
+            if (!result.success || !result.data) return;
+
+            const { state, message, severity, stats, backupsAvailable } = result.data;
+
+            // Only show warning for fresh/empty databases with no business data
+            if (state === 'empty' || state === 'fresh') {
+                let bannerHtml = '';
+
+                if (state === 'fresh') {
+                    bannerHtml = `
+                        <div class="db-warning db-warning-danger">
+                            <div class="db-warning-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="12" y1="8" x2="12" y2="12"/>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                </svg>
+                            </div>
+                            <div class="db-warning-content">
+                                <strong>🔴 Data May Have Been Lost</strong>
+                                <p>Only the default admin account exists with no business data. If you had data before, it was lost during a server restart — the persistent disk may not be configured.</p>
+                                ${backupsAvailable > 0 ? `
+                                    <div class="db-warning-action">
+                                        <a href="/login" class="db-warning-btn">
+                                            💾 ${backupsAvailable} backup(s) available — Login to access them
+                                        </a>
+                                    </div>
+                                ` : `
+                                    <div class="db-warning-action">
+                                        <span class="db-warning-hint">No backups found. Set up a persistent disk in Render Dashboard to prevent future data loss.</span>
+                                    </div>
+                                `}
+                            </div>
+                        </div>
+                    `;
+                } else if (state === 'empty') {
+                    bannerHtml = `
+                        <div class="db-warning db-warning-warning">
+                            <div class="db-warning-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="12" y1="8" x2="12" y2="12"/>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                </svg>
+                            </div>
+                            <div class="db-warning-content">
+                                <strong>⚠️ Fresh Installation</strong>
+                                <p>This is a new database. Create your first account below or login with the default admin credentials.</p>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (bannerHtml) {
+                    // Insert banner at the top of the login card, before the logo
+                    const loginCard = document.querySelector('.login-card');
+                    const logo = document.querySelector('.login-logo');
+                    if (loginCard && logo) {
+                        const bannerDiv = document.createElement('div');
+                        bannerDiv.innerHTML = bannerHtml;
+                        loginCard.insertBefore(bannerDiv.firstElementChild, logo);
+                    }
+                }
+            }
+        } catch (err) {
+            // Silently ignore — non-critical
+            console.warn('Could not check DB status:', err.message);
+        }
+    }
+
+    // ===================================================================
     // View Switching
     // ===================================================================
     function showView(view) {

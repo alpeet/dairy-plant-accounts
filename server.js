@@ -221,6 +221,77 @@ app.post('/api/auth/verify', (req, res) => {
     res.json({ success: valid, data: valid ? { valid: true } : null, error: valid ? undefined : 'Invalid or expired token' });
 });
 
+// POST /api/auth/db-status — Check if database is fresh/empty (data may have been lost)
+app.post('/api/auth/db-status', (req, res) => {
+    try {
+        // Count total users
+        const totalUsers = db.prepare("SELECT COUNT(*) as count FROM users").get();
+        // Count non-admin users (operator, accountant, staff, agent roles)
+        const nonAdminUsers = db.prepare("SELECT COUNT(*) as count FROM users WHERE role != 'admin'").get();
+        // Count admin users
+        const adminUsers = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get();
+        // Count business records (parties, products, sales, purchases, milk_collections)
+        const parties = db.prepare("SELECT COUNT(*) as count FROM parties").get();
+        const products = db.prepare("SELECT COUNT(*) as count FROM products").get();
+        const sales = db.prepare("SELECT COUNT(*) as count FROM sales").get();
+        const purchases = db.prepare("SELECT COUNT(*) as count FROM purchases").get();
+        const milkCollections = db.prepare("SELECT COUNT(*) as count FROM milk_collections").get();
+
+        const totalBusinessRecords = parties.count + products.count + sales.count + purchases.count + milkCollections.count;
+
+        // Determine DB state
+        let state = 'established';
+        let message = '';
+        let severity = 'info';
+
+        if (totalUsers.count === 0) {
+            state = 'empty';
+            message = 'The database appears to be empty. No users or data found. This is a fresh installation.';
+            severity = 'warning';
+        } else if (nonAdminUsers.count === 0 && totalBusinessRecords === 0) {
+            state = 'fresh';
+            message = '⚠️ This appears to be a fresh database. Only the default admin user exists with no business data. If you expected to see your existing data, it may have been lost due to a server restart without persistent storage.';
+            severity = 'danger';
+        } else if (nonAdminUsers.count === 0 && totalBusinessRecords > 0) {
+            state = 'minimal';
+            message = 'This database has business records but only the default admin user. You may want to create additional user accounts.';
+            severity = 'info';
+        } else {
+            message = 'Database is established with ' + totalUsers.count + ' user(s) and ' + totalBusinessRecords + ' business record(s).';
+        }
+
+        // Count available backups
+        let backupCount = 0;
+        try {
+            const backups = ops.listBackups(path.join(dbDir, 'dairy-plant.db'));
+            backupCount = backups.length;
+        } catch (e) { /* ignore */ }
+
+        res.json({
+            success: true,
+            data: {
+                state: state,
+                message: message,
+                severity: severity,
+                stats: {
+                    totalUsers: totalUsers.count,
+                    adminUsers: adminUsers.count,
+                    nonAdminUsers: nonAdminUsers.count,
+                    parties: parties.count,
+                    products: products.count,
+                    sales: sales.count,
+                    purchases: purchases.count,
+                    milkCollections: milkCollections.count,
+                    totalBusinessRecords: totalBusinessRecords
+                },
+                backupsAvailable: backupCount
+            }
+        });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
 // POST /api/auth/me — Get current user info (id, username, role)
 app.post('/api/auth/me', (req, res) => {
     const token = extractToken(req);
@@ -1011,6 +1082,56 @@ app.post('/api/backup', requireRole('admin'), (req, res) => {
     res.json(safeRun(() => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'))));
 });
 
+// POST /api/backup/list — List all available backups (admin only)
+app.post('/api/backup/list', requireRole('admin'), (req, res) => {
+    try {
+        const backups = ops.listBackups(path.join(dbDir, 'dairy-plant.db'));
+        res.json({ success: true, data: backups });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/backup/download — Download a specific backup file (admin only)
+app.post('/api/backup/download', requireRole('admin'), (req, res) => {
+    try {
+        const { filename } = req.body || {};
+        if (!filename) {
+            return res.json({ success: false, error: 'Backup filename is required' });
+        }
+        const backups = ops.listBackups(path.join(dbDir, 'dairy-plant.db'));
+        const target = backups.find(b => b.filename === filename);
+        if (!target) {
+            return res.json({ success: false, error: 'Backup not found' });
+        }
+        // Send the file as a download
+        res.download(target.path, filename, (err) => {
+            if (err) {
+                console.error('Download error:', err.message);
+                if (!res.headersSent) {
+                    res.json({ success: false, error: 'Download failed: ' + err.message });
+                }
+            }
+        });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/backup/delete — Delete a specific backup (admin only)
+app.post('/api/backup/delete', requireRole('admin'), (req, res) => {
+    try {
+        const { filename } = req.body || {};
+        if (!filename) {
+            return res.json({ success: false, error: 'Backup filename is required' });
+        }
+        ops.deleteBackup(path.join(dbDir, 'dairy-plant.db'), filename);
+        res.json({ success: true, data: { message: `Deleted backup: ${filename}` } });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
 app.post('/api/db-path', (req, res) => {
     res.json({ success: true, data: path.join(dbDir, 'dairy-plant.db') });
 });
@@ -1062,9 +1183,107 @@ app.use((req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Auto-Backup Configuration
+// ──────────────────────────────────────────────────────────────
+const AUTO_BACKUP_INTERVAL_MS = parseInt(process.env.AUTO_BACKUP_INTERVAL, 10) || 60 * 60 * 1000; // default: 1 hour
+
+let autoBackupTimer = null;
+
+/**
+ * Start the periodic auto-backup timer.
+ * Creates a timestamped backup of the database at regular intervals.
+ */
+function startAutoBackup() {
+    if (autoBackupTimer) {
+        clearInterval(autoBackupTimer);
+    }
+
+    if (AUTO_BACKUP_INTERVAL_MS <= 0) {
+        console.log('  ⏰ Auto-backup is disabled (AUTO_BACKUP_INTERVAL=0)');
+        return;
+    }
+
+    const intervalMinutes = Math.round(AUTO_BACKUP_INTERVAL_MS / 60000);
+    console.log(`  ⏰ Auto-backup every ${intervalMinutes} minute${intervalMinutes > 1 ? 's' : ''}`);
+
+    autoBackupTimer = setInterval(() => {
+        try {
+            const result = ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'));
+            console.log(`  💾 Auto-backup created: ${result.filename} (${ops.formatFileSize(result.size)})`);
+        } catch (err) {
+            console.error('  ❌ Auto-backup failed:', err.message);
+        }
+    }, AUTO_BACKUP_INTERVAL_MS);
+
+    // Allow the timer to not block process exit
+    if (autoBackupTimer && autoBackupTimer.unref) {
+        autoBackupTimer.unref();
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Graceful Shutdown Handler
+// ──────────────────────────────────────────────────────────────
+let isShuttingDown = false;
+
+/**
+ * Perform a graceful shutdown:
+ *   1. Create a final backup of the database
+ *   2. Close the database connection
+ *   3. Exit the process
+ */
+function gracefulShutdown(signal, exitCode = 0) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log(`\n  🛑 Received ${signal}. Shutting down gracefully...`);
+
+    // Step 1: Stop accepting new requests
+    // (The server will stop listening, but existing requests finish)
+
+    // Step 2: Create a final backup before exiting
+    try {
+        const result = ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'));
+        console.log(`  💾 Shutdown backup saved: ${result.filename} (${ops.formatFileSize(result.size)})`);
+    } catch (err) {
+        console.error('  ❌ Shutdown backup failed:', err.message);
+    }
+
+    // Step 3: Close the database
+    try {
+        if (db && typeof db.close === 'function') {
+            db.close();
+            console.log('  ✅ Database connection closed');
+        }
+    } catch (err) {
+        console.error('  ❌ Error closing database:', err.message);
+    }
+
+    // Step 4: Exit
+    console.log('  👋 Goodbye!\n');
+    process.exit(exitCode);
+}
+
+// Listen for termination signals
+// Render sends SIGTERM when stopping/restarting the service
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Prevent uncaught exceptions from silently exiting
+process.on('uncaughtException', (err) => {
+    console.error('  ❌ Uncaught exception:', err.message);
+    console.error(err.stack);
+    gracefulShutdown('uncaughtException', 1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('  ❌ Unhandled rejection:', reason);
+});
+
+// ──────────────────────────────────────────────────────────────
 // Start Server
 // ──────────────────────────────────────────────────────────────
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
     const url = `http://localhost:${PORT}`;
     console.log('');
     console.log('  🐄  Godhuli Dairy Plant — Web Server');
@@ -1075,4 +1294,19 @@ app.listen(PORT, HOST, () => {
     console.log(`  Auth:      ${AUTH_USERNAME} / ${AUTH_PASSWORD === 'admin123' ? 'admin123 (DEFAULT — CHANGE IN .env)' : 'configured'}`);
     console.log('  ───────────────────────────────────────');
     console.log('');
+
+    // Start the auto-backup timer
+    startAutoBackup();
+
+    // List existing backups on startup
+    try {
+        const existingBackups = ops.listBackups(path.join(dbDir, 'dairy-plant.db'));
+        if (existingBackups.length > 0) {
+            console.log(`  💾 ${existingBackups.length} backup(s) available in: ${ops.getBackupDir(path.join(dbDir, 'dairy-plant.db'))}`);
+            console.log(`     Latest: ${existingBackups[0].filename} (${ops.formatFileSize(existingBackups[0].size)})`);
+        }
+    } catch (e) { /* ignore */ }
 });
+
+// Set a shorter server timeout for Render's health checks
+server.timeout = 120000; // 2 minutes

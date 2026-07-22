@@ -99,15 +99,37 @@ async function renderSettings() {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
                 <div style="padding:16px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
                     <div style="font-size:32px;margin-bottom:8px">💾</div>
-                    <h3 style="font-size:14px;margin-bottom:8px">Backup Database</h3>
-                    <p style="font-size:12px;color:var(--text-light);margin-bottom:12px">Create a backup of your database</p>
-                    <button class="btn btn-primary btn-sm" onclick="backupDatabase()">Create Backup</button>
+                    <h3 style="font-size:14px;margin-bottom:8px">Manual Backup</h3>
+                    <p style="font-size:12px;color:var(--text-light);margin-bottom:12px">Create a backup right now</p>
+                    <button class="btn btn-primary btn-sm" onclick="backupDatabase()">Create Backup Now</button>
                 </div>
                 <div style="padding:16px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
                     <div style="font-size:32px;margin-bottom:8px">📁</div>
                     <h3 style="font-size:14px;margin-bottom:8px">Database Location</h3>
                     <p style="font-size:12px;color:var(--text-light);margin-bottom:12px" id="dbPath">Loading...</p>
                     <button class="btn btn-secondary btn-sm" onclick="showDbPath()">Show Path</button>
+                </div>
+            </div>
+
+            <!-- Auto-backup status -->
+            <div id="autoBackupStatus" style="margin-top:16px;padding:12px 16px;background:var(--bg);border-radius:var(--radius-sm);font-size:13px">
+                <div style="display:flex;align-items:center;gap:8px">
+                    <span id="autoBackupIcon" style="font-size:18px">⏰</span>
+                    <span>Auto-backup is active (every 60 minutes)</span>
+                </div>
+                <p style="color:var(--text-light);font-size:12px;margin-top:4px" id="autoBackupHint">
+                    A backup is created automatically every hour. Backups are kept on the persistent disk and survive restarts.
+                </p>
+            </div>
+
+            <!-- Backup history -->
+            <div id="backupHistory" style="margin-top:16px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                    <h3 style="font-size:14px;margin:0">Backup History</h3>
+                    <button class="btn btn-secondary btn-sm" onclick="loadBackupHistory()" style="font-size:11px">🔄 Refresh</button>
+                </div>
+                <div id="backupList" style="min-height:60px">
+                    <p style="color:var(--text-light);font-size:13px">Loading backups...</p>
                 </div>
             </div>
         </div>
@@ -404,6 +426,171 @@ async function showDbPath() {
     }
 }
 
+// ============================================================
+// Backup History Functions
+// ============================================================
+
+function formatFileSize(bytes) {
+    if (!bytes) return 'Unknown';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function formatBackupDate(isoStr) {
+    if (!isoStr) return 'Unknown';
+    try {
+        const d = new Date(isoStr);
+        return d.toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+    } catch (e) {
+        return isoStr;
+    }
+}
+
+async function loadBackupHistory() {
+    const container = document.getElementById('backupList');
+    if (!container) return;
+
+    container.innerHTML = '<p style="color:var(--text-light);font-size:13px">Loading backups...</p>';
+
+    const result = await window.api.listBackups();
+    if (!result.success) {
+        container.innerHTML = `<p style="color:var(--danger);font-size:13px">Error: ${escapeHtml(result.error)}</p>`;
+        return;
+    }
+
+    const backups = result.data || [];
+
+    if (backups.length === 0) {
+        container.innerHTML = `
+            <div style="padding:24px;text-align:center;background:var(--bg);border-radius:var(--radius-sm)">
+                <div style="font-size:36px;margin-bottom:8px">📂</div>
+                <p style="color:var(--text-light);font-size:13px">No backups yet.</p>
+                <p style="color:var(--text-light);font-size:12px">Click "Create Backup Now" above to create your first backup.</p>
+            </div>
+        `;
+        return;
+    }
+
+    // Determine the latest backup date for display
+    const latestBackup = backups[0];
+    const autoBackupHint = document.getElementById('autoBackupHint');
+    if (autoBackupHint) {
+        autoBackupHint.textContent = `Latest backup: ${formatBackupDate(latestBackup.createdAt)} (${formatFileSize(latestBackup.size)}). Backups are stored on the persistent disk.`;
+    }
+
+    container.innerHTML = `
+        <div style="background:var(--bg);border-radius:var(--radius-sm);overflow:hidden">
+            <table class="data-table" style="width:100%;font-size:12px">
+                <thead>
+                    <tr>
+                        <th style="padding:8px 10px">#</th>
+                        <th style="padding:8px 10px">Date & Time</th>
+                        <th style="padding:8px 10px">Size</th>
+                        <th style="padding:8px 10px;text-align:right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${backups.map((b, i) => `
+                        <tr>
+                            <td style="padding:8px 10px;color:var(--text-light)">${i + 1}</td>
+                            <td style="padding:8px 10px">
+                                <strong>${formatBackupDate(b.createdAt)}</strong>
+                            </td>
+                            <td style="padding:8px 10px;color:var(--text-light)">${formatFileSize(b.size)}</td>
+                            <td style="padding:8px 10px;text-align:right">
+                                <button class="btn btn-primary btn-sm" onclick="downloadBackup('${escapeHtml(b.filename)}')" style="font-size:11px;padding:3px 10px">⬇ Download</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteBackupFile('${escapeHtml(b.filename)}')" style="font-size:11px;padding:3px 10px">🗑 Delete</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+            <div style="padding:8px 10px;font-size:11px;color:var(--text-light);border-top:1px solid var(--border)">
+                Showing ${backups.length} backup${backups.length > 1 ? 's' : ''} — oldest backups are automatically cleaned up
+            </div>
+        </div>
+    `;
+}
+
+async function downloadBackup(filename) {
+    try {
+        const resp = await fetch('/api/backup/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: resp.statusText }));
+            showToast(`Download failed: ${err.error || resp.statusText}`, 'error');
+            return;
+        }
+        // Check if the response is JSON (error) or a file blob
+        const contentType = resp.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            const err = await resp.json();
+            if (!err.success) {
+                showToast(`Download failed: ${err.error}`, 'error');
+                return;
+            }
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast(`⬇ Downloading: ${filename}`, 'info');
+    } catch (err) {
+        showToast(`Download failed: ${err.message}`, 'error');
+    }
+}
+
+async function deleteBackupFile(filename) {
+    const confirmed = await confirmAction(
+        `Delete backup "${filename}"?`,
+        'This will permanently delete this backup file.',
+        'Yes, Delete',
+        'Cancel'
+    );
+    if (!confirmed) return;
+
+    const result = await window.api.deleteBackup(filename);
+    if (result.success) {
+        showToast(`Backup deleted: ${filename}`);
+        loadBackupHistory();
+    } else {
+        showToast(`Error: ${result.error}`, 'error');
+    }
+}
+
+async function backupDatabase() {
+    const confirmed = await confirmAction(
+        'Create a database backup?',
+        'A copy of your entire database will be saved to the backup folder.',
+        'Yes, Backup',
+        'Cancel'
+    );
+
+    if (!confirmed) return;
+
+    const result = await window.api.backupDatabase();
+    if (result.success) {
+        const data = result.data || {};
+        showToast(`✅ Backup created: ${data.filename || 'success'}`);
+        // Refresh the backup history list
+        loadBackupHistory();
+    } else {
+        showToast(`Backup failed: ${result.error}`, 'error');
+    }
+}
+
 // Globals
 window.saveSettings = saveSettings;
 window.backupDatabase = backupDatabase;
@@ -414,3 +601,6 @@ window.createUser = createUser;
 window.deleteUser = deleteUser;
 window.showChangePasswordModal = showChangePasswordModal;
 window.changePassword = changePassword;
+window.loadBackupHistory = loadBackupHistory;
+window.downloadBackup = downloadBackup;
+window.deleteBackupFile = deleteBackupFile;

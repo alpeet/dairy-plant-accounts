@@ -55,7 +55,7 @@ const {
     getSettings, saveSettings
 } = require('./settings');
 
-const { backupDatabase } = require('./backup');
+const { backupDatabase, listBackups, deleteBackup, formatFileSize, getBackupDir } = require('./backup');
 
 // ── New modules ──
 const { getPartyStatement, listPartiesWithBalance } = require('./statements');
@@ -125,6 +125,10 @@ module.exports = {
 
     // Backup
     backupDatabase,
+    listBackups,
+    deleteBackup,
+    formatFileSize,
+    getBackupDir,
 
     // ── New modules ──
     // Statements
