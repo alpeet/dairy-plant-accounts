@@ -758,13 +758,14 @@ function main() {
     console.log('\n  🗄️  Initializing database...');
     const db = initDb();
 
-    // Clear existing business data (preserve users)
-    clearBusinessData(db);
-
     // ═══════════════════════════════════════════════════════════
     // ALL STEPS wrapped in a single outer transaction for atomicity
+    // INCLUDING clearBusinessData - so if import fails, old data is preserved
     // ═══════════════════════════════════════════════════════════
     const masterTrx = db.transaction(() => {
+
+        // Clear existing business data (inside transaction = rollback on failure)
+        clearBusinessData(db);
 
         // STEP 1: Import Parties
         const partySheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Master'], { header: 1, defval: '' });
