@@ -757,62 +757,59 @@ function main() {
     clearBusinessData(db);
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 1: Import Parties
+    // ALL STEPS wrapped in a single outer transaction for atomicity
     // ═══════════════════════════════════════════════════════════
-    const partySheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Master'], { header: 1, defval: '' });
-    console.log(`  → Party_Master: ${partySheet.length - 1} rows`);
-    const partyNameToId = importParties(db, partySheet);
+    const masterTrx = db.transaction(() => {
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 2: Import Products
-    // ═══════════════════════════════════════════════════════════
-    const stockSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Stock_Master'], { header: 1, defval: '' });
-    console.log(`  → Stock_Master: ${stockSheet.length - 1} rows`);
-    const productNameToId = importProducts(db, stockSheet);
+        // STEP 1: Import Parties
+        const partySheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Master'], { header: 1, defval: '' });
+        console.log(`  → Party_Master: ${partySheet.length - 1} rows`);
+        const partyNameToId = importParties(db, partySheet);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 3: Import Sales (if sheet exists and has data)
-    // ═══════════════════════════════════════════════════════════
-    if (workbook.SheetNames.includes('Sales_Entry')) {
-        const saleSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Sales_Entry'], { header: 1, defval: '' });
-        if (saleSheet.length > 1) {
-            console.log(`  → Sales_Entry: ${saleSheet.length - 1} rows`);
-            importSales(db, saleSheet, partyNameToId, productNameToId);
+        // STEP 2: Import Products
+        const stockSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Stock_Master'], { header: 1, defval: '' });
+        console.log(`  → Stock_Master: ${stockSheet.length - 1} rows`);
+        const productNameToId = importProducts(db, stockSheet);
+
+        // STEP 3: Import Sales
+        if (workbook.SheetNames.includes('Sales_Entry')) {
+            const saleSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Sales_Entry'], { header: 1, defval: '' });
+            if (saleSheet.length > 1) {
+                console.log(`  → Sales_Entry: ${saleSheet.length - 1} rows`);
+                importSales(db, saleSheet, partyNameToId, productNameToId);
+            }
         }
-    }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 4: Import Purchases
-    // ═══════════════════════════════════════════════════════════
-    if (workbook.SheetNames.includes('Purchase_Entry')) {
-        const purchSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Purchase_Entry'], { header: 1, defval: '' });
-        if (purchSheet.length > 1) {
-            console.log(`  → Purchase_Entry: ${purchSheet.length - 1} rows`);
-            importPurchases(db, purchSheet, partyNameToId, productNameToId);
+        // STEP 4: Import Purchases
+        if (workbook.SheetNames.includes('Purchase_Entry')) {
+            const purchSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Purchase_Entry'], { header: 1, defval: '' });
+            if (purchSheet.length > 1) {
+                console.log(`  → Purchase_Entry: ${purchSheet.length - 1} rows`);
+                importPurchases(db, purchSheet, partyNameToId, productNameToId);
+            }
         }
-    }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 5: Import Cash Collections (as payments)
-    // ═══════════════════════════════════════════════════════════
-    if (workbook.SheetNames.includes('Cash_Collection')) {
-        const cashSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Cash_Collection'], { header: 1, defval: '' });
-        if (cashSheet.length > 1) {
-            console.log(`  → Cash_Collection: ${cashSheet.length - 1} rows`);
-            importCashCollections(db, cashSheet, partyNameToId);
+        // STEP 5: Import Cash Collections
+        if (workbook.SheetNames.includes('Cash_Collection')) {
+            const cashSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Cash_Collection'], { header: 1, defval: '' });
+            if (cashSheet.length > 1) {
+                console.log(`  → Cash_Collection: ${cashSheet.length - 1} rows`);
+                importCashCollections(db, cashSheet, partyNameToId);
+            }
         }
-    }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 6: Import Party Ledger
-    // ═══════════════════════════════════════════════════════════
-    if (workbook.SheetNames.includes('Party_Ledger')) {
-        const ledgerSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Ledger'], { header: 1, defval: '' });
-        if (ledgerSheet.length > 1) {
-            console.log(`  → Party_Ledger: ${ledgerSheet.length - 1} rows`);
-            importPartyLedger(db, ledgerSheet, partyNameToId);
+        // STEP 6: Import Party Ledger
+        if (workbook.SheetNames.includes('Party_Ledger')) {
+            const ledgerSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Ledger'], { header: 1, defval: '' });
+            if (ledgerSheet.length > 1) {
+                console.log(`  → Party_Ledger: ${ledgerSheet.length - 1} rows`);
+                importPartyLedger(db, ledgerSheet, partyNameToId);
+            }
         }
-    }
+
+    });
+
+    masterTrx();
 
     // ═══════════════════════════════════════════════════════════
     // SUMMARY
