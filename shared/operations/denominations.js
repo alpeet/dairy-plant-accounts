@@ -41,6 +41,7 @@ function getDenominationByDate(db, date) {
 function saveDenomination(db, data) {
     const trx = db.transaction(() => {
         // Calculate total from denominations
+        // Calculate total cash value from all denominations
         const totalCash = 
             (parseInt(data.note_1000 || 0) * 1000) +
             (parseInt(data.note_500 || 0) * 500) +
@@ -48,6 +49,8 @@ function saveDenomination(db, data) {
             (parseInt(data.note_50 || 0) * 50) +
             (parseInt(data.note_20 || 0) * 20) +
             (parseInt(data.note_10 || 0) * 10) +
+            (parseInt(data.note_5 || 0) * 5) +
+            (parseInt(data.note_other || 0) * parseFloat(data.note_other_value || 0)) +
             (parseInt(data.coin_5 || 0) * 5) +
             (parseInt(data.coin_2 || 0) * 2) +
             (parseInt(data.coin_1 || 0) * 1);
@@ -60,12 +63,14 @@ function saveDenomination(db, data) {
             db.prepare(`
                 UPDATE denomination_counts 
                 SET date=?, note_1000=?, note_500=?, note_100=?, note_50=?, note_20=?, note_10=?,
-                    coin_5=?, coin_2=?, coin_1=?, total_cash=?, expected_cash=?, difference=?,
+                    note_5=?, note_other=?, note_other_value=?, coin_5=?, coin_2=?, coin_1=?, 
+                    total_cash=?, expected_cash=?, difference=?,
                     remarks=?, counted_by=?, updated_at=datetime('now','localtime')
                 WHERE id=?
             `).run(
                 data.date, data.note_1000 || 0, data.note_500 || 0, data.note_100 || 0,
                 data.note_50 || 0, data.note_20 || 0, data.note_10 || 0,
+                data.note_5 || 0, data.note_other || 0, parseFloat(data.note_other_value || 0),
                 data.coin_5 || 0, data.coin_2 || 0, data.coin_1 || 0,
                 totalCash, expected, difference,
                 data.remarks || '', data.counted_by || '', data.id
@@ -76,12 +81,14 @@ function saveDenomination(db, data) {
             const result = db.prepare(`
                 INSERT INTO denomination_counts 
                 (date, note_1000, note_500, note_100, note_50, note_20, note_10,
-                 coin_5, coin_2, coin_1, total_cash, expected_cash, difference,
+                 note_5, note_other, note_other_value, coin_5, coin_2, coin_1, 
+                 total_cash, expected_cash, difference,
                  remarks, counted_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 data.date, data.note_1000 || 0, data.note_500 || 0, data.note_100 || 0,
                 data.note_50 || 0, data.note_20 || 0, data.note_10 || 0,
+                data.note_5 || 0, data.note_other || 0, parseFloat(data.note_other_value || 0),
                 data.coin_5 || 0, data.coin_2 || 0, data.coin_1 || 0,
                 totalCash, expected, difference,
                 data.remarks || '', data.counted_by || ''

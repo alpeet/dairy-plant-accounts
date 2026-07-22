@@ -55,6 +55,36 @@ const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'admin123';
 const tokenStore = new Map();
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// ── #4 Login brute-force throttle (in-memory, per username) ──
+const loginThrottle = new Map();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_THROTTLE_MS = 15 * 60 * 1000; // 15 minutes
+function recordLoginAttempt(username, success) {
+    const key = (username || '').toLowerCase();
+    if (!key) return;
+    if (success) { loginThrottle.delete(key); return; }
+    const now = Date.now();
+    const rec = loginThrottle.get(key) || { count: 0, first: now };
+    rec.count += 1;
+    loginThrottle.set(key, rec);
+}
+function isLoginThrottled(username) {
+    const key = (username || '').toLowerCase();
+    const rec = loginThrottle.get(key);
+    if (!rec) return false;
+    if (Date.now() - rec.first > LOGIN_THROTTLE_MS) { loginThrottle.delete(key); return false; }
+    return rec.count >= MAX_LOGIN_ATTEMPTS;
+}
+
+// ── Admin token helper (works for both env-default and DB users) ──
+function isAdminToken(token) {
+    const td = tokenStore.get(token);
+    if (!td) return false;
+    if (td.role === 'admin') return true;
+    if (td.username === AUTH_USERNAME) return true; // env-default admin
+    return false;
+}
+
 // ── Cookie parsing middleware ──
 // Parse cookies manually (no external dependency needed)
 app.use((req, res, next) => {
@@ -74,6 +104,19 @@ app.use((req, res, next) => {
 // ── Middleware ──
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ── Date normalization: normalize / to - in all date fields ──
+const DATE_FIELDS = ['date', 'from_date', 'to_date', 'payment_date', 'effective_from'];
+app.use((req, res, next) => {
+    if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+        for (const field of DATE_FIELDS) {
+            if (typeof req.body[field] === 'string') {
+                req.body[field] = req.body[field].replace(/\//g, '-');
+            }
+        }
+    }
+    next();
+});
 
 // ── Disable caching ──
 app.use((req, res, next) => {
@@ -195,10 +238,15 @@ try {
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body || {};
 
+    // #4 Brute-force protection: block the username after repeated failures
+    if (isLoginThrottled(username)) {
+        return res.status(429).json({ success: false, error: 'Too many failed login attempts. Please try again later.' });
+    }
+
     // 1. Check env var fallback (backward compatibility)
     if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
         const token = crypto.randomBytes(32).toString('hex');
-        tokenStore.set(token, { createdAt: Date.now() });
+        tokenStore.set(token, { createdAt: Date.now(), role: 'admin', username: AUTH_USERNAME });
         res.cookie('auth_token', token, {
             httpOnly: true,
             sameSite: 'lax',
@@ -215,7 +263,9 @@ app.post('/api/auth/login', (req, res) => {
                 db.prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'admin')").run(username, hashed);
             }
         }
-        return res.json({ success: true, data: { message: 'Login successful' } });
+        const mustChangePassword = AUTH_PASSWORD === 'admin123';
+        recordLoginAttempt(username, true);
+        return res.json({ success: true, data: { message: 'Login successful', mustChangePassword } });
     }
 
     // 2. Check database users
@@ -229,9 +279,12 @@ app.post('/api/auth/login', (req, res) => {
             maxAge: TOKEN_TTL_MS,
             path: '/',
         });
-        return res.json({ success: true, data: { message: 'Login successful' } });
+        const mustChangePassword = verifyPassword('admin123', user.password_hash);
+        recordLoginAttempt(username, true);
+        return res.json({ success: true, data: { message: 'Login successful', mustChangePassword } });
     }
 
+    recordLoginAttempt(username, false);
     return res.json({ success: false, error: 'Invalid username or password' });
 });
 
@@ -460,6 +513,10 @@ app.post('/api/auth/users/change-password', requireRole('operator'), (req, res) 
 
 // POST /api/auth/register — Create a new user account (open registration)
 app.post('/api/auth/register', (req, res) => {
+    // #2 Only an authenticated admin may create accounts
+    if (!isAdminToken(extractToken(req))) {
+        return res.status(403).json({ success: false, error: 'Admin login required to create accounts' });
+    }
     const { username, password } = req.body || {};
 
     if (!username || !password) {
@@ -499,6 +556,10 @@ app.post('/api/auth/register', (req, res) => {
 
 // POST /api/auth/reset-password — Forgot password: reset any user's password
 app.post('/api/auth/reset-password', (req, res) => {
+    // #1 Only an authenticated admin may reset a password
+    if (!isAdminToken(extractToken(req))) {
+        return res.status(403).json({ success: false, error: 'Admin login required to reset passwords' });
+    }
     const { username, newPassword } = req.body || {};
 
     if (!username || !newPassword) {

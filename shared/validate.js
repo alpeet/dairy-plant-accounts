@@ -52,7 +52,9 @@ function isValidId(val) {
 /** Check if a value is a valid YYYY-MM-DD date string */
 function isValidDate(val) {
     if (typeof val !== 'string') return false;
-    const match = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    // Accept both - and / as date delimiters (normalize / to -)
+    const normalized = val.replace(/\//g, '-');
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) return false;
     const [, y, m, d] = match;
     const year = parseInt(y, 10);
@@ -63,7 +65,7 @@ function isValidDate(val) {
     // BS calendar allows up to 32 days in some months (e.g., Ashadh 32)
     if (year < 1900 || year > 2100) return false;
     if (month < 1 || month > 12) return false;
-    if (day < 1 || day > 31) return false;
+    if (day < 1 || day > 32) return false;
     
     // For Gregorian years (1900-1999, 2001-2100), validate strictly
     // For BS years (2000-2100), be more permissive (BS has 29-32 day months)

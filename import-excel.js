@@ -65,9 +65,9 @@ function toDateStr(val) {
         }
     }
     const s = String(val).trim();
-    // Try parsing ISO date
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    // Try parsing ISO date (with - or / as delimiter)
+    const m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+    if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
     return s;
 }
 

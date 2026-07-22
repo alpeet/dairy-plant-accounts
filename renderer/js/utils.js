@@ -73,6 +73,11 @@ function parseDateSafe(dateStr) {
 // Date Helpers
 // ============================================================
 function today() {
+    // Use BS (Bikram Sambat) date — the app works in Nepali calendar
+    if (typeof getTodayBS === 'function') {
+        return getTodayBS();
+    }
+    // Fallback to AD if BS date system not loaded
     const d = new Date();
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -82,26 +87,39 @@ function today() {
 
 function formatDate(dateStr) {
     if (!dateStr) return '';
-    const d = parseDateSafe(dateStr);
-    if (!d) return dateStr;
-    try {
-        return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-    } catch (e) {
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
+    // Format as BS date using Nepali calendar (e.g., "2083 असार 16")
+    if (typeof formatDateNP === 'function') {
+        const np = formatDateNP(dateStr);
+        if (np) return np;
     }
+    // Fallback: normalize delimiter and interpret as BS date
+    const normalized = String(dateStr).replace(/\//g, '-');
+    const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (match) {
+        const year = match[1];
+        const month = parseInt(match[2], 10);
+        const day = parseInt(match[3], 10);
+        const bsMonths = ['Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin', 'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'];
+        const monthName = bsMonths[month - 1] || '';
+        return `${year} ${monthName} ${day}`;
+    }
+    // Last resort: return as-is
+    return dateStr;
 }
 
 function getMonthName(dateStr) {
-    // dateStr is YYYY-MM from DB, append '-01' then parse safely
-    const d = parseDateSafe(dateStr + '-01');
-    if (!d) return dateStr;
-    try {
-        return d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
-    } catch (e) {
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        return `${months[d.getMonth()]} '${String(d.getFullYear()).slice(-2)}`;
+    // dateStr is YYYY-MM from DB, append '-01' then parse
+    const normalized = String(dateStr).replace(/\//g, '-');
+    const fullDate = normalized + '-01';
+    const match = fullDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (match) {
+        const month = parseInt(match[2], 10);
+        const bsMonths = ['Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin', 'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'];
+        const monthName = bsMonths[month - 1] || '';
+        const year = match[1].slice(-2);
+        return `${monthName} '${year}`;
     }
+    return dateStr;
 }
 
 // ============================================================
@@ -340,35 +358,83 @@ function toLocalDateString(date) {
 }
 
 // ============================================================
-// Date presets for reports
+// BS Date helper: subtract N days from a BS date string
+// ============================================================
+function bsSubtractDays(dateStr, days) {
+    if (!dateStr) return '';
+    let match = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!match) {
+        // Try with the normalized date string
+        const norm = String(dateStr).replace(/\//g, '-');
+        match = norm.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        if (!match) return dateStr;
+    }
+    
+    let y = parseInt(match[1], 10);
+    let m = parseInt(match[2], 10);
+    let d = parseInt(match[3], 10);
+    
+    for (let i = 0; i < days; i++) {
+        d--;
+        if (d < 1) {
+            m--;
+            if (m < 1) {
+                m = 12;
+                y--;
+            }
+            const maxDays = (typeof getBSDaysInMonth === 'function') ? getBSDaysInMonth(y, m) : 30;
+            d = maxDays;
+        }
+    }
+    
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// ============================================================
+// Date presets for reports (BS-aware)
 // ============================================================
 function getDatePreset(preset) {
-    const today = new Date();
-    const y = today.getFullYear();
-    const m = today.getMonth();
+    // Get today's BS date
+    const todayStr = (typeof getTodayBS === 'function')
+        ? getTodayBS()
+        : toLocalDateString(new Date());
+    
+    const match = todayStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    const y = match ? parseInt(match[1], 10) : new Date().getFullYear();
+    const m = match ? parseInt(match[2], 10) : (new Date().getMonth() + 1);
+    const d = match ? parseInt(match[3], 10) : new Date().getDate();
 
     switch (preset) {
         case 'today':
-            return { from: toLocalDateString(today), to: toLocalDateString(today) };
+            return { from: todayStr, to: todayStr };
         case 'this_week': {
-            const start = new Date(today);
-            start.setDate(today.getDate() - today.getDay());
-            return { from: toLocalDateString(start), to: toLocalDateString(today) };
+            // Go back up to 6 days to find start of BS week (approximate)
+            const from = bsSubtractDays(todayStr, 6);
+            return { from, to: todayStr };
         }
-        case 'this_month':
-            return { from: `${y}-${String(m + 1).padStart(2, '0')}-01`, to: toLocalDateString(today) };
+        case 'this_month': {
+            const from = `${y}-${String(m).padStart(2, '0')}-01`;
+            return { from, to: todayStr };
+        }
         case 'last_month': {
-            const firstDay = new Date(y, m - 1, 1);
-            const lastDay = new Date(y, m, 0);
-            return { from: toLocalDateString(firstDay), to: toLocalDateString(lastDay) };
+            let prevM = m - 1;
+            let prevY = y;
+            if (prevM < 1) { prevM = 12; prevY = y - 1; }
+            const maxDays = (typeof getBSDaysInMonth === 'function') ? getBSDaysInMonth(prevY, prevM) : 30;
+            const from = `${prevY}-${String(prevM).padStart(2, '0')}-01`;
+            const to = `${prevY}-${String(prevM).padStart(2, '0')}-${String(maxDays).padStart(2, '0')}`;
+            return { from, to };
         }
-        case 'this_year':
-            return { from: `${y}-01-01`, to: toLocalDateString(today) };
-        case 'last_30':
-            const s = new Date(today);
-            s.setDate(s.getDate() - 30);
-            return { from: toLocalDateString(s), to: toLocalDateString(today) };
+        case 'this_year': {
+            // BS year starts from Baisakh (month 1)
+            const from = `${y}-01-01`;
+            return { from, to: todayStr };
+        }
+        case 'last_30': {
+            const from = bsSubtractDays(todayStr, 30);
+            return { from, to: todayStr };
+        }
         default:
-            return { from: '', to: toLocalDateString(today) };
+            return { from: '', to: todayStr };
     }
 }

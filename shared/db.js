@@ -267,6 +267,59 @@ function runMigrations(db) {
     }
     db.pragma('foreign_keys = ON');
 
+    // Migration 9: Normalize date delimiters — replace / with - in all date columns
+    const dateTables = [
+        { table: 'sales', col: 'date' },
+        { table: 'purchases', col: 'date' },
+        { table: 'milk_collections', col: 'date' },
+        { table: 'payments', col: 'date' },
+        { table: 'ledger_entries', col: 'date' },
+        { table: 'stock_movements', col: 'date' },
+        { table: 'production_batches', col: 'date' },
+        { table: 'partner_capital', col: 'date' },
+        { table: 'petty_cash', col: 'date' },
+        { table: 'salary_records', col: 'payment_date' },
+        { table: 'other_expenses', col: 'date' },
+        { table: 'vehicle_expenses', col: 'date' },
+        { table: 'denomination_counts', col: 'date' },
+        { table: 'milk_rate_chart', col: 'effective_from' },
+    ];
+    let totalFixed = 0;
+    db.pragma('foreign_keys = OFF');
+    for (const { table, col } of dateTables) {
+        try {
+            // Check if column exists by trying to query it
+            db.prepare(`SELECT "${col}" FROM "${table}" LIMIT 1`).get();
+            // Use REPLACE() to normalize all / to - in one SQL statement
+            const stmt = db.prepare(`UPDATE "${table}" SET "${col}" = REPLACE("${col}", '/', '-') WHERE "${col}" LIKE '%/%'`);
+            const info = stmt.run();
+            if (info.changes > 0) {
+                totalFixed += info.changes;
+                console.log(`  → ${table}.${col}: ${info.changes} dates normalized (/ → -)`);
+            }
+        } catch (e) {
+            // Table or column doesn't exist — skip
+        }
+    }
+    db.pragma('foreign_keys = ON');
+    if (totalFixed > 0) {
+        console.log(`  ✅ Date normalization complete: ${totalFixed} dates fixed (replaced / with -)`);
+    }
+
+    // Migration 10: Add note_5, note_other columns to denomination_counts
+    try {
+        db.prepare("SELECT note_5 FROM denomination_counts LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE denomination_counts ADD COLUMN note_5 INTEGER DEFAULT 0;`);
+            db.exec(`ALTER TABLE denomination_counts ADD COLUMN note_other INTEGER DEFAULT 0;`);
+            db.exec(`ALTER TABLE denomination_counts ADD COLUMN note_other_value REAL DEFAULT 0.0;`);
+            console.log('Added note_5, note_other columns to denomination_counts');
+        } catch (e2) {
+            console.log('Migration 10 (denomination columns) skipped:', e2.message);
+        }
+    }
+
     console.log('Migrations complete');
 }
 

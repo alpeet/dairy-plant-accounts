@@ -124,25 +124,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    document.getElementById('registerLink').addEventListener('click', (e) => {
-        e.preventDefault();
-        showView('register');
-    });
+    // Register/forgot-password links (may be disabled/modified in UI)
+    const registerLink = document.getElementById('registerLink');
+    if (registerLink) {
+        registerLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            showView('register');
+        });
+    }
 
-    document.getElementById('forgotPasswordLink').addEventListener('click', (e) => {
-        e.preventDefault();
-        showView('forgot');
-    });
+    const forgotPasswordLink = document.getElementById('forgotPasswordLink');
+    if (forgotPasswordLink) {
+        forgotPasswordLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            showView('forgot');
+        });
+    }
 
-    document.getElementById('backToLoginFromRegister').addEventListener('click', (e) => {
-        e.preventDefault();
-        showView('login');
-    });
+    const backFromRegister = document.getElementById('backToLoginFromRegister');
+    if (backFromRegister) {
+        backFromRegister.addEventListener('click', (e) => {
+            e.preventDefault();
+            showView('login');
+        });
+    }
 
-    document.getElementById('backToLoginFromReset').addEventListener('click', (e) => {
-        e.preventDefault();
-        showView('login');
-    });
+    const backFromReset = document.getElementById('backToLoginFromReset');
+    if (backFromReset) {
+        backFromReset.addEventListener('click', (e) => {
+            e.preventDefault();
+            showView('login');
+        });
+    }
 
     // ===================================================================
     // LOGIN FORM
@@ -179,6 +192,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (result.success) {
                 // Server set the HttpOnly cookie. Just redirect.
+                if (result.data && result.data.mustChangePassword) {
+                    showError(errorEl, '⚠ Default password in use. Please change it in Settings → Users after login.');
+                    errorEl.className = 'login-success';
+                }
                 window.location.href = '/';
             } else {
                 showError(errorEl, result.error || 'Invalid username or password');

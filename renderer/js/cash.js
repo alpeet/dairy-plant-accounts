@@ -182,6 +182,8 @@ async function showDenominationCount() {
                         <th class="text-right">₹50</th>
                         <th class="text-right">₹20</th>
                         <th class="text-right">₹10</th>
+                        <th class="text-right">₹5</th>
+                        <th class="text-right">Other</th>
                         <th class="text-right">Coins</th>
                         <th class="text-right">Total Counted</th>
                         <th class="text-right">Expected</th>
@@ -201,6 +203,8 @@ async function showDenominationCount() {
                             <td class="text-right">${c.note_50 || 0}</td>
                             <td class="text-right">${c.note_20 || 0}</td>
                             <td class="text-right">${c.note_10 || 0}</td>
+                            <td class="text-right">${c.note_5 || 0}</td>
+                            <td class="text-right">${c.note_other || 0}${c.note_other_value ? ` (₹${c.note_other_value})` : ''}</td>
                             <td class="text-right">${(c.coin_5||0)+(c.coin_2||0)+(c.coin_1||0)}</td>
                             <td class="text-right"><strong>${formatCurrency(c.total_cash)}</strong></td>
                             <td class="text-right">${formatCurrency(c.expected_cash)}</td>
@@ -214,7 +218,7 @@ async function showDenominationCount() {
                             </td>
                         </tr>`;
                     }).join('')}
-                    ${counts.length === 0 ? '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text-light)">No denomination counts yet</td></tr>' : ''}
+                    ${counts.length === 0 ? '<tr><td colspan="15" style="text-align:center;padding:30px;color:var(--text-light)">No denomination counts yet</td></tr>' : ''}
                 </tbody>
             </table>
         </div>
@@ -235,7 +239,7 @@ async function refreshDenomination() {
 
 async function showAddDenomination(existingData) {
     const today = new Date().toISOString().split('T')[0];
-    const d = existingData || { date: today, note_1000: 0, note_500: 0, note_100: 0, note_50: 0, note_20: 0, note_10: 0, coin_5: 0, coin_2: 0, coin_1: 0, expected_cash: 0, counted_by: '', remarks: '' };
+    const d = existingData || { date: today, note_1000: 0, note_500: 0, note_100: 0, note_50: 0, note_20: 0, note_10: 0, note_5: 0, note_other: 0, note_other_value: 0, coin_5: 0, coin_2: 0, coin_1: 0, expected_cash: 0, counted_by: '', remarks: '' };
 
     // Try to get today's expected cash from cash collection
     if (!existingData) {
@@ -269,6 +273,15 @@ async function showAddDenomination(existingData) {
                 <div class="form-group"><label>₹50 Notes</label><input type="number" class="form-control" id="dn50" value="${d.note_50}" min="0"></div>
                 <div class="form-group"><label>₹20 Notes</label><input type="number" class="form-control" id="dn20" value="${d.note_20}" min="0"></div>
                 <div class="form-group"><label>₹10 Notes</label><input type="number" class="form-control" id="dn10" value="${d.note_10}" min="0"></div>
+                <div class="form-group"><label>₹5 Notes</label><input type="number" class="form-control" id="dn5" value="${d.note_5 || 0}" min="0"></div>
+                <div class="form-group" style="grid-column:span 2">
+                    <label>Other Notes</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input type="number" class="form-control" id="dnOther" value="${d.note_other || 0}" min="0" placeholder="Count" style="flex:1">
+                        <span style="font-size:13px;color:var(--text-light)">× ₹</span>
+                        <input type="number" class="form-control" id="dnOtherValue" value="${d.note_other_value || 0}" min="0" step="1" placeholder="Value/note" style="width:100px">
+                    </div>
+                </div>
             </div>
             <div class="form-section-title">Coin Count</div>
             <div class="form-row-3">
@@ -300,7 +313,7 @@ async function showAddDenomination(existingData) {
     `);
 
     // Auto-calculate total
-    document.querySelectorAll('#dn1000, #dn500, #dn100, #dn50, #dn20, #dn10, #dnCoin5, #dnCoin2, #dnCoin1, #dnExpected').forEach(el => {
+    document.querySelectorAll('#dn1000, #dn500, #dn100, #dn50, #dn20, #dn10, #dn5, #dnOther, #dnOtherValue, #dnCoin5, #dnCoin2, #dnCoin1, #dnExpected').forEach(el => {
         el.addEventListener('input', updateDenominationPreview);
     });
     updateDenominationPreview();
@@ -308,7 +321,7 @@ async function showAddDenomination(existingData) {
 
 function updateDenominationPreview() {
     const v = (id) => parseFloat(document.getElementById(id)?.value || 0);
-    const total = v('dn1000')*1000 + v('dn500')*500 + v('dn100')*100 + v('dn50')*50 + v('dn20')*20 + v('dn10')*10 + v('dnCoin5')*5 + v('dnCoin2')*2 + v('dnCoin1')*1;
+    const total = v('dn1000')*1000 + v('dn500')*500 + v('dn100')*100 + v('dn50')*50 + v('dn20')*20 + v('dn10')*10 + v('dn5')*5 + (v('dnOther') * v('dnOtherValue')) + v('dnCoin5')*5 + v('dnCoin2')*2 + v('dnCoin1')*1;
     const expected = v('dnExpected');
     const diff = total - expected;
 
@@ -344,6 +357,9 @@ async function saveDenominationEntry(id) {
         note_50: parseInt(document.getElementById('dn50')?.value || 0),
         note_20: parseInt(document.getElementById('dn20')?.value || 0),
         note_10: parseInt(document.getElementById('dn10')?.value || 0),
+        note_5: parseInt(document.getElementById('dn5')?.value || 0),
+        note_other: parseInt(document.getElementById('dnOther')?.value || 0),
+        note_other_value: parseFloat(document.getElementById('dnOtherValue')?.value || 0),
         coin_5: parseInt(document.getElementById('dnCoin5')?.value || 0),
         coin_2: parseInt(document.getElementById('dnCoin2')?.value || 0),
         coin_1: parseInt(document.getElementById('dnCoin1')?.value || 0),
@@ -430,9 +446,9 @@ async function printDenomination() {
 
     const html = `
         <div class="header"><h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1><h2>Denomination Count Sheet</h2><p>Date: ${formatDate(new Date().toISOString().split('T')[0])}</p></div>
-        <table class="compact"><thead><tr><th>Date</th><th class="text-right">₹1000</th><th class="text-right">₹500</th><th class="text-right">₹100</th><th class="text-right">₹50</th><th class="text-right">₹20</th><th class="text-right">₹10</th><th class="text-right">Total</th><th class="text-right">Expected</th><th class="text-right">Diff</th><th>By</th></tr></thead>
-        <tbody>${data.map(c => `<tr><td>${formatDate(c.date)}</td><td class="text-right">${c.note_1000||0}</td><td class="text-right">${c.note_500||0}</td><td class="text-right">${c.note_100||0}</td><td class="text-right">${c.note_50||0}</td><td class="text-right">${c.note_20||0}</td><td class="text-right">${c.note_10||0}</td><td class="text-right">${formatCurrency(c.total_cash)}</td><td class="text-right">${formatCurrency(c.expected_cash)}</td><td class="text-right">${formatCurrency(c.difference)}</td><td>${escapeHtml(c.counted_by||'')}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td><strong>Total</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_1000||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_500||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_100||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_50||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_20||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_10||0), 0)}</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,c) => s + c.total_cash, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,c) => s + c.expected_cash, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,c) => s + c.difference, 0))}</strong></td><td></td></tr></tfoot></table>
+        <table class="compact"><thead><tr><th>Date</th><th class="text-right">₹1000</th><th class="text-right">₹500</th><th class="text-right">₹100</th><th class="text-right">₹50</th><th class="text-right">₹20</th><th class="text-right">₹10</th><th class="text-right">₹5</th><th class="text-right">Other</th><th class="text-right">Total</th><th class="text-right">Expected</th><th class="text-right">Diff</th><th>By</th></tr></thead>
+        <tbody>${data.map(c => `<tr><td>${formatDate(c.date)}</td><td class="text-right">${c.note_1000||0}</td><td class="text-right">${c.note_500||0}</td><td class="text-right">${c.note_100||0}</td><td class="text-right">${c.note_50||0}</td><td class="text-right">${c.note_20||0}</td><td class="text-right">${c.note_10||0}</td><td class="text-right">${c.note_5||0}</td><td class="text-right">${c.note_other||0}${c.note_other_value ? ` (₹${c.note_other_value})` : ''}</td><td class="text-right">${formatCurrency(c.total_cash)}</td><td class="text-right">${formatCurrency(c.expected_cash)}</td><td class="text-right">${formatCurrency(c.difference)}</td><td>${escapeHtml(c.counted_by||'')}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td><strong>Total</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_1000||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_500||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_100||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_50||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_20||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_10||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_5||0), 0)}</strong></td><td class="text-right"><strong>${data.reduce((s,c) => s + (c.note_other||0), 0)}</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,c) => s + c.total_cash, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,c) => s + c.expected_cash, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,c) => s + c.difference, 0))}</strong></td><td></td></tr></tfoot></table>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Counted by (Signature)</div></div>
     `;
     printHTML(html);
