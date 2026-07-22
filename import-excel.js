@@ -32,6 +32,9 @@ const DB_PATH = path.join(DB_DIR, 'dairy-plant.db');
 const EXCEL_PATH = path.join(PROJECT_ROOT, 'Dairy_Accounts_Professional.xlsx');
 const SCHEMA_PATH = path.join(PROJECT_ROOT, 'database', 'schema.sql');
 
+// All Excel sheets in this workbook have: Row 0 = title, Row 1 = column headers, Row 2+ = data
+const SHEET_DATA_START_ROW = 2;
+
 // ── Dependencies ───────────────────────────────────────────────
 const Database = require('better-sqlite3');
 const XLSX = require('xlsx');
@@ -210,11 +213,8 @@ function importParties(db, sheetData) {
     let ledgerCount = 0;
     const partyNameToId = {};
 
-    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
-    const DATA_START_ROW = 2;
-
     const trx = db.transaction(() => {
-        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
+        for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[nameIdx]) continue;
 
@@ -290,11 +290,8 @@ function importProducts(db, sheetData) {
     let prodCount = 0;
     const productNameToId = {};
 
-    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
-    const DATA_START_ROW = 2;
-
     const trx = db.transaction(() => {
-        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
+        for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[nameIdx]) continue;
 
@@ -367,12 +364,9 @@ function importSales(db, sheetData, partyNameToId, productNameToId) {
     let skippedNoParty = 0;
     let skippedNoProduct = 0;
 
-    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
-    const DATA_START_ROW = 2;
-
     // Group by invoice_no: some invoices may have multiple products on multiple rows
     const invoiceGroups = {};
-    for (let i = DATA_START_ROW; i < sheetData.length; i++) {
+    for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
         const row = sheetData[i];
         if (!row || !row[invIdx]) continue;
 
@@ -504,12 +498,9 @@ function importPurchases(db, sheetData, partyNameToId, productNameToId) {
     let skippedNoParty = 0;
     let skippedNoProduct = 0;
 
-    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
-    const DATA_START_ROW = 2;
-
     // Group by bill_no
     const billGroups = {};
-    for (let i = DATA_START_ROW; i < sheetData.length; i++) {
+    for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
         const row = sheetData[i];
         if (!row || !row[billIdx]) continue;
 
@@ -611,11 +602,8 @@ function importCashCollections(db, sheetData, partyNameToId) {
     let count = 0;
     let skipped = 0;
 
-    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
-    const DATA_START_ROW = 2;
-
     const trx = db.transaction(() => {
-        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
+        for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[custIdx]) continue;
 
@@ -667,11 +655,8 @@ function importPartyLedger(db, sheetData, partyNameToId) {
     let count = 0;
     let skipped = 0;
 
-    // Sheets have: Row 0 = title, Row 1 = headers, Row 2+ = data
-    const DATA_START_ROW = 2;
-
     const trx = db.transaction(() => {
-        for (let i = DATA_START_ROW; i < sheetData.length; i++) {
+        for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
             const row = sheetData[i];
             if (!row || !row[partyIdx]) continue;
 
@@ -779,8 +764,6 @@ function main() {
     // ═══════════════════════════════════════════════════════════
     // ALL STEPS wrapped in a single outer transaction for atomicity
     // ═══════════════════════════════════════════════════════════
-    const SHEET_TOTAL_ROWS = 'title + header'; // Row 0=title, Row 1=headers, Row 2+=data
-    
     const masterTrx = db.transaction(() => {
 
         // STEP 1: Import Parties
