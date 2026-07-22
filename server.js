@@ -170,7 +170,8 @@ try {
             console.log('  📂 Database has no business data. Running Excel import...');
             try {
                 // Run the import script programmatically
-                require('./import-excel');
+                const { main: importExcel } = require('./import-excel');
+                importExcel();
             } catch (importErr) {
                 console.error('  ❌ Excel import failed:', importErr.message);
                 console.error('     The server will start with an empty database.');

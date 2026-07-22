@@ -842,4 +842,10 @@ function main() {
     console.log('');
 }
 
-main();
+// Export main for use by server.js (auto-import on startup)
+module.exports = { main };
+
+// Only run main() when executed directly (node import-excel.js)
+if (require.main === module) {
+    main();
+}
