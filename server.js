@@ -159,6 +159,34 @@ function ensureAdminUser() {
 ensureAdminUser();
 
 // ──────────────────────────────────────────────────────────────
+// Auto-Import Excel Data on First Run
+// ──────────────────────────────────────────────────────────────
+try {
+    // Check if the database has business data
+    const partyCount = db.prepare("SELECT COUNT(*) as c FROM parties").get().c;
+    if (partyCount === 0) {
+        const excelPath = path.join(__dirname, 'Dairy_Accounts_Professional.xlsx');
+        if (fs.existsSync(excelPath)) {
+            console.log('  📂 Database has no business data. Running Excel import...');
+            try {
+                // Run the import script programmatically
+                require('./import-excel');
+            } catch (importErr) {
+                console.error('  ❌ Excel import failed:', importErr.message);
+                console.error('     The server will start with an empty database.');
+            }
+        } else {
+            console.log('  ℹ️  No Excel file found at:', excelPath);
+            console.log('     Place Dairy_Accounts_Professional.xlsx in the project root and restart to import data.');
+        }
+    } else {
+        console.log(`  ✅ Database has ${partyCount} parties — skipping import.`);
+    }
+} catch (checkErr) {
+    console.log('  ℹ️  Could not check database state:', checkErr.message);
+}
+
+// ──────────────────────────────────────────────────────────────
 // Authentication Routes (no auth required)
 // ──────────────────────────────────────────────────────────────
 
