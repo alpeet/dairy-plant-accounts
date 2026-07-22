@@ -588,6 +588,69 @@ table .actions .btn {
 }
 
 /* ============================================================
+   NEPALI DATE PICKER
+   ============================================================ */
+.bs-date-picker {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 1px 2px;
+    transition: var(--transition);
+    width: 100%;
+}
+
+.bs-date-picker:focus-within {
+    border-color: var(--primary-light);
+    box-shadow: 0 0 0 3px rgba(46, 134, 193, 0.15);
+}
+
+.bs-date-picker select {
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    padding: 6px 2px;
+    cursor: pointer;
+    outline: none;
+    font-family: var(--font);
+    color: var(--text);
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+}
+
+.bs-date-picker .bs-year-select {
+    font-weight: 600;
+    min-width: 52px;
+    text-align: center;
+}
+
+.bs-date-picker .bs-month-select {
+    min-width: 48px;
+    text-align: center;
+    font-size: 11px !important;
+}
+
+.bs-date-picker .bs-day-select {
+    min-width: 36px;
+    text-align: center;
+}
+
+.bs-date-picker select:hover {
+    background: rgba(46, 134, 193, 0.05);
+}
+
+.bs-date-picker select option {
+    padding: 4px 8px;
+}
+
+input[data-bs-initialized="true"] {
+    display: none !important;
+}
+
+/* ============================================================
    SEARCH / FILTERS
    ============================================================ */
 .filter-bar {
