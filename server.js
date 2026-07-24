@@ -907,6 +907,14 @@ app.post('/api/cash/daily-collection', (req, res) => {
     res.json(safeRun(() => ops.getDailyCashCollection(db, req.body || {})));
 });
 
+app.post('/api/cash/collection-save', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveCashCollection(db, req.body || {})));
+});
+
+app.post('/api/cash/collection-delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteCashCollection(db, req.body.id)));
+});
+
 // ──────────────────────────────────────────────────────────────
 // Cash Deposits
 // ──────────────────────────────────────────────────────────────

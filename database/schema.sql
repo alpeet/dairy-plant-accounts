@@ -42,7 +42,7 @@
 --   audit_log, milk_rate_chart_history (future)
 --   → Change tracking, system monitoring
 --
--- Total: 27 tables across 8 functional groups
+-- Total: 25 tables across 9 functional groups
 -- ════════════════════════════════════════════════════════════
 
 PRAGMA journal_mode = WAL;

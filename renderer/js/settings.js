@@ -607,6 +607,9 @@ async function backupDatabase() {
 // Database Table Info
 // ============================================================
 
+// Store table data for filtering
+let _tableInfoData = null;
+
 async function loadTableInfo() {
     const container = document.getElementById('tableInfoContainer');
     if (!container) return;
@@ -625,6 +628,8 @@ async function loadTableInfo() {
         return;
     }
 
+    _tableInfoData = data;
+
     // Summary bar
     const dbSizeStr = data.summary.db_size > 0
         ? (data.summary.db_size < 1024 * 1024
@@ -632,7 +637,19 @@ async function loadTableInfo() {
             : (data.summary.db_size / (1024 * 1024)).toFixed(2) + ' MB')
         : 'Unknown';
 
+    // Search bar + summary bar
     let html = `
+        <div style="margin-bottom:12px">
+            <div style="position:relative">
+                <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:14px;opacity:0.5">🔍</span>
+                <input type="text" id="tableSearchInput" class="form-control" 
+                    placeholder="Search tables by name, category, or description..." 
+                    style="padding-left:36px;font-size:13px"
+                    onkeyup="filterTableInfo()"
+                    autocomplete="off">
+                <span id="tableSearchClear" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:16px;cursor:pointer;display:none;opacity:0.5" onclick="clearTableSearch()">✕</span>
+            </div>
+        </div>
         <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
             <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
                 <div style="font-size:24px;font-weight:700;color:var(--primary)">${data.summary.total_tables}</div>
@@ -651,57 +668,134 @@ async function loadTableInfo() {
                 <div style="font-size:11px;color:var(--text-light)">Database Size</div>
             </div>
         </div>
+        <div id="tableGroupsContainer">
     `;
 
     // Grouped tables
     data.groups.forEach(group => {
-        const isExpanded = true; // Start expanded
-        html += `
-            <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
-                <div style="padding:10px 14px;background:var(--bg);display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="toggleTableGroup(this)">
-                    <div>
-                        <strong style="font-size:14px">${group.category}</strong>
-                        <span style="font-size:11px;color:var(--text-light);margin-left:8px">${group.description}</span>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:12px">
-                        <span style="font-size:11px;color:var(--text-light)">${group.table_count} tables · ${group.total_rows.toLocaleString('en-IN')} records</span>
-                        <span style="font-size:12px;transition:transform 0.2s" class="group-toggle-icon">▼</span>
-                    </div>
+        html += renderTableGroup(group, '');
+    });
+
+    html += `</div><div id="tableNoResults" style="display:none;text-align:center;padding:40px;color:var(--text-light)">
+        <div style="font-size:36px;margin-bottom:8px">🔍</div>
+        <p style="font-size:14px">No tables match your search.</p>
+        <button class="btn btn-secondary btn-sm" onclick="clearTableSearch()">Clear Search</button>
+    </div>`;
+
+    container.innerHTML = html;
+}
+
+function renderTableGroup(group, searchTerm) {
+    const q = searchTerm.toLowerCase().trim();
+    const categoryMatch = !q || group.category.toLowerCase().includes(q) || group.description.toLowerCase().includes(q);
+    
+    // Filter tables within the group
+    const matchingTables = q ? group.tables.filter(t => t.name.toLowerCase().includes(q)) : group.tables;
+    const groupHasMatch = categoryMatch || matchingTables.length > 0;
+    
+    if (q && !groupHasMatch) {
+        return ''; // Hide entire group
+    }
+
+    const displayTables = q ? matchingTables : group.tables;
+    const displayCount = displayTables.length;
+    const displayRows = displayTables.reduce((s, t) => s + t.row_count, 0);
+
+    return `
+        <div class="table-group" style="margin-bottom:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+            <div style="padding:10px 14px;background:var(--bg);display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="toggleTableGroup(this)">
+                <div>
+                    <strong style="font-size:14px">${group.category}</strong>
+                    <span style="font-size:11px;color:var(--text-light);margin-left:8px">${group.description}</span>
+                    ${!categoryMatch && q ? `<span style="font-size:11px;color:var(--warning);margin-left:6px">(${displayCount} table match)</span>` : ''}
                 </div>
-                <div class="table-group-body" style="border-top:1px solid var(--border)">
-                    <table style="width:100%;font-size:12px;border-collapse:collapse">
-                        <thead>
-                            <tr style="background:var(--bg)">
-                                <th style="padding:6px 14px;text-align:left;font-weight:600">Table Name</th>
-                                <th style="padding:6px 14px;text-align:right;font-weight:600">Records</th>
-                                <th style="padding:6px 14px;text-align:center;font-weight:600">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${group.tables.map(t => `
-                                <tr style="border-top:1px solid var(--border)">
-                                    <td style="padding:6px 14px;font-family:monospace;font-size:12px">
-                                        ${escapeHtml(t.name)}
-                                    </td>
-                                    <td style="padding:6px 14px;text-align:right;font-weight:${t.row_count > 0 ? '600' : '400'};color:${t.row_count > 0 ? 'var(--accent)' : 'var(--text-light)'}">
-                                        ${t.row_count.toLocaleString('en-IN')}
-                                    </td>
-                                    <td style="padding:6px 14px;text-align:center">
-                                        ${t.exists
-                                            ? '<span style="color:var(--accent);font-size:11px">● Active</span>'
-                                            : '<span style="color:var(--danger);font-size:11px">● Missing</span>'
-                                        }
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
+                <div style="display:flex;align-items:center;gap:12px">
+                    <span style="font-size:11px;color:var(--text-light)">${displayCount} of ${group.table_count} tables · ${displayRows.toLocaleString('en-IN')} records</span>
+                    <span style="font-size:12px;transition:transform 0.2s" class="group-toggle-icon">▼</span>
                 </div>
             </div>
-        `;
+            <div class="table-group-body" style="border-top:1px solid var(--border)">
+                <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead>
+                        <tr style="background:var(--bg)">
+                            <th style="padding:6px 14px;text-align:left;font-weight:600">Table Name</th>
+                            <th style="padding:6px 14px;text-align:right;font-weight:600">Records</th>
+                            <th style="padding:6px 14px;text-align:center;font-weight:600">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${displayTables.map(t => `
+                            <tr style="border-top:1px solid var(--border)">
+                                <td style="padding:6px 14px;font-family:monospace;font-size:12px">
+                                    ${highlightMatch(t.name, q)}
+                                </td>
+                                <td style="padding:6px 14px;text-align:right;font-weight:${t.row_count > 0 ? '600' : '400'};color:${t.row_count > 0 ? 'var(--accent)' : 'var(--text-light)'}">
+                                    ${t.row_count.toLocaleString('en-IN')}
+                                </td>
+                                <td style="padding:6px 14px;text-align:center">
+                                    ${t.exists
+                                        ? '<span style="color:var(--accent);font-size:11px">● Active</span>'
+                                        : '<span style="color:var(--danger);font-size:11px">● Missing</span>'
+                                    }
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function highlightMatch(text, query) {
+    if (!query) return text;
+    const idx = text.toLowerCase().indexOf(query);
+    if (idx === -1) return text;
+    const before = text.substring(0, idx);
+    const match = text.substring(idx, idx + query.length);
+    const after = text.substring(idx + query.length);
+    return `${escapeHtml(before)}<span style="background:#ffd700;color:#333;padding:1px 2px;border-radius:2px;font-weight:700">${escapeHtml(match)}</span>${escapeHtml(after)}`;
+}
+
+function filterTableInfo() {
+    const input = document.getElementById('tableSearchInput');
+    const container = document.getElementById('tableGroupsContainer');
+    const noResults = document.getElementById('tableNoResults');
+    const clearBtn = document.getElementById('tableSearchClear');
+    if (!input || !container || !_tableInfoData) return;
+
+    const query = input.value;
+    
+    // Show/hide clear button
+    if (clearBtn) {
+        clearBtn.style.display = query ? 'block' : 'none';
+    }
+
+    // Render filtered groups
+    let visibleCount = 0;
+    let html = '';
+    _tableInfoData.groups.forEach(group => {
+        const rendered = renderTableGroup(group, query);
+        if (rendered) {
+            html += rendered;
+            visibleCount++;
+        }
     });
 
     container.innerHTML = html;
+    
+    if (noResults) {
+        noResults.style.display = visibleCount === 0 && query ? 'block' : 'none';
+    }
+}
+
+function clearTableSearch() {
+    const input = document.getElementById('tableSearchInput');
+    if (input) {
+        input.value = '';
+        filterTableInfo();
+        input.focus();
+    }
 }
 
 function toggleTableGroup(headerEl) {
@@ -712,6 +806,131 @@ function toggleTableGroup(headerEl) {
         body.style.display = isHidden ? '' : 'none';
         icon.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
     }
+}
+
+// ============================================================
+// Dedicated DB Tables Page (sidebar-accessible)
+// ============================================================
+
+async function renderDBTables() {
+    const container = document.getElementById('page-db-tables');
+    document.getElementById('topActions').innerHTML = '';
+
+    // Show loading state
+    container.innerHTML = `<div style="max-width:800px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <h2 style="margin:0">🗃️ Database Tables</h2>
+            <div class="btn-group">
+                <button class="btn btn-secondary btn-sm" onclick="renderDBTables()">🔄 Refresh</button>
+            </div>
+        </div>
+        <div style="text-align:center;padding:40px;color:var(--text-light)">
+            <span style="font-size:32px">🗃️</span>
+            <p>Loading database tables...</p>
+        </div>
+    </div>`;
+
+    // Fetch data
+    const result = await window.api.getTableInfo();
+    if (!result.success) {
+        container.innerHTML = `<p style="color:var(--danger);font-size:13px;padding:20px">Error: ${escapeHtml(result.error)}</p>`;
+        return;
+    }
+
+    const data = result.data;
+    if (!data || !data.groups) {
+        container.innerHTML = '<p style="color:var(--text-light);font-size:13px;padding:20px">No table information available.</p>';
+        return;
+    }
+
+    _tableInfoData = data;
+
+    // Build summary bar
+    const dbSizeStr = data.summary.db_size > 0
+        ? (data.summary.db_size < 1024 * 1024
+            ? (data.summary.db_size / 1024).toFixed(1) + ' KB'
+            : (data.summary.db_size / (1024 * 1024)).toFixed(2) + ' MB')
+        : 'Unknown';
+
+    // Build all groups HTML
+    let groupsHtml = '';
+    data.groups.forEach(group => {
+        groupsHtml += renderTableGroup(group, '');
+    });
+
+    // Full render (uses same renderTableGroup/toggleTableGroup as Settings, 
+    // but unique IDs for search/filter elements to avoid DOM conflicts)
+    container.innerHTML = `
+        <div style="max-width:800px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                <h2 style="margin:0">🗃️ Database Tables</h2>
+                <div class="btn-group">
+                    <button class="btn btn-secondary btn-sm" onclick="renderDBTables()">🔄 Refresh</button>
+                </div>
+            </div>
+            <div style="margin-bottom:12px">
+                <div style="position:relative">
+                    <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:14px;opacity:0.5">🔍</span>
+                    <input type="text" id="dbtSearchInput" class="form-control" 
+                        placeholder="Search tables by name, category, or description..." 
+                        style="padding-left:36px;font-size:13px"
+                        onkeyup="filterDBTables()"
+                        autocomplete="off">
+                    <span id="dbtClearBtn" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:16px;cursor:pointer;display:none;opacity:0.5" onclick="clearDBTables()">✕</span>
+                </div>
+            </div>
+            <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+                <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                    <div style="font-size:24px;font-weight:700;color:var(--primary)">${data.summary.total_tables}</div>
+                    <div style="font-size:11px;color:var(--text-light)">Total Tables</div>
+                </div>
+                <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                    <div style="font-size:24px;font-weight:700;color:var(--accent)">${data.summary.total_rows.toLocaleString('en-IN')}</div>
+                    <div style="font-size:11px;color:var(--text-light)">Total Records</div>
+                </div>
+                <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                    <div style="font-size:24px;font-weight:700;color:var(--info)">${data.groups.length}</div>
+                    <div style="font-size:11px;color:var(--text-light)">Functional Groups</div>
+                </div>
+                <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                    <div style="font-size:24px;font-weight:700;color:var(--warning)">${dbSizeStr}</div>
+                    <div style="font-size:11px;color:var(--text-light)">Database Size</div>
+                </div>
+            </div>
+            <div id="dbtGroupsContainer">${groupsHtml}</div>
+            <div id="dbtNoResults" style="display:none;text-align:center;padding:40px;color:var(--text-light)">
+                <div style="font-size:36px;margin-bottom:8px">🔍</div>
+                <p style="font-size:14px">No tables match your search.</p>
+                <button class="btn btn-secondary btn-sm" onclick="clearDBTables()">Clear Search</button>
+            </div>
+        </div>
+    `;
+}
+
+function filterDBTables() {
+    const input = document.getElementById('dbtSearchInput');
+    const container = document.getElementById('dbtGroupsContainer');
+    const noResults = document.getElementById('dbtNoResults');
+    const clearBtn = document.getElementById('dbtClearBtn');
+    if (!input || !container || !_tableInfoData) return;
+
+    const query = input.value;
+    if (clearBtn) clearBtn.style.display = query ? 'block' : 'none';
+
+    let visibleCount = 0;
+    let html = '';
+    _tableInfoData.groups.forEach(group => {
+        const rendered = renderTableGroup(group, query);
+        if (rendered) { html += rendered; visibleCount++; }
+    });
+
+    container.innerHTML = html;
+    if (noResults) noResults.style.display = visibleCount === 0 && query ? 'block' : 'none';
+}
+
+function clearDBTables() {
+    const input = document.getElementById('dbtSearchInput');
+    if (input) { input.value = ''; filterDBTables(); input.focus(); }
 }
 
 // Globals
@@ -729,3 +948,6 @@ window.downloadBackup = downloadBackup;
 window.deleteBackupFile = deleteBackupFile;
 window.loadTableInfo = loadTableInfo;
 window.toggleTableGroup = toggleTableGroup;
+window.renderDBTables = renderDBTables;
+window.filterDBTables = filterDBTables;
+window.clearDBTables = clearDBTables;

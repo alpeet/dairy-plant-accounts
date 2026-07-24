@@ -408,8 +408,17 @@ async function printDaybookPage() {
 async function exportDaybookPagePDF() { await printDaybookPage(); }
 
 // ============================================================
-// Cash Collection (dedicated page)
+// Payment Collection (dedicated page) — with Record Collection
 // ============================================================
+
+const PAYMENT_MODES = [
+    { value: 'cash', label: 'Cash', icon: '💵' },
+    { value: 'cheque', label: 'Cheque', icon: '📄' },
+    { value: 'online', label: 'Online / UPI', icon: '📱' },
+    { value: 'bank', label: 'Bank Transfer', icon: '🏦' },
+    { value: 'mixed', label: 'Mixed', icon: '🔀' }
+];
+
 async function showCashCollectionPage() {
     const container = document.getElementById('page-cash-collection');
     document.getElementById('topActions').innerHTML = '';
@@ -418,32 +427,114 @@ async function showCashCollectionPage() {
     const result = await window.api.getDailyCashCollection({ from_date: preset.from, to_date: preset.to });
     const data = result.success ? result.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
 
+    const modeIcon = (mode) => {
+        const m = PAYMENT_MODES.find(p => p.value === mode);
+        return m ? m.icon + ' ' + m.label : (mode || '—');
+    };
+
     container.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <h2 style="margin:0">💰 Cash Collection Report</h2>
+            <h2 style="margin:0">💰 Payment Collection Report</h2>
             <div class="btn-group">
                 <button class="btn btn-info btn-sm" onclick="printCashCollectionPage()">🖨 Print</button>
                 <button class="btn btn-primary btn-sm" onclick="exportCashCollectionPagePDF()">📄 PDF</button>
             </div>
         </div>
+
+        <!-- Quick Action Card: Record Payment Collection -->
+        <div style="background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;border:2px dashed #64b5f6;transition:all 0.2s" 
+             onclick="showAddCashCollectionRecord()"
+             onmouseover="this.style.background='linear-gradient(135deg,#bbdefb,#90caf9)';this.style.borderColor='#2196f3';this.style.transform='translateY(-2px)'"
+             onmouseout="this.style.background='linear-gradient(135deg,#e3f2fd,#bbdefb)';this.style.borderColor='#64b5f6';this.style.transform='none'">
+            <div>
+                <div style="font-size:16px;font-weight:700;color:#1565c0">➕ Record Payment Collection</div>
+                <div style="font-size:13px;color:#1976d2;margin-top:2px">Record incoming/outgoing payments with cash, cheque, online/UPI, or bank transfer</div>
+            </div>
+            <div style="font-size:32px;color:#1976d2">📝</div>
+        </div>
+
         <div class="filter-bar">
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="ccFrom" value="${preset.from}"></div>
             <div class="form-group"><label>To</label><input type="date" class="form-control" id="ccTo" value="${preset.to}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyCashCollectionPage()">Generate</button></div>
         </div>
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
-            <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Total Cash In</span><span class="value" style="font-size:20px">${formatCurrency(data.total_cash_in)}</span><span class="sub">Sales + Receipts</span></div>
-            <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">Total Cash Out</span><span class="value" style="font-size:20px">${formatCurrency(data.total_cash_out)}</span><span class="sub">Payments made</span></div>
-            <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Net Cash Position</span><span class="value" style="font-size:20px">${formatCurrency(data.net_cash)}</span><span class="sub">${data.net_cash >= 0 ? 'Surplus' : 'Deficit'}</span></div>
+            <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Total In</span><span class="value" style="font-size:20px">${formatCurrency(data.total_cash_in)}</span><span class="sub">Sales + Receipts + Other</span></div>
+            <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">Total Out</span><span class="value" style="font-size:20px">${formatCurrency(data.total_cash_out)}</span><span class="sub">Payments made</span></div>
+            <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Net Position</span><span class="value" style="font-size:20px">${formatCurrency(data.net_cash)}</span><span class="sub">${data.net_cash >= 0 ? 'Surplus' : 'Deficit'}</span></div>
         </div>
         <div class="table-container">
             <table>
-                <thead><tr><th>Date</th><th class="text-right">Cash Sales</th><th class="text-right">Receipts</th><th class="text-right">Total In</th><th class="text-right">Payments</th><th class="text-right">Other</th><th class="text-right">Net Cash</th></tr></thead>
-                <tbody>${data.days.map(d => `<tr><td>${formatDate(d.date)}</td><td class="text-right">${formatCurrency(d.cash_sales_total)}</td><td class="text-right">${formatCurrency(d.cash_receipts_total)}</td><td class="text-right"><strong>${formatCurrency(d.total_cash_in)}</strong></td><td class="text-right" style="color:var(--danger)">${formatCurrency(d.total_cash_out)}</td><td class="text-right">${formatCurrency(d.other_receipts_total)}</td><td class="text-right" style="font-weight:600;color:${d.net_cash >= 0 ? 'var(--accent)' : 'var(--danger)'}">${formatCurrency(d.net_cash)}</td></tr>`).join('')}
-                ${data.days.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No data for this period</td></tr>' : ''}</tbody>
-                <tfoot><tr><td><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.cash_sales_total, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.cash_receipts_total, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_cash_in)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_cash_out)}</strong></td><td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.other_receipts_total, 0))}</strong></td><td class="text-right"><strong>${formatCurrency(data.net_cash)}</strong></td></tr></tfoot>
+                <thead><tr><th>Date</th><th>Party</th><th class="text-right">Sales</th><th class="text-right">Receipts</th><th class="text-right">Total In</th><th class="text-right">Payments</th><th class="text-right">Other</th><th class="text-right">Net</th><th>Mode</th><th class="actions">Source</th></tr></thead>
+                <tbody>
+                    ${data.days.map(d => {
+                        const partyLabel = d.party_names && d.party_names.length > 0 
+                            ? d.party_names.join(', ') 
+                            : (d.manual_entry ? '—' : '—');
+                        return `<tr>
+                        <td>${formatDate(d.date)}</td>
+                        <td style="font-size:12px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.party_names && d.party_names.length > 0 ? escapeHtml(partyLabel) : '<span style="color:var(--text-light)">' + partyLabel + '</span>'}</td>
+                        <td class="text-right">${formatCurrency(d.cash_sales_total)}</td>
+                        <td class="text-right">${formatCurrency(d.cash_receipts_total)}</td>
+                        <td class="text-right"><strong>${formatCurrency(d.total_cash_in)}</strong></td>
+                        <td class="text-right" style="color:var(--danger)">${formatCurrency(d.total_cash_out)}</td>
+                        <td class="text-right">${formatCurrency(d.other_receipts_total)}</td>
+                        <td class="text-right" style="font-weight:600;color:${d.net_cash >= 0 ? 'var(--accent)' : 'var(--danger)'}">${formatCurrency(d.net_cash)}</td>
+                        <td style="font-size:12px">${d.manual_entry ? modeIcon(d.payment_mode) : '<span style="color:var(--text-light)">—</span>'}</td>
+                        <td class="actions" style="font-size:11px">${d.manual_entry ? '<span style="color:var(--accent);font-weight:600">📝 Manual</span>' : '<span style="color:var(--text-light)">Auto</span>'}</td>
+                    </tr>`;
+                    }).join('')}
+                    ${data.days.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No data for this period. Click "Record Payment Collection" to add a manual entry.</td></tr>' : ''}
+                </tbody>
+                <tfoot><tr><td><strong>Total</strong></td>
+                    <td></td>
+                    <td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.cash_sales_total, 0))}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.cash_receipts_total, 0))}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.total_cash_in)}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.total_cash_out)}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.other_receipts_total, 0))}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.net_cash)}</strong></td>
+                    <td></td>
+                    <td></td>
+                </tr></tfoot>
             </table>
         </div>
+
+        <!-- Manual Entries Section with Edit/Delete -->
+        ${data.manual_entries && data.manual_entries.length > 0 ? `
+        <div style="margin-top:24px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                <span style="font-size:16px">📝</span>
+                <h3 style="font-size:15px;font-weight:700;margin:0">Manual Entries</h3>
+                <span style="font-size:11px;background:var(--bg);color:var(--text-light);padding:2px 8px;border-radius:4px">${data.manual_entries.length} record(s)</span>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Date</th><th>Ref No</th><th class="text-right">Sales</th><th class="text-right">Receipts</th><th class="text-right">Payments</th><th class="text-right">Other</th><th>Mode</th><th>Party</th><th>Notes</th><th class="actions" style="min-width:80px">Actions</th></tr></thead>
+                    <tbody>
+                        ${data.manual_entries.map(e => {
+                            const partyName = e.party_id ? (e.party_name || 'Party #' + e.party_id) : '-';
+                            return `<tr>
+                                <td>${formatDate(e.date)}</td>
+                                <td style="font-size:12px;font-family:monospace;color:var(--primary)">${escapeHtml(e.ref_no || '')}</td>
+                                <td class="text-right">${formatCurrency(e.cash_sales || 0)}</td>
+                                <td class="text-right">${formatCurrency(e.cash_receipts || 0)}</td>
+                                <td class="text-right" style="color:var(--danger)">${formatCurrency(e.cash_payments || 0)}</td>
+                                <td class="text-right">${formatCurrency(e.other_receipts || 0)}</td>
+                                <td style="font-size:12px">${modeIcon(e.payment_mode)}</td>
+                                <td style="font-size:12px">${escapeHtml(partyName)}</td>
+                                <td style="font-size:12px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.notes || '')}</td>
+                                <td class="actions" style="white-space:nowrap">
+                                    <button class="btn btn-sm btn-secondary" onclick="editCashCollectionRecord(${e.id})" title="Edit" style="padding:2px 8px;font-size:12px">✏️</button>
+                                    <button class="btn btn-sm btn-danger" onclick="deleteCashCollectionRecord(${e.id})" title="Delete" style="padding:2px 8px;font-size:12px">🗑️</button>
+                                </td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        ` : ''}
     `;
     _finLastData.cashCollection = data;
 }
@@ -457,14 +548,200 @@ function applyCashCollectionPage() {
     });
 }
 
+// ============================================================
+// Add Manual Payment Collection Record
+// ============================================================
+async function showAddCashCollectionRecord(record) {
+    const today = new Date().toISOString().split('T')[0];
+    const isEdit = !!record;
+
+    const modeOptions = PAYMENT_MODES.map(m => 
+        `<option value="${m.value}"${record && record.payment_mode === m.value ? ' selected' : ''}>${m.icon} ${m.label}</option>`
+    ).join('');
+
+    // Fetch parties for the dropdown
+    const partiesResult = await window.api.getParties({});
+    const parties = partiesResult.success ? partiesResult.data : [];
+    const partyOptions = parties.map(p => 
+        `<option value="${p.id}"${record && record.party_id == p.id ? ' selected' : ''}>${escapeHtml(p.name)}${p.phone ? ' (' + escapeHtml(p.phone) + ')' : ''}</option>`
+    ).join('');
+
+    const title = isEdit ? '✏️ Edit Payment Collection' : '📝 Record Payment Collection';
+    const btnText = isEdit ? '💾 Update & Integrate' : '💾 Save & Integrate';
+    const recordIdHtml = isEdit ? `<input type="hidden" id="ccRecordId" value="${record.id}">` : '';
+
+    const defaultDate = record ? record.date : today;
+    const defaultRefNo = record ? (escapeHtml(record.ref_no || '')) : '';
+    const defaultSales = record ? (record.cash_sales || 0) : 0;
+    const defaultReceipts = record ? (record.cash_receipts || 0) : 0;
+    const defaultPayments = record ? (record.cash_payments || 0) : 0;
+    const defaultOther = record ? (record.other_receipts || 0) : 0;
+    const defaultNotes = record ? (escapeHtml(record.notes || '')) : '';
+
+    showModal(`
+        <div class="modal-header">
+            <h2>${title}</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            ${recordIdHtml}
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Date *</label>
+                    <input type="date" class="form-control" id="ccRecordDate" value="${defaultDate}">
+                </div>
+                <div class="form-group">
+                    <label>Payment Mode *</label>
+                    <select class="form-control" id="ccPaymentMode" onchange="updateCashCollectionPreview()">
+                        ${modeOptions}
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>🔖 Ref / Transaction No.</label>
+                    <input type="text" class="form-control" id="ccRefNo" value="${defaultRefNo}" placeholder="e.g. RC-2026-001 / CHQ-004256">
+                </div>
+                <div class="form-group" style="flex:0.5">
+                    <label>&nbsp;</label>
+                    <div style="font-size:11px;color:var(--text-light);padding-top:6px">Optional reference number for tracking</div>
+                </div>
+            </div>
+            <div class="form-section-title">Party & Integration</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>👤 Party (Customer/Supplier)</label>
+                    <select class="form-control" id="ccPartyId">
+                        <option value="">-- Select Party (optional) --</option>
+                        ${partyOptions}
+                    </select>
+                    <small style="color:var(--text-light);font-size:11px">When selected, the amounts will automatically appear in the party's statement and the daybook.</small>
+                </div>
+                <div class="form-group">
+                    <label>&nbsp;</label>
+                    <div style="background:linear-gradient(135deg,#e3f2fd,#bbdefb);padding:12px;border-radius:8px;font-size:12px;color:#1565c0">
+                        <strong>💡 Auto-Integration</strong>
+                        <div style="margin-top:4px">The amounts will be automatically posted to party statement, ledger, daybook, and reports.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-section-title">Amount Breakdown</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>💰 Sales Amount</label>
+                    <input type="number" class="form-control" id="ccCashSales" value="${defaultSales}" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="form-group">
+                    <label>📩 Receipts Amount</label>
+                    <input type="number" class="form-control" id="ccCashReceipts" value="${defaultReceipts}" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="form-group">
+                    <label>💸 Payments (Out)</label>
+                    <input type="number" class="form-control" id="ccCashPayments" value="${defaultPayments}" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="form-group">
+                    <label>📊 Other Receipts</label>
+                    <input type="number" class="form-control" id="ccOtherReceipts" value="${defaultOther}" min="0" step="0.01" placeholder="0.00">
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:16px 0;padding:16px;background:var(--bg);border-radius:8px">
+                <div style="text-align:center">
+                    <div style="font-size:12px;color:var(--text-light)">Total In</div>
+                    <div id="ccPreviewIn" style="font-size:18px;font-weight:700;color:var(--accent)">रु 0.00</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:12px;color:var(--text-light)">Total Out</div>
+                    <div id="ccPreviewOut" style="font-size:18px;font-weight:700;color:var(--danger)">रु 0.00</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:12px;color:var(--text-light)">Net Position</div>
+                    <div id="ccPreviewNet" style="font-size:18px;font-weight:700;color:var(--primary)">रु 0.00</div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea class="form-control" id="ccNotes" rows="2" placeholder="e.g. Daily payment collection summary">${defaultNotes}</textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-success" onclick="saveCashCollectionRecord()">${btnText}</button>
+        </div>
+    `);
+
+    // Live preview on input
+    ['ccCashSales', 'ccCashReceipts', 'ccCashPayments', 'ccOtherReceipts'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', updateCashCollectionPreview);
+    });
+    updateCashCollectionPreview();
+}
+
+function updateCashCollectionPreview() {
+    const v = (id) => parseFloat(document.getElementById(id)?.value || 0);
+    const cashIn = v('ccCashSales') + v('ccCashReceipts') + v('ccOtherReceipts');
+    const cashOut = v('ccCashPayments');
+    const net = cashIn - cashOut;
+
+    const fmt = (val) => 'रु ' + val.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+    const elIn = document.getElementById('ccPreviewIn');
+    const elOut = document.getElementById('ccPreviewOut');
+    const elNet = document.getElementById('ccPreviewNet');
+    if (elIn) { elIn.textContent = fmt(cashIn); elIn.style.color = 'var(--accent)'; }
+    if (elOut) { elOut.textContent = fmt(cashOut); elOut.style.color = cashOut > 0 ? 'var(--danger)' : 'var(--text-light)'; }
+    if (elNet) { 
+        elNet.textContent = fmt(net); 
+        elNet.style.color = net >= 0 ? 'var(--accent)' : 'var(--danger)'; 
+    }
+}
+
+async function saveCashCollectionRecord() {
+    const partyId = document.getElementById('ccPartyId')?.value;
+    const recordId = document.getElementById('ccRecordId')?.value;
+    const isEdit = !!recordId;
+
+    const data = {
+        date: document.getElementById('ccRecordDate')?.value || '',
+        ref_no: document.getElementById('ccRefNo')?.value || '',
+        payment_mode: document.getElementById('ccPaymentMode')?.value || 'cash',
+        party_id: partyId ? parseInt(partyId) : null,
+        cash_sales: parseFloat(document.getElementById('ccCashSales')?.value || 0),
+        cash_receipts: parseFloat(document.getElementById('ccCashReceipts')?.value || 0),
+        cash_payments: parseFloat(document.getElementById('ccCashPayments')?.value || 0),
+        other_receipts: parseFloat(document.getElementById('ccOtherReceipts')?.value || 0),
+        notes: document.getElementById('ccNotes')?.value || ''
+    };
+
+    // Include record ID for edits
+    if (isEdit) data.id = parseInt(recordId);
+
+    if (!data.date) { showToast('Date is required', 'error'); return; }
+    const totalIn = data.cash_sales + data.cash_receipts + data.other_receipts;
+    if (totalIn === 0 && data.cash_payments === 0) {
+        showToast('Enter at least one amount', 'warning');
+        return;
+    }
+
+    const result = await window.api.saveCashCollection(data);
+    if (result.success) {
+        closeModal();
+        const integrated = partyId ? ' and integrated into party statement/ledger/daybook' : '';
+        const action = isEdit ? 'updated' : 'saved';
+        showToast('Payment collection record ' + action + integrated + '!', 'success');
+        applyCashCollectionPage();
+    } else {
+        showToast(result.error || 'Failed to save', 'error');
+    }
+}
+
 async function printCashCollectionPage() {
     const d = _finLastData.cashCollection;
     if (!d) { showToast('Load data first', 'warning'); return; }
     const settings = await getSettingsCached();
-    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Cash Collection Report</h2><p>Period: ${d.from_date} to ${d.to_date}</p></div>
+    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Payment Collection Report</h2><p>Period: ${d.from_date} to ${d.to_date}</p></div>
         <div class="value-cards">
-            <div class="value-card"><div class="value-label">Cash In</div><div class="value-number">${formatCurrency(d.total_cash_in)}</div></div>
-            <div class="value-card"><div class="value-label">Cash Out</div><div class="value-number">${formatCurrency(d.total_cash_out)}</div></div>
+            <div class="value-card"><div class="value-label">Total In</div><div class="value-number">${formatCurrency(d.total_cash_in)}</div></div>
+            <div class="value-card"><div class="value-label">Total Out</div><div class="value-number">${formatCurrency(d.total_cash_out)}</div></div>
             <div class="value-card"><div class="value-label">Net</div><div class="value-number">${formatCurrency(d.net_cash)}</div></div>
         </div>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div></div>`;
@@ -472,6 +749,39 @@ async function printCashCollectionPage() {
 }
 
 async function exportCashCollectionPagePDF() { await printCashCollectionPage(); }
+
+// ============================================================
+// Edit Manual Payment Collection Record
+// ============================================================
+
+/**
+ * Open the record modal pre-filled with an existing manual entry's data.
+ */
+function editCashCollectionRecord(id) {
+    const record = _finLastData.cashCollection?.manual_entries?.find(e => e.id === id);
+    if (!record) {
+        showToast('Could not find record to edit', 'error');
+        return;
+    }
+    showAddCashCollectionRecord(record);
+}
+
+// ============================================================
+// Delete Manual Payment Collection Record
+// ============================================================
+
+async function deleteCashCollectionRecord(id) {
+    const confirmed = await confirmAction('Delete this manual payment collection record? This will also remove related ledger entries and party statement data.');
+    if (!confirmed) return;
+
+    const result = await window.api.deleteCashCollection(id);
+    if (result.success) {
+        showToast('Record deleted successfully!', 'success');
+        applyCashCollectionPage();
+    } else {
+        showToast(result.error || 'Failed to delete', 'error');
+    }
+}
 
 // ============================================================
 // Render function for Profit/Loss (used by app.js navigation)
@@ -502,3 +812,8 @@ window.showCashCollectionPage = showCashCollectionPage;
 window.applyCashCollectionPage = applyCashCollectionPage;
 window.printCashCollectionPage = printCashCollectionPage;
 window.exportCashCollectionPagePDF = exportCashCollectionPagePDF;
+window.showAddCashCollectionRecord = showAddCashCollectionRecord;
+window.saveCashCollectionRecord = saveCashCollectionRecord;
+window.updateCashCollectionPreview = updateCashCollectionPreview;
+window.editCashCollectionRecord = editCashCollectionRecord;
+window.deleteCashCollectionRecord = deleteCashCollectionRecord;

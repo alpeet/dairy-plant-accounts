@@ -9,6 +9,7 @@ data/dairy-plant.db
 data/dairy-plant.db-wal
 data/dairy-plant.db-shm
 data/backup-*.db
+data/backups/*.db
 
 # Environment
 .env

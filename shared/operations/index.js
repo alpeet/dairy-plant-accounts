@@ -59,7 +59,7 @@ const { backupDatabase, listBackups, deleteBackup, formatFileSize, getBackupDir 
 
 // ── New modules ──
 const { getPartyStatement, listPartiesWithBalance } = require('./statements');
-const { getDailyCashCollection } = require('./cash');
+const { getDailyCashCollection, saveCashCollection, deleteCashCollection } = require('./cash');
 const {
     listDenominations, getDenomination, getDenominationByDate,
     saveDenomination, deleteDenomination
@@ -145,7 +145,7 @@ module.exports = {
     getPartyStatement, listPartiesWithBalance,
 
     // Cash
-    getDailyCashCollection,
+    getDailyCashCollection, saveCashCollection, deleteCashCollection,
 
     // Denominations
     listDenominations, getDenomination, getDenominationByDate,

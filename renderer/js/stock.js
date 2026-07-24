@@ -50,7 +50,28 @@ async function renderStock() {
             </div>
         </div>
 
+        <!-- Quick Action Card: New Stock Movement -->
+        <div style="background:linear-gradient(135deg,#fff8e1,#ffecb3);border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;border:2px dashed #ffd54f;transition:all 0.2s"
+             onclick="showQuickStockMovement()"
+             onmouseover="this.style.background='linear-gradient(135deg,#ffecb3,#ffe082)';this.style.borderColor='#ffc107';this.style.transform='translateY(-2px)'"
+             onmouseout="this.style.background='linear-gradient(135deg,#fff8e1,#ffecb3)';this.style.borderColor='#ffd54f';this.style.transform='none'">
+            <div>
+                <div style="display:flex;align-items:center;gap:12px">
+                    <span style="font-size:28px">📦</span>
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#e65100">➕ Record Stock Movement</div>
+                        <div style="font-size:13px;color:#ef6c00;margin-top:2px">Quickly add stock in/out — select product, enter quantity (+/-), and save</div>
+                    </div>
+                </div>
+            </div>
+            <div style="text-align:right">
+                <div style="font-size:14px;font-weight:600;color:#e65100">Click to open form</div>
+                <div style="font-size:12px;color:#ef6c00">Quick adjustment →</div>
+            </div>
+        </div>
+
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+            <!-- Left: Product List -->
             <div class="card">
                 <div class="card-header"><h2>Product List</h2></div>
                 <div class="form-group">
@@ -95,6 +116,7 @@ async function renderStock() {
                 </div>
             </div>
 
+            <!-- Right: Recent Movements -->
             <div class="card">
                 <div class="card-header">
                     <h2>Recent Stock Movements</h2>
@@ -144,6 +166,118 @@ async function renderStock() {
             .low-stock-row { background: #fff5f5; }
         </style>
     `;
+}
+
+// ============================================================
+// Quick Stock Movement (inline form via modal)
+// ============================================================
+async function showQuickStockMovement() {
+    const productsResult = await window.api.getStockCurrent();
+    const products = productsResult.success ? productsResult.data : [];
+    const today = new Date().toISOString().split('T')[0];
+
+    showModal(`
+        <div class="modal-header">
+            <h2>📦 Record Stock Movement</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div style="background:linear-gradient(135deg,#fff8e1,#ffecb3);padding:12px 16px;border-radius:8px;margin-bottom:16px;border-left:4px solid #ffc107">
+                <div style="font-size:13px;font-weight:600;color:#e65100">💡 Tip</div>
+                <div style="font-size:12px;color:#ef6c00;margin-top:2px">Use positive quantity (+) for stock addition (inward) and negative quantity (-) for stock removal (outward).</div>
+            </div>
+            <form id="quickStockForm">
+                <div class="form-group">
+                    <label>Product *</label>
+                    <select class="form-control" name="product_id" required>
+                        <option value="">-- Select Product --</option>
+                        ${products.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (Current: ${formatNumber(p.current_balance)} ${escapeHtml(p.unit)})</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Date *</label>
+                        <input type="date" class="form-control" name="date" value="${today}">
+                    </div>
+                    <div class="form-group">
+                        <label>Quantity * (+/-)</label>
+                        <input type="number" class="form-control" name="quantity" value="0" step="0.01" placeholder="e.g. 10 or -5" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Rate (per unit, optional)</label>
+                        <input type="number" class="form-control" name="rate" value="0" min="0" step="0.01" placeholder="Leave 0 to keep current rate">
+                    </div>
+                    <div class="form-group">
+                        <label>Movement Type</label>
+                        <select class="form-control" name="type">
+                            <option value="adjustment">Adjustment</option>
+                            <option value="return_in">Return In</option>
+                            <option value="return_out">Return Out</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Reason / Notes</label>
+                    <input type="text" class="form-control" name="notes" placeholder="e.g. Damaged goods, inventory correction, restock">
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-warning" onclick="saveQuickStockMovement()">📝 Record Movement</button>
+        </div>
+    `);
+
+    // Live preview of selected product
+    const sel = document.querySelector('#quickStockForm select[name="product_id"]');
+    if (sel) {
+        sel.addEventListener('change', function() {
+            const opt = this.options[this.selectedIndex];
+            if (opt && opt.value) {
+                // Highlight the current stock info
+            }
+        });
+    }
+}
+
+async function saveQuickStockMovement() {
+    const form = document.getElementById('quickStockForm');
+    if (!form) return;
+    const formData = new FormData(form);
+
+    const productId = parseInt(formData.get('product_id'));
+    const quantity = parseFloat(formData.get('quantity') || 0);
+    const rate = parseFloat(formData.get('rate') || 0);
+    const notes = formData.get('notes') || 'Quick stock movement';
+    const date = formData.get('date') || today();
+
+    if (!productId) {
+        showToast('Please select a product', 'error');
+        return;
+    }
+    if (quantity === 0) {
+        showToast('Quantity cannot be zero', 'error');
+        return;
+    }
+
+    const result = await window.api.adjustStock({
+        product_id: productId,
+        date: date,
+        quantity: quantity,
+        rate: rate,
+        notes: notes
+    });
+
+    if (result.success) {
+        closeModal();
+        showToast('Stock movement recorded successfully!', 'success');
+        renderStock();
+    } else {
+        showToast('Error: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
 }
 
 function filterStockTable() {
@@ -507,3 +641,5 @@ window.viewProductMovement = viewProductMovement;
 window.filterStockTable = filterStockTable;
 window.printStockList = printStockList;
 window.exportStockPDF = exportStockPDF;
+window.showQuickStockMovement = showQuickStockMovement;
+window.saveQuickStockMovement = saveQuickStockMovement;

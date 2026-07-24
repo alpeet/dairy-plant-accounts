@@ -109,6 +109,70 @@ body {
     flex: 1;
 }
 
+.nav-group {
+    list-style: none;
+}
+
+.nav-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px 4px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.nav-group-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+
+.nav-group-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.35);
+    transition: color 0.2s ease;
+}
+
+.nav-group-header:hover .nav-group-label {
+    color: rgba(255,255,255,0.5);
+}
+
+.nav-group-chevron {
+    font-size: 10px;
+    color: rgba(255,255,255,0.25);
+    transition: transform 0.25s ease, color 0.2s ease;
+    line-height: 1;
+}
+
+.nav-group-header:hover .nav-group-chevron {
+    color: rgba(255,255,255,0.45);
+}
+
+/* Collapsed state: rotate chevron */
+.nav-group.collapsed .nav-group-chevron {
+    transform: rotate(-90deg);
+}
+
+/* Collapsed state: hide items with animation */
+.nav-group-items {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+    overflow: hidden;
+    max-height: 1500px;
+    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+    opacity: 1;
+}
+
+.nav-group.collapsed .nav-group-items {
+    max-height: 0;
+    opacity: 0;
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+
 .nav-item {
     padding: 10px 20px;
     cursor: pointer;

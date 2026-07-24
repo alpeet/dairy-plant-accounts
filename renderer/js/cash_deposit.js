@@ -24,9 +24,31 @@ async function renderCashDeposit() {
             <div class="btn-group">
                 <button class="btn btn-info btn-sm" onclick="printCashDeposit()">🖨 Print</button>
                 <button class="btn btn-primary btn-sm" onclick="exportCashDepositPDF()">📄 PDF</button>
-                <button class="btn btn-success btn-sm" onclick="showAddCashDeposit()">+ New Deposit</button>
             </div>
         </div>
+
+        <!-- Prominent Action Card: New Deposit -->
+        <div style="background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-radius:12px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;border:2px dashed #64b5f6;transition:all 0.2s"
+             onclick="showAddCashDeposit()"
+             onmouseover="this.style.background='linear-gradient(135deg,#bbdefb,#90caf9)';this.style.borderColor='#2196f3';this.style.transform='translateY(-2px)'"
+             onmouseout="this.style.background='linear-gradient(135deg,#e3f2fd,#bbdefb)';this.style.borderColor='#64b5f6';this.style.transform='none'">
+            <div>
+                <div style="display:flex;align-items:center;gap:12px">
+                    <span style="font-size:28px">🏦</span>
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#1565c0">➕ Record New Bank Deposit</div>
+                        <div style="font-size:13px;color:#1976d2;margin-top:2px">Deposit cash on hand to the bank — track by bank, account, and deposit mode</div>
+                    </div>
+                </div>
+            </div>
+            <div style="text-align:right">
+                <div style="font-size:14px;font-weight:600;color:#1565c0">
+                    ${summary.total_count > 0 ? `This period: ${formatCurrency(summary.total_deposited)}` : 'No deposits yet'}
+                </div>
+                <div style="font-size:12px;color:#1976d2">Click to add →</div>
+            </div>
+        </div>
+
         <div class="filter-bar">
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="cdFrom" value="${preset.from}"></div>
             <div class="form-group"><label>To</label><input type="date" class="form-control" id="cdTo" value="${preset.to}"></div>

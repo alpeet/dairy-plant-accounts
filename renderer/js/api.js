@@ -125,6 +125,8 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
 
         // Daily Cash Collection
         getDailyCashCollection: (opts) => apiPost('/cash/daily-collection', opts || {}),
+        saveCashCollection: (data) => apiPost('/cash/collection-save', data),
+        deleteCashCollection: (id) => apiPost('/cash/collection-delete', { id }),
 
         // Denomination
         getDenominations: (opts) => apiPost('/denominations/list', opts || {}),
