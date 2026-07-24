@@ -278,7 +278,6 @@ async function saveQuickStockMovement() {
         showToast('Error: ' + (result.error || 'Unknown error'), 'error');
     }
 }
-}
 
 function filterStockTable() {
     const search = (document.getElementById('stockSearch')?.value || '').toLowerCase();
