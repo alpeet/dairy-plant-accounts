@@ -25,7 +25,7 @@ services:
     buildCommand: npm install --production --ignore-scripts && npm rebuild better-sqlite3
     # Run the Excel import on startup (idempotent - skips if data already exists)
     # Server starts regardless of import result (semicolon, not &&)
-    startCommand: node import-excel.js --force; npm start
+    startCommand: node import-excel.js; npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
