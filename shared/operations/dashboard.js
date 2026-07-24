@@ -21,6 +21,40 @@ function getDashboard(db) {
         "SELECT COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(paid_amount), 0) as paid FROM purchases WHERE date = ?"
     ).get(today);
 
+    // ── Cash Position ──
+    const todayCashSales = db.prepare(
+        "SELECT COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(paid_amount), 0) as paid FROM sales WHERE date = ? AND payment_mode = 'cash'"
+    ).get(today);
+
+    const todayCashReceipts = db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE date = ? AND type = 'receipt' AND mode = 'cash'"
+    ).get(today);
+
+    const todayCashPayments = db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE date = ? AND type = 'payment' AND mode = 'cash'"
+    ).get(today);
+
+    const todayPettyCash = db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM petty_cash WHERE date = ?"
+    ).get(today);
+
+    const todayExpenses = db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM other_expenses WHERE date = ?"
+    ).get(today);
+
+    const todayVehicle = db.prepare(
+        "SELECT COALESCE(SUM(total_amount), 0) as total FROM vehicle_expenses WHERE date = ?"
+    ).get(today);
+
+    const todayCashDeposits = db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM cash_deposits WHERE date = ?"
+    ).get(today);
+
+    const cashIn = (todayCashSales.total || 0) + (todayCashReceipts.total || 0);
+    const cashOut = (todayCashPayments.total || 0) + (todayPettyCash.total || 0) + (todayExpenses.total || 0) + (todayVehicle.total || 0) + (todayCashDeposits.total || 0);
+    const netCash = cashIn - cashOut;
+
+    // ── Receivables & Payables ──
     const receivables = db.prepare(
         "SELECT COALESCE(SUM(grand_total - paid_amount), 0) as total FROM sales WHERE status IN ('unpaid', 'partial')"
     ).get();
@@ -29,6 +63,11 @@ function getDashboard(db) {
         "SELECT COALESCE(SUM(grand_total - paid_amount), 0) as total FROM purchases WHERE status IN ('unpaid', 'partial')"
     ).get();
 
+    // ── Quick Profit Snapshot (Today) ──
+    const todayTotalExpenses = (todayPurchases.total || 0) + (todayPettyCash.total || 0) + (todayExpenses.total || 0) + (todayVehicle.total || 0);
+    const todayProfit = (todaySales.total || 0) - todayTotalExpenses;
+
+    // ── Stock Summary ──
     const stockSummary = db.prepare(
         "SELECT COUNT(*) as product_count, COALESCE(SUM(balance_after * rate), 0) as stock_value FROM (SELECT product_id, rate, (SELECT inward_qty - outward_qty FROM stock_movements sm2 WHERE sm2.product_id = sm.product_id ORDER BY id DESC LIMIT 1) as balance_after FROM stock_movements sm GROUP BY product_id) WHERE balance_after > 0"
     ).get();
@@ -66,8 +105,30 @@ function getDashboard(db) {
     return {
         todaySales,
         todayPurchases,
+        // Cash position
+        cashPosition: {
+            cash_in: cashIn,
+            cash_out: cashOut,
+            net_cash: netCash,
+            cash_sales: todayCashSales.total || 0,
+            cash_receipts: todayCashReceipts.total || 0,
+            cash_payments: todayCashPayments.total || 0,
+            petty_cash: todayPettyCash.total || 0,
+            expenses: todayExpenses.total || 0,
+            vehicle: todayVehicle.total || 0,
+            cash_deposits: todayCashDeposits.total || 0
+        },
+        // Receivables / Payables
         receivables,
         payables,
+        netReceivable: (receivables?.total || 0) - (payables?.total || 0),
+        // Quick profit snapshot
+        profitSnapshot: {
+            total_income: todaySales.total || 0,
+            total_expenses: todayTotalExpenses,
+            net_profit: todayProfit
+        },
+        // Stock
         stockSummary: {
             product_count: productCount ? productCount.count : 0,
             stock_value: stockSummary ? stockSummary.stock_value : 0

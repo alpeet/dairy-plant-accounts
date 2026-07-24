@@ -134,6 +134,16 @@ async function renderSettings() {
             </div>
         </div>
 
+        <div class="card" style="max-width:700px;margin-top:20px">
+            <div class="card-header">
+                <h2>🗃️ Database Tables</h2>
+                <button class="btn btn-secondary btn-sm" onclick="loadTableInfo()">🔄 Refresh</button>
+            </div>
+            <div id="tableInfoContainer">
+                <p style="color:var(--text-light);font-size:13px;padding:12px">Loading table information...</p>
+            </div>
+        </div>
+
         <div class="card" style="max-width:600px;margin-top:20px">
             <div class="card-header">
                 <h2>About</h2>
@@ -144,7 +154,7 @@ async function renderSettings() {
                 <p>Built with Electron + SQLite.</p>
                 <p style="margin-top:12px;font-size:12px">
                     <strong>Stack:</strong> Electron 22, better-sqlite3, vanilla JS<br>
-                    <strong>Database:</strong> SQLite (local, offline)<br>
+                    <strong>Database:</strong> SQLite (local, offline) — 27 tables in 8 functional groups<br>
                     <strong>PDF:</strong> Electron built-in printToPDF
                 </p>
             </div>
@@ -155,6 +165,8 @@ async function renderSettings() {
     showDbPath();
     // Load users list
     loadUsersList();
+    // Load database table info
+    loadTableInfo();
 }
 
 // ============================================================
@@ -591,6 +603,117 @@ async function backupDatabase() {
     }
 }
 
+// ============================================================
+// Database Table Info
+// ============================================================
+
+async function loadTableInfo() {
+    const container = document.getElementById('tableInfoContainer');
+    if (!container) return;
+
+    container.innerHTML = '<p style="color:var(--text-light);font-size:13px;padding:12px">Loading...</p>';
+
+    const result = await window.api.getTableInfo();
+    if (!result.success) {
+        container.innerHTML = `<p style="color:var(--danger);font-size:13px">Error: ${escapeHtml(result.error)}</p>`;
+        return;
+    }
+
+    const data = result.data;
+    if (!data || !data.groups) {
+        container.innerHTML = '<p style="color:var(--text-light);font-size:13px">No table information available.</p>';
+        return;
+    }
+
+    // Summary bar
+    const dbSizeStr = data.summary.db_size > 0
+        ? (data.summary.db_size < 1024 * 1024
+            ? (data.summary.db_size / 1024).toFixed(1) + ' KB'
+            : (data.summary.db_size / (1024 * 1024)).toFixed(2) + ' MB')
+        : 'Unknown';
+
+    let html = `
+        <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+            <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                <div style="font-size:24px;font-weight:700;color:var(--primary)">${data.summary.total_tables}</div>
+                <div style="font-size:11px;color:var(--text-light)">Total Tables</div>
+            </div>
+            <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                <div style="font-size:24px;font-weight:700;color:var(--accent)">${data.summary.total_rows.toLocaleString('en-IN')}</div>
+                <div style="font-size:11px;color:var(--text-light)">Total Records</div>
+            </div>
+            <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                <div style="font-size:24px;font-weight:700;color:var(--info)">${data.groups.length}</div>
+                <div style="font-size:11px;color:var(--text-light)">Functional Groups</div>
+            </div>
+            <div style="flex:1;min-width:100px;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                <div style="font-size:24px;font-weight:700;color:var(--warning)">${dbSizeStr}</div>
+                <div style="font-size:11px;color:var(--text-light)">Database Size</div>
+            </div>
+        </div>
+    `;
+
+    // Grouped tables
+    data.groups.forEach(group => {
+        const isExpanded = true; // Start expanded
+        html += `
+            <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+                <div style="padding:10px 14px;background:var(--bg);display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="toggleTableGroup(this)">
+                    <div>
+                        <strong style="font-size:14px">${group.category}</strong>
+                        <span style="font-size:11px;color:var(--text-light);margin-left:8px">${group.description}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <span style="font-size:11px;color:var(--text-light)">${group.table_count} tables · ${group.total_rows.toLocaleString('en-IN')} records</span>
+                        <span style="font-size:12px;transition:transform 0.2s" class="group-toggle-icon">▼</span>
+                    </div>
+                </div>
+                <div class="table-group-body" style="border-top:1px solid var(--border)">
+                    <table style="width:100%;font-size:12px;border-collapse:collapse">
+                        <thead>
+                            <tr style="background:var(--bg)">
+                                <th style="padding:6px 14px;text-align:left;font-weight:600">Table Name</th>
+                                <th style="padding:6px 14px;text-align:right;font-weight:600">Records</th>
+                                <th style="padding:6px 14px;text-align:center;font-weight:600">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${group.tables.map(t => `
+                                <tr style="border-top:1px solid var(--border)">
+                                    <td style="padding:6px 14px;font-family:monospace;font-size:12px">
+                                        ${escapeHtml(t.name)}
+                                    </td>
+                                    <td style="padding:6px 14px;text-align:right;font-weight:${t.row_count > 0 ? '600' : '400'};color:${t.row_count > 0 ? 'var(--accent)' : 'var(--text-light)'}">
+                                        ${t.row_count.toLocaleString('en-IN')}
+                                    </td>
+                                    <td style="padding:6px 14px;text-align:center">
+                                        ${t.exists
+                                            ? '<span style="color:var(--accent);font-size:11px">● Active</span>'
+                                            : '<span style="color:var(--danger);font-size:11px">● Missing</span>'
+                                        }
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+function toggleTableGroup(headerEl) {
+    const body = headerEl.nextElementSibling;
+    const icon = headerEl.querySelector('.group-toggle-icon');
+    if (body && icon) {
+        const isHidden = body.style.display === 'none';
+        body.style.display = isHidden ? '' : 'none';
+        icon.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
+    }
+}
+
 // Globals
 window.saveSettings = saveSettings;
 window.backupDatabase = backupDatabase;
@@ -604,3 +727,5 @@ window.changePassword = changePassword;
 window.loadBackupHistory = loadBackupHistory;
 window.downloadBackup = downloadBackup;
 window.deleteBackupFile = deleteBackupFile;
+window.loadTableInfo = loadTableInfo;
+window.toggleTableGroup = toggleTableGroup;

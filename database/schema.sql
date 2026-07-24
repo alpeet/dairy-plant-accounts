@@ -1,5 +1,49 @@
 -- Godhuli Dairy Plant - Database Schema
 -- SQLite
+-- 27 tables grouped into 8 functional categories
+--
+-- ════════════════════════════════════════════════════════════
+-- FUNCTIONAL TABLE CLASSIFICATION
+-- ════════════════════════════════════════════════════════════
+--
+-- 👥 MASTER DATA (5 tables)
+--   parties, products, routes, users, settings
+--   → Core entities that everything else references
+--
+-- 🥛 MILK OPERATIONS (2 tables)
+--   milk_collections, milk_rate_chart
+--   → Daily milk intake from farmers + pricing rules
+--
+-- 💰 TRANSACTIONS (5 tables)
+--   sales, sales_items, purchases, purchase_items, payments
+--   → Buy/Sell invoices, payments, receipts
+--
+-- 📊 FINANCIAL LEDGER (1 table)
+--   ledger_entries
+--   → Double-entry bookkeeping for all party transactions
+--
+-- 🏭 PRODUCTION (3 tables)
+--   production_batches, production_inputs, production_outputs
+--   → Raw milk processing into finished products
+--
+-- 📦 INVENTORY (1 table)
+--   stock_movements
+--   → Inventory movement tracking (inward/outward/balance)
+--
+-- 💵 CASH & BANKING (3 tables)
+--   denomination_counts, petty_cash, cash_deposits
+--   → Cash counting, small expenses, bank deposits
+--
+-- 💸 FINANCIAL (4 tables)
+--   salary_records, vehicle_expenses, other_expenses, partner_capital
+--   → Payroll, operational costs, partner investments
+--
+-- 📋 AUDIT & SYSTEM (3 tables)
+--   audit_log, milk_rate_chart_history (future)
+--   → Change tracking, system monitoring
+--
+-- Total: 27 tables across 8 functional groups
+-- ════════════════════════════════════════════════════════════
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -404,6 +448,28 @@ CREATE TABLE IF NOT EXISTS petty_cash (
 );
 
 -- ============================================================
+-- CASH DEPOSITS (bank deposits from cash)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cash_deposits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    deposit_no TEXT NOT NULL,
+    bank_name TEXT NOT NULL DEFAULT '',
+    branch TEXT DEFAULT '',
+    account_no TEXT DEFAULT '',
+    amount REAL NOT NULL DEFAULT 0.0,
+    cash_source TEXT DEFAULT '' CHECK(cash_source IN ('sales', 'receipts', 'mixed', 'other')),
+    deposit_mode TEXT DEFAULT 'cash' CHECK(deposit_mode IN ('cash', 'cheque', 'transfer', 'online')),
+    reference_no TEXT DEFAULT '',
+    remarks TEXT DEFAULT '',
+    deposited_by TEXT DEFAULT '',
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- ============================================================
 -- SALARY / PAYROLL RECORDS
 -- ============================================================
 CREATE TABLE IF NOT EXISTS salary_records (
@@ -512,3 +578,5 @@ CREATE INDEX IF NOT EXISTS idx_rate_chart_date ON milk_rate_chart(effective_from
 CREATE INDEX IF NOT EXISTS idx_production_date ON production_batches(date);
 CREATE INDEX IF NOT EXISTS idx_partner_capital_party ON partner_capital(party_id);
 CREATE INDEX IF NOT EXISTS idx_parties_route ON parties(route_id);
+CREATE INDEX IF NOT EXISTS idx_cash_deposits_date ON cash_deposits(date);
+CREATE INDEX IF NOT EXISTS idx_cash_deposits_bank ON cash_deposits(bank_name);

@@ -23,6 +23,12 @@ const pageModules = {
     'partner-capital': renderPartnerCapital,
     'rate-charts': renderRateCharts,
     'audit-log': renderAuditLog,
+    'profit-loss': renderFinancialReports,
+    'receivable-payable': showReceivablePayable,
+    'cash-collection': showCashCollectionPage,
+    'cash-deposit': renderCashDeposit,
+    daybook: showDaybookPage,
+    'stock-statement': showStockStatement,
     settings: renderSettings
 };
 
@@ -46,6 +52,12 @@ const pageTitles = {
     'partner-capital': 'Partner Capital Management',
     'rate-charts': 'Milk Rate Chart',
     'audit-log': 'Audit Log',
+    'profit-loss': 'Profit & Loss',
+    'receivable-payable': 'Receivable / Payable',
+    'cash-collection': 'Cash Collection',
+    'cash-deposit': 'Cash Deposit',
+    daybook: 'Daybook',
+    'stock-statement': 'Stock Statement',
     settings: 'Settings'
 };
 

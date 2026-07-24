@@ -114,6 +114,9 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getPayables: () => apiPost('/reports/payables'),
         getSalesRegister: (opts) => apiPost('/reports/sales-register', opts || {}),
         getPurchaseRegister: (opts) => apiPost('/reports/purchase-register', opts || {}),
+        getProfitLoss: (opts) => apiPost('/reports/profit-loss', opts || {}),
+        getStockStatement: (opts) => apiPost('/reports/stock-statement', opts || {}),
+        getEnhancedDaybook: (opts) => apiPost('/reports/enhanced-daybook', opts || {}),
         getTodaySummary: () => apiPost('/reports/today-summary'),
 
         // Statements
@@ -193,6 +196,13 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getAuditLogs: (opts) => apiPost('/audit/logs', opts || {}),
 
         // Payments
+        // Cash Deposits
+        getCashDeposits: (opts) => apiPost('/cash-deposits/list', opts || {}),
+        getCashDeposit: (id) => apiPost('/cash-deposits/get', { id }),
+        saveCashDeposit: (data) => apiPost('/cash-deposits/save', data),
+        deleteCashDeposit: (id) => apiPost('/cash-deposits/delete', { id }),
+        getCashDepositSummary: (opts) => apiPost('/cash-deposits/summary', opts || {}),
+
         savePayment: (payment) => apiPost('/payments/save', payment),
         getPayments: (opts) => apiPost('/payments/list', opts || {}),
 
@@ -210,6 +220,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         backupDatabase: () => apiPost('/backup'),
         listBackups: () => apiPost('/backup/list'),
         deleteBackup: (filename) => apiPost('/backup/delete', { filename }),
+        getTableInfo: () => apiPost('/db/table-info'),
         getDatabasePath: () => apiPost('/db-path'),
 
         // Print / PDF (web version: returns HTML, use window.print() instead)

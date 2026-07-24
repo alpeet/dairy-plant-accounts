@@ -855,6 +855,21 @@ app.post('/api/reports/payables', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Financial Reports — Profit/Loss, Stock Statement
+// ──────────────────────────────────────────────────────────────
+app.post('/api/reports/profit-loss', (req, res) => {
+    res.json(safeRun(() => ops.getProfitLoss(db, req.body || {})));
+});
+
+app.post('/api/reports/stock-statement', (req, res) => {
+    res.json(safeRun(() => ops.getStockStatement(db, req.body || {})));
+});
+
+app.post('/api/reports/enhanced-daybook', (req, res) => {
+    res.json(safeRun(() => ops.getEnhancedDaybook(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Payments
 // ──────────────────────────────────────────────────────────────
 app.post('/api/payments/save', (req, res) => {
@@ -890,6 +905,29 @@ app.post('/api/statements/parties-with-balance', (req, res) => {
 // ──────────────────────────────────────────────────────────────
 app.post('/api/cash/daily-collection', (req, res) => {
     res.json(safeRun(() => ops.getDailyCashCollection(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Cash Deposits
+// ──────────────────────────────────────────────────────────────
+app.post('/api/cash-deposits/list', (req, res) => {
+    res.json(safeRun(() => ops.listCashDeposits(db, req.body || {})));
+});
+
+app.post('/api/cash-deposits/get', (req, res) => {
+    res.json(safeRun(() => ops.getCashDeposit(db, req.body.id)));
+});
+
+app.post('/api/cash-deposits/save', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveCashDeposit(db, req.body)));
+});
+
+app.post('/api/cash-deposits/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteCashDeposit(db, req.body.id)));
+});
+
+app.post('/api/cash-deposits/summary', (req, res) => {
+    res.json(safeRun(() => ops.getCashDepositSummary(db, req.body || {})));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1131,6 +1169,13 @@ app.post('/api/partners/statement', requireRole('accountant'), (req, res) => {
 
 app.post('/api/partners/with-balance', requireRole('accountant'), (req, res) => {
     res.json(safeRun(() => ops.listPartnersWithBalance(db)));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Database Table Info (any authenticated user)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/db/table-info', (req, res) => {
+    res.json(safeRun(() => ops.getTableInfo(db)));
 });
 
 // ──────────────────────────────────────────────────────────────

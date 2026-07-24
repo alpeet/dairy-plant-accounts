@@ -23,8 +23,33 @@ async function renderDashboard() {
     const t = todayResult.success ? todayResult.data : { todaySales: { total: 0, paid: 0 }, todayPurchases: { total: 0, paid: 0 }, todayPettyCash: { total: 0 }, todayExpenses: { total: 0 }, todayVehicleExpenses: { total: 0 } };
     const settings = await getSettingsCached();
 
+    const cp = d.cashPosition || { cash_in: 0, cash_out: 0, net_cash: 0 };
+    const nr = d.netReceivable || 0;
+    const ps = d.profitSnapshot || { total_income: 0, total_expenses: 0, net_profit: 0 };
+    const totalReceivable = d.receivables?.total || 0;
+    const totalPayable = d.payables?.total || 0;
+
     container.innerHTML = `
-        <!-- Summary Cards -->
+        <!-- Financial Summary Cards (New) -->
+        <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px">
+            <div class="summary-card ${cp.net_cash >= 0 ? 'card-success' : 'card-danger'}" style="margin:0;cursor:pointer" onclick="navigateTo('cash-collection')" title="Click for details">
+                <span class="label">💵 Today's Cash Position</span>
+                <span class="value" style="font-size:22px">${formatCurrency(cp.net_cash)}</span>
+                <span class="sub">In: ${formatCurrency(cp.cash_in)} | Out: ${formatCurrency(cp.cash_out)}</span>
+            </div>
+            <div class="summary-card ${nr >= 0 ? 'card-primary' : 'card-warning'}" style="margin:0;cursor:pointer" onclick="navigateTo('receivable-payable')" title="Click for details">
+                <span class="label">💰 Receivables vs Payables</span>
+                <span class="value" style="font-size:22px">${formatCurrency(nr)}</span>
+                <span class="sub">Receivable: ${formatCurrency(totalReceivable)} | Payable: ${formatCurrency(totalPayable)}</span>
+            </div>
+            <div class="summary-card ${ps.net_profit >= 0 ? 'card-info' : 'card-danger'}" style="margin:0;cursor:pointer" onclick="navigateTo('profit-loss')" title="Click for details">
+                <span class="label">📊 Today's Profit Snapshot</span>
+                <span class="value" style="font-size:22px">${formatCurrency(ps.net_profit)}</span>
+                <span class="sub">Income: ${formatCurrency(ps.total_income)} | Expenses: ${formatCurrency(ps.total_expenses)}</span>
+            </div>
+        </div>
+
+        <!-- Core Summary Cards -->
         <div class="summary-cards">
             <div class="summary-card card-primary">
                 <span class="label">Today's Sales</span>

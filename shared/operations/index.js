@@ -79,6 +79,16 @@ const {
     deleteOtherExpense, getExpenseCategories, getExpensesSummary
 } = require('./expenses');
 const { logAudit, getAuditLogs } = require('./audit');
+const { getTableInfo } = require('./table_info');
+
+// ── Financial Reports ──
+const { getProfitLoss, getStockStatement, getEnhancedDaybook } = require('./financial_reports');
+
+// ── Cash Deposits ──
+const {
+    listCashDeposits, getCashDeposit, saveCashDeposit,
+    deleteCashDeposit, getCashDepositSummary, generateDepositNo
+} = require('./cash_deposit');
 
 // ── Routes, Rates, Production, Partners ──
 const { listRoutes, getRoute, saveRoute, deleteRoute, getRouteSummary } = require('./routes');
@@ -154,6 +164,16 @@ module.exports = {
     // Other Expenses
     listOtherExpenses, getOtherExpense, saveOtherExpense,
     deleteOtherExpense, getExpenseCategories, getExpensesSummary,
+
+    // Financial Reports
+    getProfitLoss, getStockStatement, getEnhancedDaybook,
+
+    // Cash Deposits
+    listCashDeposits, getCashDeposit, saveCashDeposit,
+    deleteCashDeposit, getCashDepositSummary, generateDepositNo,
+
+    // Database Table Info
+    getTableInfo,
 
     // Audit
     logAudit, getAuditLogs,
