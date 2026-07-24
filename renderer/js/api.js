@@ -222,6 +222,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         backupDatabase: () => apiPost('/backup'),
         listBackups: () => apiPost('/backup/list'),
         deleteBackup: (filename) => apiPost('/backup/delete', { filename }),
+        restoreBackup: (filename) => apiPost('/backup/restore', { filename }),
         getTableInfo: () => apiPost('/db/table-info'),
         getDatabasePath: () => apiPost('/db-path'),
 

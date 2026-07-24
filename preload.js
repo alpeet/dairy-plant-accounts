@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Backup
     backupDatabase: () => ipcRenderer.invoke('db:backup'),
+    restoreBackup: (filename) => ipcRenderer.invoke('db:restore', filename),
     getDatabasePath: () => ipcRenderer.invoke('db:path'),
 
     // Print / PDF

@@ -21,6 +21,8 @@ async function showProfitLoss() {
     };
     _finLastData.profitLoss = data;
 
+    const isEmpty = data.income.total_income === 0 && data.expenses.total_expenses === 0 && data.sales_count === 0 && data.milk_collection_count === 0;
+
     container.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
             <h2 style="margin:0">📊 Profit & Loss Statement</h2>
@@ -32,7 +34,25 @@ async function showProfitLoss() {
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="plFrom" value="${preset.from}"></div>
             <div class="form-group"><label>To</label><input type="date" class="form-control" id="plTo" value="${preset.to}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLoss()">Generate</button></div>
+            <div class="form-group"><label>&nbsp;</label>
+                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('today');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">Today</button>
+                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('this_month');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">This Month</button>
+                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('last_month');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">Last Month</button>
+            </div>
         </div>
+        ${isEmpty ? `
+        <div style="text-align:center;padding:40px 20px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:16px">
+            <div style="font-size:48px;margin-bottom:12px">📊</div>
+            <h3 style="font-size:16px;margin-bottom:8px;color:var(--text-light)">No Transactions Found</h3>
+            <p style="font-size:13px;color:var(--text-light);max-width:400px;margin:0 auto;line-height:1.6">
+                There are no sales, purchases, expenses, or other transactions recorded for this period.
+                <br><br>
+                <strong>Period:</strong> ${data.from_date || preset.from} to ${data.to_date || preset.to}
+                <br><br>
+                <span style="font-size:12px">Try selecting a different date range or record some transactions first.</span>
+            </p>
+        </div>
+        ` : `
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="summary-card card-success" style="margin:0;padding:12px">
                 <span class="label">💰 Total Income</span>
@@ -86,6 +106,7 @@ async function showProfitLoss() {
                 Period: ${data.from_date || preset.from} to ${data.to_date || preset.to}
             </span>
         </div>
+        `}
     `;
 }
 

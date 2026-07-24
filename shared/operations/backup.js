@@ -131,6 +131,54 @@ function deleteBackup(dbPath, filename) {
 }
 
 /**
+ * Restore the database from a backup file.
+ * Creates a backup of the current database first, then copies the backup over.
+ * @param {string} dbPath - Full path to the current database file
+ * @param {string} filename - Backup filename to restore from
+ * @param {function} [closeDb] - Optional function to close the database before restore
+ * @returns {object} { path: restoredPath, filename: restoredFrom, size: fileSize, createdAt: timestamp }
+ */
+function restoreDatabase(dbPath, filename, closeDb) {
+    const backups = listBackups(dbPath);
+    const target = backups.find(b => b.filename === filename);
+    if (!target) {
+        throw new Error(`Backup not found: ${filename}`);
+    }
+
+    if (!fs.existsSync(target.path)) {
+        throw new Error(`Backup file does not exist: ${target.path}`);
+    }
+
+    // Close the database connection if a close function was provided
+    if (typeof closeDb === 'function') {
+        closeDb();
+    }
+
+    // Create a safety backup of the current database before restoring
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const preRestoreBackupPath = dbPath + '.pre-restore-' + timestamp;
+    if (fs.existsSync(dbPath)) {
+        fs.copyFileSync(dbPath, preRestoreBackupPath);
+        console.log(`  → Pre-restore safety backup saved: ${preRestoreBackupPath}`);
+    }
+
+    // Copy the backup file to the database path
+    fs.copyFileSync(target.path, dbPath);
+
+    const stats = fs.statSync(dbPath);
+
+    console.log(`  → Database restored from backup: ${filename}`);
+
+    return {
+        path: dbPath,
+        filename: filename,
+        preRestoreBackup: preRestoreBackupPath,
+        size: stats.size,
+        createdAt: new Date().toISOString()
+    };
+}
+
+/**
  * Format file size for human readability.
  * @param {number} bytes - File size in bytes
  * @returns {string} Formatted size string
@@ -145,6 +193,7 @@ module.exports = {
     backupDatabase,
     listBackups,
     deleteBackup,
+    restoreDatabase,
     formatFileSize,
     getBackupDir
 };

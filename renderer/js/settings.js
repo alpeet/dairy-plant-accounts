@@ -515,6 +515,7 @@ async function loadBackupHistory() {
                             <td style="padding:8px 10px;color:var(--text-light)">${formatFileSize(b.size)}</td>
                             <td style="padding:8px 10px;text-align:right">
                                 <button class="btn btn-primary btn-sm" onclick="downloadBackup('${escapeHtml(b.filename)}')" style="font-size:11px;padding:3px 10px">⬇ Download</button>
+                                <button class="btn btn-success btn-sm" onclick="restoreBackupFile('${escapeHtml(b.filename)}')" style="font-size:11px;padding:3px 10px">🔄 Restore</button>
                                 <button class="btn btn-danger btn-sm" onclick="deleteBackupFile('${escapeHtml(b.filename)}')" style="font-size:11px;padding:3px 10px">🗑 Delete</button>
                             </td>
                         </tr>
@@ -579,6 +580,29 @@ async function deleteBackupFile(filename) {
         loadBackupHistory();
     } else {
         showToast(`Error: ${result.error}`, 'error');
+    }
+}
+
+async function restoreBackupFile(filename) {
+    const confirmed = await confirmAction(
+        `⚠️ Restore database from backup?`,
+        `This will REPLACE your current database with the backup: "${filename}".\n\nA safety backup of your current data will be created automatically before the restore.\n\nThe app will need to reload after restore.`,
+        'Yes, Restore',
+        'Cancel'
+    );
+    if (!confirmed) return;
+
+    showToast('⏳ Restoring backup... This may take a moment.', 'info');
+
+    const result = await window.api.restoreBackup(filename);
+    if (result.success) {
+        showToast(`✅ Database restored from: ${filename}. Reloading app...`, 'success');
+        // Reload the app to reconnect with the restored database
+        setTimeout(() => {
+            window.location.reload();
+        }, 2000);
+    } else {
+        showToast(`Restore failed: ${result.error}`, 'error');
     }
 }
 
@@ -946,6 +970,7 @@ window.changePassword = changePassword;
 window.loadBackupHistory = loadBackupHistory;
 window.downloadBackup = downloadBackup;
 window.deleteBackupFile = deleteBackupFile;
+window.restoreBackupFile = restoreBackupFile;
 window.loadTableInfo = loadTableInfo;
 window.toggleTableGroup = toggleTableGroup;
 window.renderDBTables = renderDBTables;

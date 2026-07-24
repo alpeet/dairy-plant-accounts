@@ -1,0 +1,66 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ master, main ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+  pull_request:
+    branches: [ master, main ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+  workflow_dispatch:        # Allow manual trigger from GitHub UI
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        arch: [x64]         # Add arm64 if you also need Windows ARM build
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔧 Rebuild native modules (better-sqlite3)
+        run: npm run rebuild
+        env:
+          npm_config_build_from_source: true
+
+      - name: 🏗️ Build Windows installer
+        run: npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # For GitHub release uploads (optional)
+
+      - name: 📤 Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Godhuli-Dairy-Plant-Windows-${{ matrix.arch }}
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 📤 Upload unpacked app (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Godhuli-Dairy-Plant-Windows-${{ matrix.arch }}-unpacked
+          path: dist/win-${{ matrix.arch }}-unpacked/
+          if-no-files-found: warn
+          retention-days: 7

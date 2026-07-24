@@ -1275,6 +1275,44 @@ app.post('/api/backup/delete', requireRole('admin'), (req, res) => {
     }
 });
 
+// POST /api/backup/restore — Restore database from a backup (admin only)
+app.post('/api/backup/restore', requireRole('admin'), (req, res) => {
+    try {
+        const { filename } = req.body || {};
+        if (!filename) {
+            return res.json({ success: false, error: 'Backup filename is required' });
+        }
+        const result = ops.restoreDatabase(
+            path.join(dbDir, 'dairy-plant.db'),
+            filename,
+            () => {
+                // Close the current database connection before restore
+                try {
+                    if (db && typeof db.close === 'function') {
+                        db.close();
+                        console.log('  → Database connection closed for restore');
+                    }
+                } catch (e) {
+                    console.error('  ⚠️ Error closing database:', e.message);
+                }
+            }
+        );
+
+        // Re-initialize the database after restore
+        try {
+            db = initDatabase(dbDir);
+            console.log('  ✅ Database re-initialized after restore');
+        } catch (err) {
+            console.error('  ❌ Failed to re-initialize database after restore:', err.message);
+            return res.json({ success: false, error: 'Backup restored but failed to re-initialize: ' + err.message });
+        }
+
+        res.json({ success: true, data: result });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
 app.post('/api/db-path', (req, res) => {
     res.json({ success: true, data: path.join(dbDir, 'dairy-plant.db') });
 });

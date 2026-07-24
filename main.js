@@ -236,6 +236,36 @@ ipcMain.handle('db:backup', async () => {
     return safeRun(() => ops.backupDatabase(path.join(getDbDir(), 'dairy-plant.db')));
 });
 
+// --- Restore ---
+ipcMain.handle('db:restore', async (event, filename) => {
+    return safeRun(() => {
+        const result = ops.restoreDatabase(
+            path.join(getDbDir(), 'dairy-plant.db'),
+            filename,
+            () => {
+                // Close the current database connection before restore
+                try {
+                    if (db && typeof db.close === 'function') {
+                        db.close();
+                        console.log('  → Database connection closed for restore');
+                    }
+                } catch (e) {
+                    console.error('  ⚠️ Error closing database:', e.message);
+                }
+            }
+        );
+        // Re-initialize the database after restore
+        try {
+            db = initDatabase(getDbDir());
+            console.log('  ✅ Database re-initialized after restore');
+        } catch (err) {
+            console.error('  ❌ Failed to re-initialize database after restore:', err.message);
+            throw new Error('Backup restored but failed to re-initialize: ' + err.message);
+        }
+        return result;
+    });
+});
+
 // --- Print handlers ---
 ipcMain.handle('print:pdf', async (event, { html, landscape, pageSize } = {}) => {
     try {
