@@ -12,9 +12,22 @@ let db = null;
 // Database initialization
 // ============================================================
 
-/** Shared database directory — same as web server, so data is shared between versions */
+/**
+ * Shared database directory — same as web server, so data is shared between versions.
+ *
+ * Priority:
+ *   1. DB_DIR environment variable (for custom/USB setups)
+ *   2. app.getPath('userData')/data — standard Electron user data (production builds)
+ *   3. path.join(__dirname, 'data') — project root (development mode)
+ */
 function getDbDir() {
-    return process.env.DB_DIR || path.join(__dirname, 'data');
+    if (process.env.DB_DIR) return process.env.DB_DIR;
+    // When packaged (installed via NSIS/DMG), __dirname is inside read-only asar.
+    // Use Electron's userData directory which is always writable.
+    if (app.isPackaged) {
+        return path.join(app.getPath('userData'), 'data');
+    }
+    return path.join(__dirname, 'data');
 }
 
 function initAppDatabase() {

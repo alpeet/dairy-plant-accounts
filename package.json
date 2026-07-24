@@ -10,7 +10,7 @@
     "seed": "electron database/seed-electron.js",
     "seed:web": "node database/seed.js",
     "seed:demo": "node database/seed.js",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "npx @electron/rebuild -f -w better-sqlite3",
     "postinstall": "node scripts/postinstall.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
@@ -32,7 +32,7 @@
       "main.js",
       "preload.js",
       "renderer/**/*",
-      "database/**/*",
+      "database/schema.sql",
       "shared/**/*",
       "assets/**/*"
     ],
@@ -40,8 +40,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "assets/icon.png",
-      "extraResources": []
+      "icon": "assets/icon.png"
     },
     "mac": {
       "target": [
@@ -49,9 +48,18 @@
       ],
       "icon": "assets/icon.png"
     },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.png"
+    },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Godhuli Dairy Plant"
     }
   },
   "keywords": [

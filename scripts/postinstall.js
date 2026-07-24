@@ -48,25 +48,23 @@ if (nativeModuleWorks()) {
     process.exit(0);
 }
 
-// Try electron-rebuild first (for local Electron development)
+// Try @electron/rebuild first (for local Electron development)
 if (electronInstalled()) {
-    console.log('  → Trying electron-rebuild (for desktop mode)...');
+    console.log('  → Trying @electron/rebuild (for desktop mode)...');
     try {
-        execSync('electron-rebuild -f -w better-sqlite3', { 
+        execSync('npx @electron/rebuild -f -w better-sqlite3', { 
             stdio: 'inherit',
             cwd: ROOT
         });
-        // Verify the rebuilt binary actually works with THIS Node.js version
-        // electron-rebuild may succeed but compile against Electron's headers
-        // (NODE_MODULE_VERSION 110) instead of the system Node.js (v147+)
+        // Verify the rebuilt binary actually works
         if (nativeModuleWorks()) {
             console.log('  ✅ Rebuilt for Electron successfully');
             console.log('');
             process.exit(0);
         }
-        console.log('  → electron-rebuild binary incompatible with system Node.js, falling back...');
+        console.log('  → @electron/rebuild binary incompatible with system Node.js, falling back...');
     } catch (e) {
-        console.log('  → electron-rebuild not applicable (web-only mode)');
+        console.log('  → @electron/rebuild not applicable (web-only mode)');
     }
 }
 
