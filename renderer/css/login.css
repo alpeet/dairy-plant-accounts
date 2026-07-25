@@ -111,6 +111,34 @@ body::before {
     gap: 20px;
 }
 
+/* Remember Me checkbox */
+.remember-me-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    margin-top: -8px;
+    user-select: none;
+}
+
+.remember-me-checkbox {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.remember-me-text {
+    font-size: 13px;
+    color: var(--text-light);
+    transition: color 0.2s ease;
+}
+
+.remember-me-label:hover .remember-me-text {
+    color: var(--text);
+}
+
 .form-group {
     display: flex;
     flex-direction: column;
@@ -210,6 +238,30 @@ body::before {
     font-size: 13px;
     text-align: center;
     animation: shakeIn 0.3s ease;
+}
+
+/* Warning variant — few attempts remaining */
+.login-error-warn {
+    background: #fffbeb;
+    border-color: #fcd34d;
+    color: #92400e;
+}
+
+/* Last attempt variant — 1 attempt remaining */
+.login-error-last {
+    background: #fff7ed;
+    border-color: #f97316;
+    color: #9a3412;
+    font-weight: 600;
+}
+
+/* Lockout variant — account temporarily locked */
+.login-error-lockout {
+    background: #fef2f2;
+    border-color: #f87171;
+    color: #991b1b;
+    font-weight: 600;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
 }
 
 @keyframes shakeIn {

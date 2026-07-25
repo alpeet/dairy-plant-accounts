@@ -18,9 +18,18 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
 
     async function apiPost(endpoint, data = {}) {
         try {
+            const headers = { 'Content-Type': 'application/json' };
+            // Include Bearer token from localStorage (Remember Me) or sessionStorage as fallback for cookie
+            try {
+                const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+            } catch (e) { /* storage unavailable */ }
+
             const response = await fetch(`${API_BASE}${endpoint}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify(data)
             });
             

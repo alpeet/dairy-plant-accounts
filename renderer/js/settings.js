@@ -136,6 +136,16 @@ async function renderSettings() {
 
         <div class="card" style="max-width:700px;margin-top:20px">
             <div class="card-header">
+                <h2>📂 CSV Import / Export</h2>
+                <button class="btn btn-secondary btn-sm" onclick="renderCSVSection()">🔄 Refresh</button>
+            </div>
+            <div id="csvSection">
+                <p style="color:var(--text-light);font-size:13px;padding:12px">Loading CSV tools...</p>
+            </div>
+        </div>
+
+        <div class="card" style="max-width:700px;margin-top:20px">
+            <div class="card-header">
                 <h2>🗃️ Database Tables</h2>
                 <button class="btn btn-secondary btn-sm" onclick="loadTableInfo()">🔄 Refresh</button>
             </div>
@@ -167,6 +177,8 @@ async function renderSettings() {
     loadUsersList();
     // Load database table info
     loadTableInfo();
+    // Load CSV Import/Export tools
+    renderCSVSection();
 }
 
 // ============================================================
@@ -976,3 +988,332 @@ window.toggleTableGroup = toggleTableGroup;
 window.renderDBTables = renderDBTables;
 window.filterDBTables = filterDBTables;
 window.clearDBTables = clearDBTables;
+
+// ============================================================
+// CSV Import / Export UI
+// ============================================================
+
+let _csvTables = [];
+let _csvImportResults = null;
+
+async function renderCSVSection() {
+    const container = document.getElementById('csvSection');
+    if (!container) return;
+
+    container.innerHTML = '<p style="color:var(--text-light);font-size:13px;padding:12px">Loading CSV tools...</p>';
+
+    // Fetch all tables
+    const tablesResult = await fetch('/api/data-csv/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+    }).then(r => r.json());
+
+    if (!tablesResult.success) {
+        container.innerHTML = `<p style="color:var(--danger);font-size:13px">Error: ${escapeHtml(tablesResult.error)}</p>`;
+        return;
+    }
+
+    _csvTables = tablesResult.data || [];
+
+    if (_csvTables.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-light);font-size:13px">No tables available for CSV export/import.</p>';
+        return;
+    }
+
+    // Import results (if any from previous import)
+    let importResultsHtml = '';
+    if (_csvImportResults) {
+        importResultsHtml = renderImportResults(_csvImportResults);
+        _csvImportResults = null;
+    }
+
+    // Build table selector grid
+    let tablesHtml = '';
+    for (const t of _csvTables) {
+        tablesHtml += `
+            <div class="csv-table-card" style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;background:var(--bg)">
+                <div style="font-size:13px;font-weight:600;margin-bottom:4px">${escapeHtml(t.displayName)}</div>
+                <div style="font-size:11px;color:var(--text-light);margin-bottom:10px">${escapeHtml(t.description || '')}</div>
+                <div style="font-size:11px;color:var(--text-light);margin-bottom:8px">
+                    <code style="background:var(--bg-dark);padding:1px 6px;border-radius:3px;font-size:11px">${t.table}</code>
+                    · ${t.columns.length} columns
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button class="btn btn-secondary btn-sm" onclick="downloadSampleCSV('${t.table}')" style="font-size:11px;padding:4px 10px">⬇ Sample</button>
+                    <button class="btn btn-primary btn-sm" onclick="exportTableCSV('${t.table}')" style="font-size:11px;padding:4px 10px">📤 Export</button>
+                    <button class="btn btn-success btn-sm" onclick="document.getElementById('csvUpload_${t.table}').click()" style="font-size:11px;padding:4px 10px">📥 Import</button>
+                    <input type="file" id="csvUpload_${t.table}" accept=".csv" style="display:none" onchange="importCSVFile('${t.table}', this)">
+                </div>
+            </div>
+        `;
+    }
+
+    container.innerHTML = `
+        <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="exportAllTablesCSV()" style="font-size:12px">📤 Export All Tables</button>
+            <span style="font-size:12px;color:var(--text-light)">
+                ${_csvTables.length} tables available
+            </span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+            ${tablesHtml}
+        </div>
+        ${importResultsHtml}
+        <div style="margin-top:12px;padding:12px;background:var(--bg);border-radius:var(--radius-sm);font-size:12px;color:var(--text-light);line-height:1.6">
+            <strong>📖 How to use:</strong><br>
+            1. Click <strong>Sample</strong> to download a template CSV with column headers and example data<br>
+            2. Fill in your data in the CSV file (use a spreadsheet app like Excel or Google Sheets)<br>
+            3. Click <strong>Import</strong> to upload and import your completed CSV file<br>
+            4. Use <strong>Export</strong> to download all existing data from a table as CSV<br>
+            <br>
+            ⚠️ <strong>Important:</strong> Fields marked with * in the header are required.<br>
+            &nbsp;&nbsp;&nbsp;Leave ID as empty for new records (auto-assigned). Include ID to update existing records.<br>
+            &nbsp;&nbsp;&nbsp;Date format: YYYY-MM-DD (e.g., 2024-01-15).
+        </div>
+    `;
+}
+
+function renderImportResults(results) {
+    if (!results) return '';
+    const { success, count, errors, displayName } = results;
+    const errorCount = errors ? errors.length : 0;
+
+    let errorHtml = '';
+    if (errors && errors.length > 0) {
+        errorHtml = `
+            <div style="margin-top:8px;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px">
+                <div style="font-size:12px;font-weight:600;color:#dc2626;margin-bottom:4px">⚠️ ${errors.length} issue(s):</div>
+                <ul style="margin:0;padding-left:16px;font-size:11px;color:#dc2626">
+                    ${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}
+                </ul>
+            </div>
+        `;
+    }
+
+    return `
+        <div style="margin-top:12px;padding:12px 16px;background:${success ? '#f0fdf4' : '#fef2f2'};border:1px solid ${success ? '#bbf7d0' : '#fecaca'};border-radius:var(--radius-sm)">
+            <div style="font-size:13px;font-weight:600;color:${success ? '#16a34a' : '#dc2626'}">
+                ${success ? '✅' : '❌'} Import Result — ${escapeHtml(displayName || '')}
+            </div>
+            <div style="font-size:12px;color:${success ? '#15803d' : '#dc2626'};margin-top:4px">
+                ${success 
+                    ? `Successfully imported <strong>${count}</strong> record(s).` 
+                    : `<strong>${count}</strong> record(s) imported with errors.`
+                }
+                ${errorCount > 0 ? ` (${errorCount} error(s))` : ''}
+            </div>
+            ${errorHtml}
+        </div>
+    `;
+}
+
+async function downloadSampleCSV(tableName) {
+    try {
+        const result = await fetch('/api/data-csv/sample', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ table: tableName })
+        }).then(r => r.json());
+
+        if (!result.success) {
+            showToast(`Error: ${result.error}`, 'error');
+            return;
+        }
+
+        const csv = result.data;
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${tableName}_sample.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast(`✅ Sample CSV for '${tableName}' downloaded`, 'success');
+    } catch (err) {
+        showToast(`Download failed: ${err.message}`, 'error');
+    }
+}
+
+async function exportTableCSV(tableName) {
+    try {
+        const result = await fetch('/api/data-csv/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ table: tableName })
+        }).then(r => r.json());
+
+        if (!result.success) {
+            showToast(`Error: ${result.error}`, 'error');
+            return;
+        }
+
+        const csv = result.data;
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${tableName}_export.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast(`✅ Data exported from '${tableName}'`, 'success');
+    } catch (err) {
+        showToast(`Export failed: ${err.message}`, 'error');
+    }
+}
+
+async function importCSVFile(tableName, fileInput) {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    // Reset file input so the same file can be re-imported
+    fileInput.value = '';
+
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        const csvContent = e.target.result;
+        
+        showToast(`⏳ Importing ${file.name}...`, 'info');
+        
+        try {
+            const result = await fetch('/api/data-csv/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ table: tableName, csv: csvContent })
+            }).then(r => r.json());
+
+            // Store results for display
+            _csvImportResults = result;
+            
+            // Re-render CSV section to show results
+            renderCSVSection();
+            
+            if (result.success) {
+                showToast(`✅ ${result.count} record(s) imported into '${tableName}'`, 'success');
+            } else if (result.count > 0) {
+                showToast(`⚠️ ${result.count} record(s) imported with ${result.errors ? result.errors.length : 0} error(s)`, 'warning');
+            } else {
+                showToast(`❌ Import failed: ${result.error}`, 'error');
+            }
+        } catch (err) {
+            showToast(`Import failed: ${err.message}`, 'error');
+        }
+    };
+    reader.readAsText(file);
+}
+
+// Cache for export-all data so downloadSingleCSV can use it without re-fetching
+let _exportAllCache = null;
+
+async function exportAllTablesCSV() {
+    showToast('⏳ Exporting all tables...', 'info');
+    
+    try {
+        const result = await fetch('/api/data-csv/export-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        }).then(r => r.json());
+
+        if (!result.success || !result.data) {
+            showToast(`Export failed: ${result.error || 'No data returned'}`, 'error');
+            return;
+        }
+
+        const files = result.data;
+        _exportAllCache = files; // Cache for downloadSingleCSV
+        const fileCount = Object.keys(files).length;
+
+        // Show a summary modal instead of triggering 21 downloads
+        const fileList = Object.keys(files).map((f, i) => 
+            `<tr><td style="padding:4px 8px;font-size:12px">${i + 1}.</td><td style="padding:4px 8px;font-family:monospace;font-size:12px">${escapeHtml(f)}</td><td style="padding:4px 8px;font-size:12px;text-align:right">${(files[f].length / 1024).toFixed(1)} KB</td><td style="padding:4px 8px"><button class="btn btn-primary btn-sm" onclick="downloadSingleCSV('${escapeHtml(f)}', this)" style="font-size:11px;padding:2px 8px">⬇</button></td></tr>`
+        ).join('');
+        
+        showModal(`
+            <div class="modal-header">
+                <h2>📤 Export All Tables</h2>
+                <button class="close-btn" onclick="closeModal(); _exportAllCache=null;">&times;</button>
+            </div>
+            <div class="modal-body" style="min-width:500px;max-height:60vh;overflow-y:auto">
+                <p style="font-size:13px;color:var(--text-light);margin-bottom:12px">
+                    <strong>${fileCount}</strong> CSV files generated. Click each download button to save individually.
+                </p>
+                <table style="width:100%;border-collapse:collapse">
+                    <thead>
+                        <tr style="border-bottom:2px solid var(--border)">
+                            <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--text-light)">#</th>
+                            <th style="padding:4px 8px;text-align:left;font-size:11px;color:var(--text-light)">Filename</th>
+                            <th style="padding:4px 8px;text-align:right;font-size:11px;color:var(--text-light)">Size</th>
+                            <th style="padding:4px 8px;font-size:11px;color:var(--text-light)">Download</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${fileList}
+                    </tbody>
+                </table>
+                <p style="font-size:11px;color:var(--text-light);margin-top:12px">
+                    💡 Tip: You can also download individual table CSVs from the cards above.
+                </p>
+            </div>
+        `);
+    } catch (err) {
+        showToast(`Export failed: ${err.message}`, 'error');
+    }
+}
+
+async function downloadSingleCSV(filename, btnEl) {
+    if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = '⏳';
+    }
+    try {
+        // Use cached data if available from export-all
+        let csvData = _exportAllCache ? _exportAllCache[filename] : null;
+        
+        if (!csvData) {
+            // Fallback: fetch from server
+            const tableName = filename.replace(/\.csv$/, '');
+            const result = await fetch('/api/data-csv/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ table: tableName })
+            }).then(r => r.json());
+
+            if (!result.success || !result.data) {
+                showToast(`Download failed: ${result.error || 'No data'}`, 'error');
+                return;
+            }
+            csvData = result.data;
+        }
+
+        const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast(`⬇ Downloaded: ${filename}`, 'success');
+    } catch (err) {
+        showToast(`Download failed: ${err.message}`, 'error');
+    } finally {
+        if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = '⬇';
+        }
+    }
+}
+
+// Make CSV functions globally accessible
+window.renderCSVSection = renderCSVSection;
+window.downloadSampleCSV = downloadSampleCSV;
+window.exportTableCSV = exportTableCSV;
+window.importCSVFile = importCSVFile;
+window.exportAllTablesCSV = exportAllTablesCSV;
+window.downloadSingleCSV = downloadSingleCSV;

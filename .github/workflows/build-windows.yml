@@ -33,6 +33,12 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: 🗄️ Cache electron-builder
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-builder-${{ hashFiles('package.json') }}
+
       - name: 📦 Install dependencies
         run: npm ci
 

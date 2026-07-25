@@ -31,6 +31,9 @@ const { initDatabase, safeRun } = require('./shared/db');
 // ── Shared modules ──
 const ops = require('./shared/operations');
 
+// ── CSV Data Exchange module ──
+const dataCSV = require('./shared/data-csv');
+
 const {
     validateParty, validateProduct, validateSale, validatePurchase,
     validateMilkCollection, validatePayment, validateStockAdjust,
@@ -51,9 +54,10 @@ const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'admin123';
 
 // In-memory token store (for single-user / small deployment)
-// Tokens expire after 24 hours of inactivity
+// Tokens expire based on the session type
 const tokenStore = new Map();
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;      // 24 hours — "session" mode (browser session)
+const REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — "remember me" mode
 
 // ── #4 Login brute-force throttle (in-memory, per username) ──
 const loginThrottle = new Map();
@@ -236,21 +240,30 @@ try {
 
 // POST /api/auth/login
 app.post('/api/auth/login', (req, res) => {
-    const { username, password } = req.body || {};
+    const { username, password, remember_me } = req.body || {};
+    const tokenTtl = remember_me ? REMEMBER_TTL_MS : SESSION_TTL_MS;
 
     // #4 Brute-force protection: block the username after repeated failures
     if (isLoginThrottled(username)) {
-        return res.status(429).json({ success: false, error: 'Too many failed login attempts. Please try again later.' });
+        const rec = loginThrottle.get((username || '').toLowerCase());
+        const elapsed = rec ? Date.now() - rec.first : 0;
+        const lockoutMinutes = Math.max(1, Math.ceil((LOGIN_THROTTLE_MS - elapsed) / 60000));
+        return res.status(429).json({
+            success: false,
+            error: '🔒 Account temporarily locked due to too many failed attempts.',
+            lockoutMinutes: lockoutMinutes,
+            remainingAttempts: 0
+        });
     }
 
     // 1. Check env var fallback (backward compatibility)
     if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
         const token = crypto.randomBytes(32).toString('hex');
-        tokenStore.set(token, { createdAt: Date.now(), role: 'admin', username: AUTH_USERNAME });
+        tokenStore.set(token, { createdAt: Date.now(), ttlMs: tokenTtl, role: 'admin', username: AUTH_USERNAME, rememberMe: !!remember_me });
         res.cookie('auth_token', token, {
             httpOnly: true,
             sameSite: 'lax',
-            maxAge: TOKEN_TTL_MS,
+            maxAge: tokenTtl,
             path: '/',
         });
         // Update password hash in DB if it doesn't match (env var changed)
@@ -265,27 +278,40 @@ app.post('/api/auth/login', (req, res) => {
         }
         const mustChangePassword = AUTH_PASSWORD === 'admin123';
         recordLoginAttempt(username, true);
-        return res.json({ success: true, data: { message: 'Login successful', mustChangePassword } });
+        return res.json({
+            success: true,
+            data: { message: 'Login successful', mustChangePassword, token, rememberMe: !!remember_me }
+        });
     }
 
     // 2. Check database users
     const user = db.prepare("SELECT id, password_hash, role, is_active FROM users WHERE username = ?").get(username);
     if (user && user.is_active && verifyPassword(password, user.password_hash)) {
         const token = crypto.randomBytes(32).toString('hex');
-        tokenStore.set(token, { createdAt: Date.now(), userId: user.id, role: user.role });
+        tokenStore.set(token, { createdAt: Date.now(), ttlMs: tokenTtl, userId: user.id, role: user.role, rememberMe: !!remember_me });
         res.cookie('auth_token', token, {
             httpOnly: true,
             sameSite: 'lax',
-            maxAge: TOKEN_TTL_MS,
+            maxAge: tokenTtl,
             path: '/',
         });
         const mustChangePassword = verifyPassword('admin123', user.password_hash);
         recordLoginAttempt(username, true);
-        return res.json({ success: true, data: { message: 'Login successful', mustChangePassword } });
+        return res.json({
+            success: true,
+            data: { message: 'Login successful', mustChangePassword, token }
+        });
     }
 
     recordLoginAttempt(username, false);
-    return res.json({ success: false, error: 'Invalid username or password' });
+    // Calculate remaining attempts before lockout
+    const key = (username || '').toLowerCase();
+    const rec = loginThrottle.get(key);
+    const remaining = rec ? Math.max(0, MAX_LOGIN_ATTEMPTS - rec.count) : MAX_LOGIN_ATTEMPTS - 1;
+    const errMsg = remaining <= 0
+        ? '🔒 Account locked. Too many failed attempts.'
+        : `Invalid username or password. ${remaining} attempt${remaining > 1 ? 's' : ''} remaining before temporary lockout.`;
+    return res.json({ success: false, error: errMsg, remainingAttempts: remaining });
 });
 
 // POST /api/auth/logout
@@ -538,13 +564,13 @@ app.post('/api/auth/register', (req, res) => {
         const hashed = hashPassword(password);
         db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'operator')").run(username, hashed);
 
-        // Auto-login after registration
+        // Auto-login after registration (session mode — no remember me)
         const token = crypto.randomBytes(32).toString('hex');
-        tokenStore.set(token, { createdAt: Date.now(), role: 'operator' });
+        tokenStore.set(token, { createdAt: Date.now(), ttlMs: SESSION_TTL_MS, role: 'operator' });
         res.cookie('auth_token', token, {
             httpOnly: true,
             sameSite: 'lax',
-            maxAge: TOKEN_TTL_MS,
+            maxAge: SESSION_TTL_MS,
             path: '/',
         });
 
@@ -601,11 +627,16 @@ function extractToken(req) {
 function isValidToken(token) {
     if (!token || !tokenStore.has(token)) return false;
     const entry = tokenStore.get(token);
-    if (Date.now() - entry.createdAt > TOKEN_TTL_MS) {
+    const ttl = entry.ttlMs || SESSION_TTL_MS; // Default to session TTL if not set
+    if (Date.now() - entry.createdAt > ttl) {
         tokenStore.delete(token);
         return false;
     }
-    entry.createdAt = Date.now();
+    // Only update lastActivity for session-mode tokens, not remember-me tokens
+    // This prevents remember-me tokens from extending indefinitely
+    if (entry.ttlMs !== REMEMBER_TTL_MS) {
+        entry.createdAt = Date.now(); // Slide for session tokens
+    }
     return true;
 }
 
@@ -613,13 +644,16 @@ function requireAuth(req, res, next) {
     if (!req.path.startsWith('/api/')) {
         return next();
     }
-    if (req.path.startsWith('/api/auth/')) {
+    // Only skip auth for public authentication endpoints
+    // Routes like /api/auth/users/* need req.user set for requireRole() to work
+    const PUBLIC_AUTH_PATHS = ['/api/auth/login', '/api/auth/logout', '/api/auth/register',
+                               '/api/auth/reset-password', '/api/auth/verify', '/api/auth/db-status'];
+    if (PUBLIC_AUTH_PATHS.includes(req.path)) {
         return next();
     }
     if (req.path === '/api/health') {
         return next();
-    }
-    const token = extractToken(req);
+    }    const token = extractToken(req);
     if (!isValidToken(token)) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
     }
@@ -642,16 +676,38 @@ function requireAuth(req, res, next) {
  * Role-based authorization middleware.
  * Returns 403 if the authenticated user's role is below the minimum required level.
  * Role hierarchy: agent (1) < staff (2) < operator (3) < accountant (4) < admin (5)
+ *
+ * First checks req.user (set by requireAuth middleware).
+ * Falls back to extracting role directly from the auth token (for routes where
+ * requireAuth may not have set req.user, like /api/auth/users/* routes).
  */
 function requireRole(minRole) {
     const hierarchy = { agent: 1, staff: 2, operator: 3, accountant: 4, admin: 5 };
     return (req, res, next) => {
-        const userLevel = hierarchy[req.user?.role] || 0;
+        // First try req.user set by requireAuth middleware
+        let role = req.user?.role;
+        
+        // Fallback: extract role directly from the auth token
+        if (!role) {
+            const token = extractToken(req);
+            if (token) {
+                const tokenData = tokenStore.get(token);
+                if (tokenData) {
+                    role = tokenData.role;
+                    // Also set req.user so downstream handlers can use it
+                    req.user = req.user || {};
+                    req.user.role = role;
+                    req.user.username = tokenData.username || 'admin';
+                }
+            }
+        }
+        
+        const userLevel = hierarchy[role] || 0;
         const requiredLevel = hierarchy[minRole];
         if (!requiredLevel || userLevel < requiredLevel) {
             return res.status(403).json({ 
                 success: false, 
-                error: `Access denied. Requires '${minRole}' role or higher. Your role: '${req.user?.role || 'none'}'` 
+                error: `Access denied. Requires '${minRole}' role or higher. Your role: '${role || 'none'}'` 
             });
         }
         next();
@@ -1315,6 +1371,65 @@ app.post('/api/backup/restore', requireRole('admin'), (req, res) => {
 
 app.post('/api/db-path', (req, res) => {
     res.json({ success: true, data: path.join(dbDir, 'dairy-plant.db') });
+});
+
+// ──────────────────────────────────────────────────────────────
+// CSV Data Import / Export (admin only)
+// ──────────────────────────────────────────────────────────────
+
+// POST /api/data-csv/tables — List all data tables available for CSV
+app.post('/api/data-csv/tables', requireRole('staff'), (req, res) => {
+    res.json({ success: true, data: dataCSV.getAllTableDefs() });
+});
+
+// POST /api/data-csv/sample — Generate a sample CSV for a table
+app.post('/api/data-csv/sample', requireRole('staff'), (req, res) => {
+    const { table } = req.body || {};
+    if (!table) return res.json({ success: false, error: 'Table name is required' });
+    const csv = dataCSV.generateSampleCSV(table);
+    if (!csv) return res.json({ success: false, error: `Unknown table: ${table}` });
+    res.json({ success: true, data: csv });
+});
+
+// POST /api/data-csv/export — Export a table's data to CSV
+app.post('/api/data-csv/export', requireRole('staff'), (req, res) => {
+    const { table } = req.body || {};
+    if (!table) return res.json({ success: false, error: 'Table name is required' });
+    try {
+        const csv = dataCSV.exportToCSV(db, table);
+        if (!csv) return res.json({ success: false, error: `Unknown table: ${table}` });
+        res.json({ success: true, data: csv });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/data-csv/import — Import CSV data into a table
+app.post('/api/data-csv/import', requireRole('operator'), (req, res) => {
+    const { table, csv } = req.body || {};
+    if (!table) return res.json({ success: false, error: 'Table name is required' });
+    if (!csv) return res.json({ success: false, error: 'CSV content is required' });
+    try {
+        const result = dataCSV.importFromCSV(db, table, csv);
+        res.json(result);
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/data-csv/export-all — Export ALL tables as CSV files (returns JSON with all CSVs)
+app.post('/api/data-csv/export-all', requireRole('operator'), (req, res) => {
+    try {
+        const tables = dataCSV.getAllTableDefs();
+        const files = {};
+        for (const t of tables) {
+            const csv = dataCSV.exportToCSV(db, t.table);
+            if (csv) files[t.table + '.csv'] = csv;
+        }
+        res.json({ success: true, data: files });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
 });
 
 // ──────────────────────────────────────────────────────────────

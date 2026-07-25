@@ -2,6 +2,7 @@
  * Godhuli Dairy Plant — Login Page Script
  * Handles authentication, registration, and forgot password for the web version.
  * Uses HttpOnly cookies — server sets the cookie, client just redirects.
+ * Supports "Remember Me" — stores Bearer token in localStorage for 30-day persistence.
  */
 
 const API_BASE = '/api';
@@ -158,6 +159,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ===================================================================
+    // Helper: store token in appropriate storage
+    // ===================================================================
+    function storeAuthToken(token, rememberMe) {
+        try {
+            if (rememberMe) {
+                // Remember Me: store in localStorage (survives tab closes)
+                localStorage.setItem('auth_token', token);
+                // Also clear sessionStorage to avoid conflicts
+                sessionStorage.removeItem('auth_token');
+            } else {
+                // Session mode: store in sessionStorage (cleared when tab closes)
+                sessionStorage.setItem('auth_token', token);
+                // Also clear localStorage to avoid stale tokens
+                localStorage.removeItem('auth_token');
+            }
+        } catch (e) {
+            // Storage might be unavailable (private browsing, etc.)
+            console.warn('Could not store auth token:', e.message);
+        }
+    }
+
+    // ===================================================================
     // LOGIN FORM
     // ===================================================================
     const loginForm = document.getElementById('loginForm');
@@ -171,6 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value.trim();
+        const rememberMe = document.getElementById('rememberMe') ? document.getElementById('rememberMe').checked : false;
 
         if (!username || !password) {
             showError(errorEl, 'Please enter both username and password');
@@ -185,20 +209,75 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(`${API_BASE}/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
+                body: JSON.stringify({ username, password, remember_me: rememberMe })
             });
 
             const result = await response.json();
 
             if (result.success) {
-                // Server set the HttpOnly cookie. Just redirect.
+                // Store auth token in appropriate storage based on remember_me
+                if (result.data && result.data.token) {
+                    storeAuthToken(result.data.token, rememberMe);
+                }
+
+                // Server set the HttpOnly cookie. Now verify auth before redirect.
                 if (result.data && result.data.mustChangePassword) {
                     showError(errorEl, '⚠ Default password in use. Please change it in Settings → Users after login.');
                     errorEl.className = 'login-success';
                 }
-                window.location.href = '/';
+
+                // Build headers with Bearer token (stored above)
+                try {
+                    const storedToken = rememberMe
+                        ? localStorage.getItem('auth_token')
+                        : sessionStorage.getItem('auth_token');
+                    const verifyHeaders = { 'Content-Type': 'application/json' };
+                    if (storedToken) {
+                        verifyHeaders['Authorization'] = 'Bearer ' + storedToken;
+                    }
+
+                    const verifyResp = await fetch('/api/auth/verify', {
+                        method: 'POST',
+                        headers: verifyHeaders
+                    });
+                    const verifyResult = await verifyResp.json();
+                    if (verifyResult.success) {
+                        window.location.href = '/';
+                    } else {
+                        showError(errorEl, '⏳ Setting up session...');
+                        errorEl.className = 'login-success';
+                        await new Promise(r => setTimeout(r, 500));
+                        window.location.href = '/';
+                    }
+                } catch (e) {
+                    window.location.href = '/';
+                }
             } else {
-                showError(errorEl, result.error || 'Invalid username or password');
+                // Show remaining attempts or lockout info
+                const remaining = result.remainingAttempts;
+                const lockoutMin = result.lockoutMinutes;
+
+                if (lockoutMin) {
+                    showError(errorEl, `🔒 Account temporarily locked. Try again in ${lockoutMin} minute${lockoutMin > 1 ? 's' : ''}.`);
+                    errorEl.className = 'login-error login-error-lockout';
+                } else if (remaining !== undefined && remaining <= 3) {
+                    let msg;
+                    let className;
+                    if (remaining <= 0) {
+                        msg = '⚠ Too many failed attempts. Next attempt will lock your account temporarily.';
+                        className = 'login-error login-error-last';
+                    } else if (remaining === 1) {
+                        msg = '⚠ Last attempt before temporary lockout! Check your credentials.';
+                        className = 'login-error login-error-last';
+                    } else {
+                        msg = `⚠ ${result.error || 'Invalid username or password'}`;
+                        className = 'login-error login-error-warn';
+                    }
+                    showError(errorEl, msg);
+                    errorEl.className = className;
+                } else {
+                    showError(errorEl, result.error || 'Invalid username or password');
+                }
             }
         } catch (err) {
             const errorMsg = err.message || String(err);
@@ -255,7 +334,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
 
             if (result.success) {
-                // Registration successful and auto-logged in
+                // Registration auto-login — store token in sessionStorage (session only)
+                if (result.data && result.data.token) {
+                    try {
+                        sessionStorage.setItem('auth_token', result.data.token);
+                    } catch (e) { /* ignore */ }
+                }
                 window.location.href = '/';
             } else {
                 showError(regErrorEl, result.error || 'Registration failed');
@@ -309,17 +393,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
 
             if (result.success) {
-                // Show success, then redirect to login view
                 resetErrorEl.className = 'login-success';
                 resetErrorEl.textContent = result.data?.message || 'Password reset successfully! Redirecting to login...';
                 resetErrorEl.style.display = 'block';
 
                 setTimeout(() => {
-                    // Clear form
                     document.getElementById('resetUsername').value = '';
                     document.getElementById('resetPassword').value = '';
                     showView('login');
-                    // Show a success message on the login form
                     const loginError = document.getElementById('loginError');
                     loginError.className = 'login-success';
                     loginError.textContent = 'Password reset successfully! Please login with your new password.';
