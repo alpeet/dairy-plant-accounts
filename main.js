@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -32,18 +32,196 @@ function getDbDir() {
 
 function initAppDatabase() {
     const dbDir = getDbDir();
+    
+    // Ensure dbDir exists
+    if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+    }
+    
     db = initDatabase(dbDir, 'dairy-plant.db');
     console.log('Desktop app - using database at:', path.join(dbDir, 'dairy-plant.db'));
     return path.join(dbDir, 'dairy-plant.db');
 }
 
 // ============================================================
+// Window state persistence
+// ============================================================
+
+const STATE_FILE = path.join(app.getPath('userData'), 'window-state.json');
+
+function loadWindowState() {
+    try {
+        if (fs.existsSync(STATE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+            return data;
+        }
+    } catch (e) {
+        // Ignore corrupted state
+    }
+    return {};
+}
+
+let saveWindowStateDebounceTimer = null;
+
+function saveWindowState() {
+    if (!mainWindow) return;
+    if (saveWindowStateDebounceTimer) {
+        clearTimeout(saveWindowStateDebounceTimer);
+    }
+    saveWindowStateDebounceTimer = setTimeout(() => {
+        try {
+            const bounds = mainWindow.getBounds();
+            const maximized = mainWindow.isMaximized();
+            fs.writeFileSync(STATE_FILE, JSON.stringify({ ...bounds, maximized }));
+        } catch (e) {
+            // Ignore
+        }
+        saveWindowStateDebounceTimer = null;
+    }, 300);
+}
+
+// ============================================================
+// Application menu
+// ============================================================
+
+function buildAppMenu() {
+    const isMac = process.platform === 'darwin';
+
+    const template = [
+        // macOS app menu
+        ...(isMac ? [{
+            label: app.name,
+            submenu: [
+                { role: 'about' },
+                { type: 'separator' },
+                { role: 'services' },
+                { type: 'separator' },
+                { role: 'hide' },
+                { role: 'hideOthers' },
+                { role: 'unhide' },
+                { type: 'separator' },
+                { role: 'quit' }
+            ]
+        }] : []),
+
+        // File
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'Backup Database',
+                    accelerator: 'CmdOrCtrl+Shift+B',
+                    click: async () => {
+                        if (mainWindow) {
+                            mainWindow.webContents.executeJavaScript('window.api && window.api.backupDatabase ? window.api.backupDatabase() : null');
+                        }
+                    }
+                },
+                { type: 'separator' },
+                {
+                    label: 'Print…',
+                    accelerator: 'CmdOrCtrl+P',
+                    click: () => {
+                        if (mainWindow) {
+                            mainWindow.webContents.executeJavaScript('window.print ? window.print() : null');
+                        }
+                    }
+                },
+                { type: 'separator' },
+                isMac ? { role: 'close' } : { role: 'quit' }
+            ]
+        },
+
+        // Edit
+        {
+            label: 'Edit',
+            submenu: [
+                { role: 'undo' },
+                { role: 'redo' },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'selectAll' }
+            ]
+        },
+
+        // View
+        {
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'forceReload' },
+                { role: 'toggleDevTools' },
+                { type: 'separator' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' }
+            ]
+        },
+
+        // Window
+        {
+            label: 'Window',
+            submenu: [
+                { role: 'minimize' },
+                { role: 'zoom' },
+                ...(isMac ? [
+                    { type: 'separator' },
+                    { role: 'front' },
+                    { type: 'separator' },
+                    { role: 'window' }
+                ] : [
+                    { role: 'close' }
+                ])
+            ]
+        },
+
+        // Help
+        {
+            role: 'help',
+            submenu: [
+                {
+                    label: 'User Manual',
+                    click: () => {
+                        if (mainWindow) {
+                            mainWindow.webContents.executeJavaScript('window.navigateTo && window.navigateTo("user-manual")');
+                        }
+                    }
+                },
+                { type: 'separator' },
+                {
+                    label: 'About Godhuli Dairy Plant',
+                    click: () => {
+                        dialog.showMessageBox(mainWindow, {
+                            type: 'info',
+                            title: 'About Godhuli Dairy Plant',
+                            message: 'Godhuli Dairy Plant',
+                            detail: `Version ${app.getVersion()}\n\nAccounts & Stock Management Software\nBuilt with Electron & SQLite`
+                        });
+                    }
+                }
+            ]
+        }
+    ];
+
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+}
+
+// ============================================================
 // Create main window
 // ============================================================
 function createWindow() {
+    const savedState = loadWindowState();
+
     mainWindow = new BrowserWindow({
-        width: 1280,
-        height: 800,
+        width: savedState.width || 1280,
+        height: savedState.height || 800,
+        x: savedState.x,
+        y: savedState.y,
         minWidth: 1024,
         minHeight: 700,
         title: 'Godhuli Dairy Plant',
@@ -57,10 +235,29 @@ function createWindow() {
         show: false
     });
 
-        mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+    // Restore maximized state
+    if (savedState.maximized) {
+        mainWindow.maximize();
+    }
 
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
+    });
+
+    // Save window state on resize/move
+    mainWindow.on('resize', saveWindowState);
+    mainWindow.on('move', saveWindowState);
+    mainWindow.on('maximize', saveWindowState);
+    mainWindow.on('unmaximize', saveWindowState);
+
+    // Open external links in the default browser
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (url.startsWith('http')) {
+            shell.openExternal(url);
+        }
+        return { action: 'deny' };
     });
 
     if (process.env.NODE_ENV === 'development') {

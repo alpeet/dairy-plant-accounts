@@ -2,6 +2,7 @@
   "name": "godhuli-dairy-plant",
   "version": "1.0.0",
   "description": "Godhuli Dairy Plant - Accounts & Stock Management (Desktop + Web)",
+  "homepage": "https://godhulidairy.com",
   "main": "main.js",
   "scripts": {
     "start": "node server.js",
@@ -16,6 +17,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux",
     "verify": "node verify.js",
     "data:export": "node data-exchange.js export",
     "data:import": "node data-exchange.js import",
@@ -25,8 +27,10 @@
   "build": {
     "appId": "com.godhuli.dairyplant",
     "productName": "Godhuli Dairy Plant",
+    "copyright": "Copyright © $(year) Godhuli Dairy",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "assets"
     },
     "files": [
       "main.js",
@@ -34,33 +38,118 @@
       "renderer/**/*",
       "database/schema.sql",
       "shared/**/*",
-      "assets/**/*"
+      "assets/icon.png",
+      "assets/favicon.png"
     ],
+    "asar": true,
+    "asarUnpack": [
+      "shared/**/*",
+      "database/schema.sql"
+    ],
+    "compression": "maximum",
+    "removePackageScripts": true,
+    "npmRebuild": true,
     "win": {
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
       ],
-      "icon": "assets/icon.png"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "icon": "assets/icon.png"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "verifyUpdateCodeSignature": false,
+      "publisherName": "Godhuli Dairy"
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Godhuli Dairy Plant"
-    }
+      "shortcutName": "Godhuli Dairy Plant",
+      "installerIcon": "assets/icon.png",
+      "uninstallerIcon": "assets/icon.png",
+      "installerHeaderIcon": "assets/icon.png",
+      "installerSidebar": null,
+      "uninstallDisplayName": "Godhuli Dairy Plant ${version}",
+      "license": null,
+      "language": "1033",
+      "unicode": true,
+      "warningsAsErrors": false,
+      "runAfterFinish": true,
+      "menuCategory": true,
+      "menuGroupName": "Godhuli Dairy Plant",
+      "differentialPackage": true,
+      "installerFileName": "Godhuli-Dairy-Plant-Setup-${version}.exe"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "category": "public.app-category.business",
+      "darkModeSupport": false,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null,
+      "notarize": false,
+      "minimumSystemVersion": "10.15"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "assets/icon.png",
+      "iconSize": 100,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 620,
+        "height": 460
+      },
+      "format": "ULFO",
+      "backgroundColor": "#2d5016",
+      "internetEnabled": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Office",
+      "synopsis": "Dairy Plant Accounts & Stock Management",
+      "description": "Complete accounts and stock management solution for dairy plants. Manage sales, purchases, milk collection, stock, payments, and more.",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://releases.godhulidairy.com"
+      }
+    ]
   },
   "keywords": [
     "dairy",
