@@ -938,6 +938,14 @@ app.post('/api/payments/list', (req, res) => {
     res.json(safeRun(() => ops.listPayments(db, req.body || {})));
 });
 
+app.post('/api/payments/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deletePayment(db, req.body.id)));
+});
+
+app.post('/api/payments/update', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.updatePayment(db, req.body)));
+});
+
 // ──────────────────────────────────────────────────────────────
 // Settings (admin only — business configuration)
 // ──────────────────────────────────────────────────────────────

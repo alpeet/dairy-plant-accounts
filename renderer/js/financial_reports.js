@@ -474,6 +474,11 @@ async function showCashCollectionPage() {
             <div style="font-size:32px;color:#1976d2">📝</div>
         </div>
 
+        <div style="background:linear-gradient(135deg,#e8f5e9,#c8e6c9);border-radius:8px;padding:12px 16px;margin-bottom:12px;border-left:4px solid #4caf50;font-size:13px">
+            <strong>ℹ️ Daily Totals</strong> (above) are auto-generated from Sales, Receipts, and Payments across all modules.
+            To edit these, go to the respective source module (Sales, Purchases, Cash Deposit, etc.).
+            <br><strong>Manual Entries</strong> (below) can be edited or deleted directly with ✏️ and 🗑 buttons.
+        </div>
         <div class="filter-bar">
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="ccFrom" value="${preset.from}"></div>
             <div class="form-group"><label>To</label><input type="date" class="form-control" id="ccTo" value="${preset.to}"></div>

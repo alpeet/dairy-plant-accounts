@@ -49,4 +49,58 @@ function listPayments(db, { party_id, from_date, to_date } = {}) {
     return db.prepare(query).all(...params);
 }
 
-module.exports = { savePayment, listPayments };
+/**
+ * Delete a payment record and its associated ledger entries.
+ * For farmer milk-collection payments, also reverts collection statuses back to 'pending'.
+ */
+function deletePayment(db, id) {
+    const payment = db.prepare("SELECT * FROM payments WHERE id = ?").get(id);
+    if (!payment) throw new Error('Payment not found');
+
+    const trx = db.transaction(() => {
+        // If this payment is linked to milk collections, revert their status
+        if (payment.reference_type === 'milk_collection') {
+            // Revert milk collection statuses for this party on this date
+            db.prepare(
+                `UPDATE milk_collections SET status = 'pending', updated_at = datetime('now','localtime') 
+                 WHERE party_id = ? AND date = ? AND status = 'paid'`
+            ).run(payment.party_id, payment.date);
+        }
+
+        // Delete ledger entries associated with this payment
+        db.prepare(
+            "DELETE FROM ledger_entries WHERE reference_type IN ('payment_made', 'payment_received') AND reference_id = ?"
+        ).run(id);
+
+        // Delete the payment record
+        db.prepare("DELETE FROM payments WHERE id = ?").run(id);
+
+        return { deleted: true };
+    });
+    return trx();
+}
+
+/**
+ * Update a payment record's mode, notes, and date.
+ * Does NOT update amount to avoid ledger/collection reconciliation issues.
+ */
+function updatePayment(db, { id, mode, notes, date }) {
+    const payment = db.prepare("SELECT * FROM payments WHERE id = ?").get(id);
+    if (!payment) throw new Error('Payment not found');
+
+    const trx = db.transaction(() => {
+        db.prepare(
+            "UPDATE payments SET mode = ?, notes = ?, date = ? WHERE id = ?"
+        ).run(mode || payment.mode, notes !== undefined ? notes : payment.notes, date || payment.date, id);
+
+        // Also update the associated ledger entry
+        db.prepare(
+            "UPDATE ledger_entries SET date = ?, description = ? WHERE reference_type IN ('payment_made', 'payment_received') AND reference_id = ?"
+        ).run(date || payment.date, notes || (payment.type === 'payment' ? 'Payment Made' : 'Payment Received'), id);
+
+        return { updated: true };
+    });
+    return trx();
+}
+
+module.exports = { savePayment, listPayments, deletePayment, updatePayment };

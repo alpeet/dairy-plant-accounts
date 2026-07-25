@@ -124,7 +124,7 @@ module.exports = {
     getFarmerOutstanding, bulkPayFarmers,
 
     // Payments
-    savePayment, listPayments,
+    savePayment, listPayments, deletePayment, updatePayment,
 
     // Reports
     getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,

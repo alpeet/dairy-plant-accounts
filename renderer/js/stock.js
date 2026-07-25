@@ -108,6 +108,7 @@ async function renderStock() {
                                     <td class="actions">
                                         <button class="btn btn-primary btn-sm" onclick="editProduct(${p.id})">✏️</button>
                                         <button class="btn btn-info btn-sm" onclick="viewProductMovement(${p.id})">📋</button>
+                                        <button class="btn btn-danger btn-sm" onclick="deleteProductEntry(${p.id})">🗑</button>
                                     </td>
                                 </tr>
                             `).join('')}
@@ -399,6 +400,30 @@ async function saveProduct(productId) {
 async function editProduct(id) { showProductForm(id); }
 
 // ============================================================
+// Delete Product
+// ============================================================
+async function deleteProductEntry(id) {
+    // Fetch product name for confirmation
+    const productResult = await window.api.getProduct(id);
+    const productName = productResult.success ? productResult.data.name : 'this product';
+    
+    const confirmed = await confirmAction(
+        `Delete "${escapeHtml(productName)}"?`,
+        'This product will be permanently removed if it has no transaction history (sales, purchases, stock adjustments).',
+        'Yes, Delete'
+    );
+    if (!confirmed) return;
+    
+    const result = await window.api.deleteProduct(id);
+    if (result.success) {
+        showToast('Product deleted successfully!', 'success');
+        renderStock();
+    } else {
+        showToast('Error: ' + (result.error || 'Cannot delete this product. It may have transaction history.'), 'error');
+    }
+}
+
+// ============================================================
 // Stock Adjustment
 // ============================================================
 async function showStockAdjustForm() {
@@ -633,6 +658,7 @@ async function exportStockPDF() {
 // Globals
 window.showProductForm = showProductForm;
 window.editProduct = editProduct;
+window.deleteProductEntry = deleteProductEntry;
 window.saveProduct = saveProduct;
 window.showStockAdjustForm = showStockAdjustForm;
 window.saveStockAdjust = saveStockAdjust;

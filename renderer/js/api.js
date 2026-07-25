@@ -216,6 +216,8 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
 
         savePayment: (payment) => apiPost('/payments/save', payment),
         getPayments: (opts) => apiPost('/payments/list', opts || {}),
+        deletePayment: (id) => apiPost('/payments/delete', { id }),
+        updatePayment: (data) => apiPost('/payments/update', data),
 
         // Users (auth management)
         listUsers: () => apiPost('/auth/users/list'),

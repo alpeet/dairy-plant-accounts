@@ -139,6 +139,7 @@ async function loadFarmerPaymentHistory() {
                         <th class="text-right">Amount</th>
                         <th>Mode</th>
                         <th>Notes</th>
+                        <th class="actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -149,6 +150,10 @@ async function loadFarmerPaymentHistory() {
                             <td class="text-right" style="color:var(--danger)">-${formatCurrency(p.amount)}</td>
                             <td>${statusBadge(p.mode)}</td>
                             <td style="font-size:12px;color:var(--text-light)">${escapeHtml(p.notes || '')}</td>
+                            <td class="actions">
+                                <button class="btn btn-info btn-sm" onclick="editFarmerPaymentEntry(${p.id})" title="Edit this payment">✏️</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteFarmerPaymentEntry(${p.id})" title="Delete this payment">🗑</button>
+                            </td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -526,6 +531,105 @@ async function exportFarmerPaymentPDF() {
 }
 
 // Globals
+// ============================================================
+// Edit Farmer Payment Entry
+// ============================================================
+async function editFarmerPaymentEntry(id) {
+    // Fetch payment details
+    const paymentsResult = await window.api.getPayments({});
+    if (!paymentsResult.success) { showToast('Failed to load payment', 'error'); return; }
+    
+    const payment = (paymentsResult.data || []).find(p => p.id === id);
+    if (!payment) { showToast('Payment not found', 'error'); return; }
+
+    showModal(`
+        <div class="modal-header">
+            <h2>✏️ Edit Payment</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="editPaymentForm">
+                <input type="hidden" name="payment_id" value="${payment.id}">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Farmer</label>
+                        <input type="text" class="form-control" value="${escapeHtml(payment.party_name)}" readonly style="background:var(--bg)">
+                    </div>
+                    <div class="form-group">
+                        <label>Amount</label>
+                        <input type="text" class="form-control" value="${formatCurrency(payment.amount)}" readonly style="background:var(--bg);font-weight:700;color:var(--danger)">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Date</label>
+                        <input type="date" class="form-control" id="editPayDate" value="${payment.date}">
+                    </div>
+                    <div class="form-group">
+                        <label>Payment Mode</label>
+                        <select class="form-control" id="editPayMode">
+                            <option value="cash" ${payment.mode === 'cash' ? 'selected' : ''}>Cash</option>
+                            <option value="bank" ${payment.mode === 'bank' ? 'selected' : ''}>Bank Transfer</option>
+                            <option value="upi" ${payment.mode === 'upi' ? 'selected' : ''}>UPI</option>
+                            <option value="cheque" ${payment.mode === 'cheque' ? 'selected' : ''}>Cheque</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <input type="text" class="form-control" id="editPayNotes" value="${escapeHtml(payment.notes || '')}" placeholder="Payment notes">
+                </div>
+                <div style="background:#fff3cd;padding:12px;border-radius:6px;font-size:12px;color:#856404;margin-top:12px">
+                    ⚠️ Changing the date will update the payment record and associated ledger entry.
+                    To change the amount, please delete this payment and create a new one.
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveEditedPayment(${payment.id})">💾 Save Changes</button>
+        </div>
+    `);
+}
+
+async function saveEditedPayment(id) {
+    const date = document.getElementById('editPayDate')?.value || '';
+    const mode = document.getElementById('editPayMode')?.value || '';
+    const notes = document.getElementById('editPayNotes')?.value || '';
+
+    if (!date) { showToast('Date is required', 'error'); return; }
+
+    const result = await window.api.updatePayment({ id, date, mode, notes });
+    if (result.success) {
+        closeModal();
+        showToast('Payment updated successfully!', 'success');
+        renderFarmerPayments();
+    } else {
+        showToast('Error: ' + (result.error || 'Failed to update'), 'error');
+    }
+}
+
+// ============================================================
+// Delete Farmer Payment Entry
+// ============================================================
+async function deleteFarmerPaymentEntry(id) {
+    const confirmed = await confirmAction(
+        'Delete this farmer payment?',
+        'This will remove the payment record and revert any linked milk collection statuses back to "pending". This action cannot be undone.',
+        'Yes, Delete Payment'
+    );
+    if (!confirmed) return;
+
+    const result = await window.api.deletePayment(id);
+    if (result.success) {
+        showToast('Payment deleted and collection statuses reverted', 'success');
+        renderFarmerPayments();
+    } else {
+        showToast('Error: ' + (result.error || 'Failed to delete'), 'error');
+    }
+}
+
+// Globals
 window.renderFarmerPayments = renderFarmerPayments;
 window.updateBulkPayButton = updateBulkPayButton;
 window.updateSelectAllFarmers = updateSelectAllFarmers;
@@ -539,3 +643,6 @@ window.processBulkPayment = processBulkPayment;
 window.quickPayFarmer = quickPayFarmer;
 window.printPaymentReport = printPaymentReport;
 window.exportFarmerPaymentPDF = exportFarmerPaymentPDF;
+window.editFarmerPaymentEntry = editFarmerPaymentEntry;
+window.saveEditedPayment = saveEditedPayment;
+window.deleteFarmerPaymentEntry = deleteFarmerPaymentEntry;
