@@ -79,14 +79,27 @@ function saveParty(db, party) {
                 party.notes || ''
             );
             const newId = result.lastInsertRowid;
-            logAudit(db, 'parties', newId, 'create', null, party, party.created_by);
+
+            // Auto-generate a human-readable party code
+            const typePrefixes = {
+                'customer': 'CUS',
+                'supplier': 'SUP',
+                'both': 'PTY',
+                'farmer': 'FRM',
+                'partner': 'PTR'
+            };
+            const prefix = typePrefixes[party.type] || 'PTY';
+            const partyCode = prefix + '-' + String(newId).padStart(4, '0');
+            db.prepare("UPDATE parties SET party_code = ? WHERE id = ?").run(partyCode, newId);
+
+            logAudit(db, 'parties', newId, 'create', null, {...party, party_code: partyCode}, party.created_by);
             const bal = parseFloat(party.opening_balance || 0);
             if (bal !== 0) {
                 db.prepare(
                     "INSERT INTO ledger_entries (party_id, date, reference_type, description, debit, credit, balance) VALUES (?, date('now','localtime'), 'opening', 'Opening Balance', ?, 0, ?)"
                 ).run(newId, bal > 0 ? bal : 0, bal);
             }
-            return { id: newId };
+            return { id: newId, party_code: partyCode };
         }
     });
     return trx();

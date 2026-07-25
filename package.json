@@ -80,9 +80,7 @@
       "warningsAsErrors": false,
       "runAfterFinish": true,
       "menuCategory": true,
-      "menuGroupName": "Godhuli Dairy Plant",
-      "differentialPackage": true,
-      "installerFileName": "Godhuli-Dairy-Plant-Setup-${version}.exe"
+      "differentialPackage": true
     },
     "mac": {
       "target": [

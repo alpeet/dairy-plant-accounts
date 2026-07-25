@@ -43,7 +43,7 @@ const {
 } = require('./farmer');
 
 const {
-    savePayment, listPayments
+    savePayment, listPayments, deletePayment, updatePayment
 } = require('./payments');
 
 const {

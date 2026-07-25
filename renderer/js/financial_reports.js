@@ -526,6 +526,42 @@ async function showCashCollectionPage() {
             </table>
         </div>
 
+        <!-- Payment Records Section (from payments table) with View/Edit/Delete -->
+        ${data.payment_records && data.payment_records.length > 0 ? `
+        <div style="margin-top:24px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                <span style="font-size:16px">💳</span>
+                <h3 style="font-size:15px;font-weight:700;margin:0">Payment Records</h3>
+                <span style="font-size:11px;background:var(--bg);color:var(--text-light);padding:2px 8px;border-radius:4px">${data.payment_records.length} payment(s)</span>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Date</th><th>Party</th><th>Type</th><th class="text-right">Amount</th><th>Mode</th><th>Reference</th><th>Notes</th><th class="actions" style="min-width:130px">Actions</th></tr></thead>
+                    <tbody>
+                        ${data.payment_records.map(p => {
+                            const typeIcon = p.type === 'receipt' ? '📩' : '💸';
+                            const typeLabel = p.type === 'receipt' ? 'Receipt' : 'Payment';
+                            return `<tr>
+                                <td>${formatDate(p.date)}</td>
+                                <td style="font-size:12px"><strong>${escapeHtml(p.party_name || 'Unknown')}</strong></td>
+                                <td><span class="badge ${p.type === 'receipt' ? 'badge-success' : 'badge-danger'}">${typeIcon} ${typeLabel}</span></td>
+                                <td class="text-right" style="font-weight:600;color:${p.type === 'receipt' ? 'var(--accent)' : 'var(--danger)'}">${formatCurrency(p.amount)}</td>
+                                <td style="font-size:12px">${statusBadge(p.mode)}</td>
+                                <td style="font-size:11px;color:var(--text-light)">${p.reference_type ? escapeHtml(p.reference_type) + (p.reference_id ? ' #' + p.reference_id : '') : '-'}</td>
+                                <td style="font-size:12px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.notes || '')}</td>
+                                <td class="actions" style="white-space:nowrap">
+                                    <button class="btn btn-sm btn-info" onclick="viewPaymentRecord(${p.id})" title="View" style="padding:2px 6px;font-size:11px">👁️</button>
+                                    <button class="btn btn-sm btn-secondary" onclick="editPaymentRecord(${p.id})" title="Edit" style="padding:2px 6px;font-size:11px">✏️</button>
+                                    <button class="btn btn-sm btn-danger" onclick="deletePaymentRecord(${p.id})" title="Delete" style="padding:2px 6px;font-size:11px">🗑️</button>
+                                </td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        ` : ''}
+
         <!-- Manual Entries Section with Edit/Delete -->
         ${data.manual_entries && data.manual_entries.length > 0 ? `
         <div style="margin-top:24px">
@@ -568,9 +604,18 @@ async function showCashCollectionPage() {
 function applyCashCollectionPage() {
     const from = document.getElementById('ccFrom')?.value || '';
     const to = document.getElementById('ccTo')?.value || '';
-    window.api.getDailyCashCollection({ from_date: from, to_date: to }).then(r => {
-        if (r.success) { _finLastData.cashCollection = r.data; showCashCollectionPage(); }
-        else showToast(r.error, 'error');
+    Promise.all([
+        window.api.getDailyCashCollection({ from_date: from, to_date: to }),
+        window.api.getPayments({ from_date: from, to_date: to })
+    ]).then(([collResult, payResult]) => {
+        if (collResult.success) {
+            const data = collResult.data;
+            data.payment_records = payResult.success ? payResult.data || [] : [];
+            _finLastData.cashCollection = data;
+            showCashCollectionPage();
+        } else {
+            showToast(collResult.error, 'error');
+        }
     });
 }
 
@@ -578,7 +623,7 @@ function applyCashCollectionPage() {
 // Add Manual Payment Collection Record
 // ============================================================
 async function showAddCashCollectionRecord(record) {
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
     const isEdit = !!record;
 
     const modeOptions = PAYMENT_MODES.map(m => 
@@ -596,7 +641,7 @@ async function showAddCashCollectionRecord(record) {
     const btnText = isEdit ? '💾 Update & Integrate' : '💾 Save & Integrate';
     const recordIdHtml = isEdit ? `<input type="hidden" id="ccRecordId" value="${record.id}">` : '';
 
-    const defaultDate = record ? record.date : today;
+    const defaultDate = record ? record.date : today();
     const defaultRefNo = record ? (escapeHtml(record.ref_no || '')) : '';
     const defaultSales = record ? (record.cash_sales || 0) : 0;
     const defaultReceipts = record ? (record.cash_receipts || 0) : 0;
@@ -810,6 +855,148 @@ async function deleteCashCollectionRecord(id) {
 }
 
 // ============================================================
+// Payment Records (from payments table) — View / Edit / Delete
+// ============================================================
+
+/**
+ * View full payment record details in a modal.
+ */
+function viewPaymentRecord(id) {
+    const records = _finLastData.cashCollection?.payment_records || [];
+    const p = records.find(r => r.id === id);
+    if (!p) { showToast('Record not found', 'error'); return; }
+
+    showModal(`
+        <div class="modal-header">
+            <h2>💳 Payment Details</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+                <div><strong style="color:var(--text-light)">Record ID</strong><br>#${p.id}</div>
+                <div><strong style="color:var(--text-light)">Date</strong><br>${formatDate(p.date)}</div>
+                <div><strong style="color:var(--text-light)">Party</strong><br>${escapeHtml(p.party_name || 'Unknown')}</div>
+                <div><strong style="color:var(--text-light)">Type</strong><br><span class="badge ${p.type === 'receipt' ? 'badge-success' : 'badge-danger'}">${p.type === 'receipt' ? '📩 Receipt' : '💸 Payment'}</span></div>
+                <div><strong style="color:var(--text-light)">Amount</strong><br><span style="font-size:16px;font-weight:700;color:${p.type === 'receipt' ? 'var(--accent)' : 'var(--danger)'}">${formatCurrency(p.amount)}</span></div>
+                <div><strong style="color:var(--text-light)">Mode</strong><br>${statusBadge(p.mode)}</div>
+            </div>
+            ${p.reference_type ? `<div style="margin-bottom:8px"><strong style="color:var(--text-light)">Reference</strong><br>${escapeHtml(p.reference_type)}${p.reference_id ? ' #' + p.reference_id : ''}</div>` : ''}
+            ${p.notes ? `<div style="margin-bottom:8px"><strong style="color:var(--text-light)">Notes</strong><br>${escapeHtml(p.notes)}</div>` : ''}
+            <div style="font-size:11px;color:var(--text-light);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">
+                Created: ${p.created_at || 'N/A'}
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+        </div>
+    `);
+}
+
+/**
+ * Edit a payment record — change mode, notes, or date.
+ */
+async function editPaymentRecord(id) {
+    const records = _finLastData.cashCollection?.payment_records || [];
+    const p = records.find(r => r.id === id);
+    if (!p) { showToast('Record not found', 'error'); return; }
+
+    showModal(`
+        <div class="modal-header">
+            <h2>✏️ Edit Payment</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editPayId" value="${p.id}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Party</label>
+                    <input type="text" class="form-control" value="${escapeHtml(p.party_name || 'Unknown')}" disabled style="background:var(--bg)">
+                </div>
+                <div class="form-group">
+                    <label>Amount</label>
+                    <input type="text" class="form-control" value="${formatCurrency(p.amount)}" disabled style="background:var(--bg);font-weight:700;color:${p.type === 'receipt' ? 'var(--accent)' : 'var(--danger)'}">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Date *</label>
+                    <input type="date" class="form-control" id="editPayDate" value="${p.date}">
+                </div>
+                <div class="form-group">
+                    <label>Mode *</label>
+                    <select class="form-control" id="editPayMode">
+                        <option value="cash" ${p.mode === 'cash' ? 'selected' : ''}>💵 Cash</option>
+                        <option value="bank" ${p.mode === 'bank' ? 'selected' : ''}>🏦 Bank</option>
+                        <option value="upi" ${p.mode === 'upi' ? 'selected' : ''}>📱 UPI</option>
+                        <option value="cheque" ${p.mode === 'cheque' ? 'selected' : ''}>📄 Cheque</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea class="form-control" id="editPayNotes" rows="2">${escapeHtml(p.notes || '')}</textarea>
+            </div>
+            <div style="background:var(--bg);padding:10px;border-radius:6px;font-size:12px;color:var(--text-light)">
+                ℹ️ Type and amount cannot be changed. Edit only date, mode, and notes.
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="savePaymentRecordEdit()">💾 Update</button>
+        </div>
+    `);
+}
+
+/**
+ * Save the payment record edits.
+ */
+async function savePaymentRecordEdit() {
+    const id = document.getElementById('editPayId')?.value;
+    if (!id) { showToast('Invalid record', 'error'); return; }
+
+    const data = {
+        id: parseInt(id),
+        date: document.getElementById('editPayDate')?.value || '',
+        mode: document.getElementById('editPayMode')?.value || 'cash',
+        notes: document.getElementById('editPayNotes')?.value || ''
+    };
+
+    if (!data.date) { showToast('Date is required', 'error'); return; }
+
+    const result = await window.api.updatePayment(data);
+    if (result.success) {
+        closeModal();
+        showToast('Payment updated successfully!', 'success');
+        applyCashCollectionPage();
+    } else {
+        showToast(result.error || 'Failed to update', 'error');
+    }
+}
+
+/**
+ * Delete a payment record with confirmation.
+ */
+async function deletePaymentRecord(id) {
+    const records = _finLastData.cashCollection?.payment_records || [];
+    const p = records.find(r => r.id === id);
+    if (!p) { showToast('Record not found', 'error'); return; }
+
+    const confirmed = await confirmAction(
+        `Delete this ${p.type === 'receipt' ? 'receipt' : 'payment'} record of ${formatCurrency(p.amount)} from ${escapeHtml(p.party_name || 'Unknown')}?`,
+        'This will also remove related ledger entries. This action cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    const result = await window.api.deletePayment(id);
+    if (result.success) {
+        showToast('Payment deleted successfully!', 'success');
+        applyCashCollectionPage();
+    } else {
+        showToast(result.error || 'Failed to delete', 'error');
+    }
+}
+
+// ============================================================
 // Render function for Profit/Loss (used by app.js navigation)
 // ============================================================
 async function renderFinancialReports() {
@@ -843,3 +1030,7 @@ window.saveCashCollectionRecord = saveCashCollectionRecord;
 window.updateCashCollectionPreview = updateCashCollectionPreview;
 window.editCashCollectionRecord = editCashCollectionRecord;
 window.deleteCashCollectionRecord = deleteCashCollectionRecord;
+window.viewPaymentRecord = viewPaymentRecord;
+window.editPaymentRecord = editPaymentRecord;
+window.savePaymentRecordEdit = savePaymentRecordEdit;
+window.deletePaymentRecord = deletePaymentRecord;

@@ -72,6 +72,7 @@ async function renderParties() {
                 <table>
                     <thead>
                         <tr>
+                            <th>Code</th>
                             <th>Name</th>
                             <th>Phone</th>
                             <th>Type</th>
@@ -83,7 +84,7 @@ async function renderParties() {
                     </thead>
                     <tbody>
                         ${parties.length === 0
-                            ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
+                            ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
                             : parties.map(p => {
                                 const out = outstandingMap[p.id];
                                 let detailHtml = '-';
@@ -96,6 +97,7 @@ async function renderParties() {
                                 }
                                 return `
                                     <tr>
+                                        <td><code style="font-size:11px;color:var(--primary)">${escapeHtml(p.party_code || '-')}</code></td>
                                         <td><strong>${escapeHtml(p.name)}</strong></td>
                                         <td>${escapeHtml(p.phone || '-')}</td>
                                         <td><span class="badge ${p.type === 'customer' ? 'badge-info' : p.type === 'supplier' ? 'badge-warning' : p.type === 'farmer' ? 'badge-success' : p.type === 'partner' ? 'badge-primary' : 'badge-secondary'}">${escapeHtml(p.type)}</span></td>
@@ -163,6 +165,8 @@ async function showPartyForm(partyId = null) {
     const routesResult = await window.api.getRoutes({});
     const routes = routesResult.success ? routesResult.data : [];
 
+    const nextPartyCode = isEdit ? party.party_code : 'Auto-assigned on save';
+
     showModal(`
         <div class="modal-header">
             <h2>${isEdit ? 'Edit Party' : 'New Party'}</h2>
@@ -170,9 +174,15 @@ async function showPartyForm(partyId = null) {
         </div>
         <div class="modal-body" style="max-height:70vh;overflow-y:auto">
             <form id="partyForm">
-                <div class="form-group">
-                    <label>Party Name *</label>
-                    <input type="text" class="form-control" name="name" value="${escapeHtml(party ? party.name : '')}" required autofocus>
+                <div class="form-row">
+                    <div class="form-group" style="flex:0 0 160px">
+                        <label>Party Code</label>
+                        <input type="text" class="form-control" value="${nextPartyCode}" disabled style="background:#f5f5f5;font-weight:bold;color:var(--primary)">
+                    </div>
+                    <div class="form-group" style="flex:1">
+                        <label>Party Name *</label>
+                        <input type="text" class="form-control" name="name" value="${escapeHtml(party ? party.name : '')}" required autofocus>
+                    </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -283,7 +293,10 @@ async function saveParty(partyId) {
 
     const result = await window.api.saveParty(data);
     if (result.success) {
-        showToast(`Party ${partyId ? 'updated' : 'created'} successfully!`);
+        const code = result.data?.party_code || '';
+        showToast(partyId 
+            ? `Party updated successfully!` 
+            : `Party created successfully! Code: ${code}`);
         closeModal();
         renderParties();
         clearSettingsCache();
@@ -530,11 +543,12 @@ async function printPartiesList() {
             <p>Total: ${parties.length} parties</p>
         </div>
         <table>
-            <thead><tr><th>Name</th><th>Phone</th><th>Type</th><th class="text-right">Opening Balance</th><th class="text-right">Outstanding</th></tr></thead>
+            <thead><tr><th>Code</th><th>Name</th><th>Phone</th><th>Type</th><th class="text-right">Opening Balance</th><th class="text-right">Outstanding</th></tr></thead>
             <tbody>
                 ${parties.map(p => {
                     const out = outstandingMap[p.id];
                     return `<tr>
+                        <td><code>${escapeHtml(p.party_code || '-')}</code></td>
                         <td><strong>${escapeHtml(p.name)}</strong></td>
                         <td>${escapeHtml(p.phone || '-')}</td>
                         <td>${escapeHtml(p.type)}</td>
@@ -565,9 +579,9 @@ async function exportPartiesPDF() {
             <p>Total: ${parties.length} parties</p>
         </div>
         <table>
-            <thead><tr><th>Name</th><th>Phone</th><th>Type</th><th class="text-right">Opening Balance</th></tr></thead>
+            <thead><tr><th>Code</th><th>Name</th><th>Phone</th><th>Type</th><th class="text-right">Opening Balance</th></tr></thead>
             <tbody>
-                ${parties.map(p => `<tr><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.phone || '-')}</td><td>${escapeHtml(p.type)}</td><td class="text-right">${formatCurrency(p.opening_balance)}</td></tr>`).join('')}
+                ${parties.map(p => `<tr><td><code>${escapeHtml(p.party_code || '-')}</code></td><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.phone || '-')}</td><td>${escapeHtml(p.type)}</td><td class="text-right">${formatCurrency(p.opening_balance)}</td></tr>`).join('')}
             </tbody>
         </table>
         <div class="footer">

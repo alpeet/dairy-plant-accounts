@@ -139,14 +139,14 @@ async function refreshCashCollection() {
 // ============================================================
 async function showDenominationCount() {
     const container = document.getElementById('cashContent');
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
     const preset = getDatePreset('this_month');
 
     const listResult = await window.api.getDenominations({ from_date: preset.from, to_date: preset.to });
     const counts = listResult.success ? listResult.data : [];
 
     // Check if today already has a count
-    const todayCount = counts.find(c => c.date === today);
+    const todayCount = counts.find(c => c.date === todayStr);
 
     container.innerHTML = `
         <div class="card-header">
@@ -238,12 +238,12 @@ async function refreshDenomination() {
 }
 
 async function showAddDenomination(existingData) {
-    const today = new Date().toISOString().split('T')[0];
-    const d = existingData || { date: today, note_1000: 0, note_500: 0, note_100: 0, note_50: 0, note_20: 0, note_10: 0, note_5: 0, note_other: 0, note_other_value: 0, coin_5: 0, coin_2: 0, coin_1: 0, expected_cash: 0, counted_by: '', remarks: '' };
+    const todayStr = today();
+    const d = existingData || { date: todayStr, note_1000: 0, note_500: 0, note_100: 0, note_50: 0, note_20: 0, note_10: 0, note_5: 0, note_other: 0, note_other_value: 0, coin_5: 0, coin_2: 0, coin_1: 0, expected_cash: 0, counted_by: '', remarks: '' };
 
     // Try to get today's expected cash from cash collection
     if (!existingData) {
-        const cashResult = await window.api.getDailyCashCollection({ from_date: today, to_date: today });
+        const cashResult = await window.api.getDailyCashCollection({ from_date: todayStr, to_date: todayStr });
         if (cashResult.success && cashResult.data.days.length > 0) {
             d.expected_cash = cashResult.data.days[0].total_cash_in;
         }

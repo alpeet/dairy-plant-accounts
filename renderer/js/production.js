@@ -164,7 +164,7 @@ async function showProductionForm(batchId = null) {
     }
 
     const isEdit = !!batch;
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
 
     // Default inputs/outputs
     const inputs = batch ? batch.inputs : [{ product_id: '', product_name: '', quantity: '', unit: 'liter', rate: '' }];
@@ -184,7 +184,7 @@ async function showProductionForm(batchId = null) {
                     </div>
                     <div class="form-group">
                         <label>Date</label>
-                        <input type="date" class="form-control" id="pbDate" value="${batch ? batch.date : today}">
+                        <input type="date" class="form-control" id="pbDate" value="${batch ? batch.date : todayStr}">
                     </div>
                     <div class="form-group">
                         <label>Shift</label>

@@ -100,8 +100,8 @@ async function refreshPettyCash() {
 }
 
 function showAddPettyCash(existingData) {
-    const today = new Date().toISOString().split('T')[0];
-    const d = existingData || { date: today, voucher_no: 'PC-' + Date.now().toString().slice(-6), expense_head: '', description: '', amount: '', paid_to: '', approved_by: '', payment_mode: 'cash', remarks: '' };
+    const todayStr = today();
+    const d = existingData || { date: todayStr, voucher_no: 'PC-' + Date.now().toString().slice(-6), expense_head: '', description: '', amount: '', paid_to: '', approved_by: '', payment_mode: 'cash', remarks: '' };
 
     showModal(`
         <div class="modal-header">

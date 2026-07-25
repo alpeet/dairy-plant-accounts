@@ -110,8 +110,8 @@ async function refreshExpenses() {
 }
 
 function showAddExpense(existingData) {
-    const today = new Date().toISOString().split('T')[0];
-    const d = existingData || { date: today, category: '', expense_head: '', description: '', amount: '', paid_to: '', payment_mode: 'cash', reference_no: '', remarks: '' };
+    const todayStr = today();
+    const d = existingData || { date: todayStr, category: '', expense_head: '', description: '', amount: '', paid_to: '', payment_mode: 'cash', reference_no: '', remarks: '' };
 
     showModal(`
         <div class="modal-header"><h2>${existingData ? 'Edit' : 'New'} Expense Entry</h2><button class="close-btn" onclick="closeModal()">&times;</button></div>

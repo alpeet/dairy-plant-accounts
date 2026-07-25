@@ -53,6 +53,7 @@ PRAGMA foreign_keys = ON;
 -- ============================================================
 CREATE TABLE IF NOT EXISTS parties (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    party_code TEXT DEFAULT '',
     name TEXT NOT NULL,
     phone TEXT DEFAULT '',
     address TEXT DEFAULT '',

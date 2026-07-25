@@ -133,9 +133,9 @@ async function refreshCashDeposits() {
 }
 
 async function showAddCashDeposit(existingData) {
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
     const d = existingData || { 
-        date: today, bank_name: '', branch: '', account_no: '', 
+        date: todayStr, bank_name: '', branch: '', account_no: '', 
         amount: 0, cash_source: 'mixed', deposit_mode: 'cash', 
         reference_no: '', remarks: '', deposited_by: '' 
     };

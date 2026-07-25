@@ -175,7 +175,7 @@ async function renderStock() {
 async function showQuickStockMovement() {
     const productsResult = await window.api.getStockCurrent();
     const products = productsResult.success ? productsResult.data : [];
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
 
     showModal(`
         <div class="modal-header">

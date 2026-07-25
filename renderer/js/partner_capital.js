@@ -158,7 +158,7 @@ async function showPartnerCapitalForm(txnId = null, preSelectedPartnerId = null)
         if (result.success) txn = result.data;
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
 
     showModal(`
         <div class="modal-header">
@@ -180,7 +180,7 @@ async function showPartnerCapitalForm(txnId = null, preSelectedPartnerId = null)
                 <div class="form-row">
                     <div class="form-group">
                         <label>Date</label>
-                        <input type="date" class="form-control" id="pcDate" value="${txn ? txn.date : today}">
+                        <input type="date" class="form-control" id="pcDate" value="${txn ? txn.date : todayStr}">
                     </div>
                     <div class="form-group">
                         <label>Transaction Type *</label>

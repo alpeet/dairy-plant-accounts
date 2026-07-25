@@ -85,7 +85,7 @@ async function refreshVehicle() {
 }
 
 function showAddVehicle(existingData) {
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
     const d = existingData || { date: today, vehicle_name: '', driver_name: '', expense_type: 'fuel', fuel_amount: 0, repair_amount: 0, maintenance_amount: 0, toll_parking_amount: 0, other_amount: 0, remarks: '' };
 
     showModal(`

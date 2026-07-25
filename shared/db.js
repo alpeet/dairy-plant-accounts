@@ -320,6 +320,44 @@ function runMigrations(db) {
         }
     }
 
+    // Migration 11: Add party_code column (only runs if column doesn't exist yet)
+    try {
+        db.prepare("SELECT party_code FROM parties LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE parties ADD COLUMN party_code TEXT DEFAULT '';`);
+            console.log('Added party_code column to parties table');
+        } catch (e2) {
+            console.log('Migration 11 (party_code column) skipped:', e2.message);
+        }
+    }
+
+    // Backfill any parties that are still missing party_code (runs every startup)
+    // This catches parties created by seed scripts, imports, or initial bulk inserts
+    try {
+        const typePrefixes = {
+            'customer': 'CUS',
+            'supplier': 'SUP',
+            'both': 'PTY',
+            'farmer': 'FRM',
+            'partner': 'PTR'
+        };
+        const noCodeParties = db.prepare(
+            "SELECT id, type FROM parties WHERE party_code IS NULL OR party_code = ''"
+        ).all();
+        if (noCodeParties.length > 0) {
+            const updateStmt = db.prepare("UPDATE parties SET party_code = ? WHERE id = ?");
+            for (const p of noCodeParties) {
+                const prefix = typePrefixes[p.type] || 'PTY';
+                const code = prefix + '-' + String(p.id).padStart(4, '0');
+                updateStmt.run(code, p.id);
+            }
+            console.log(`  → ${noCodeParties.length} parties backfilled with auto-generated codes`);
+        }
+    } catch (e3) {
+        console.log('Party code backfill skipped:', e3.message);
+    }
+
     console.log('Migrations complete');
 }
 

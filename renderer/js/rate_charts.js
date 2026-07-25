@@ -103,9 +103,9 @@ function getRateFormulaHelp() {
 // Rate Chart Form
 // ============================================================
 function showRateChartForm(existingData) {
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
     const d = existingData || {
-        effective_from: today,
+        effective_from: todayStr,
         rate_type: 'formula',
         fat_multiplier: 7.15,
         snf_multiplier: 4.55,
@@ -229,7 +229,7 @@ async function deleteRateChartEntry(id) {
 // Effective Rate Lookup
 // ============================================================
 async function showEffectiveRateLookup() {
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = today();
 
     showModal(`
         <div class="modal-header">
@@ -239,7 +239,7 @@ async function showEffectiveRateLookup() {
         <div class="modal-body">
             <div class="form-group">
                 <label>Select Date</label>
-                <input type="date" class="form-control" id="erDate" value="${today}">
+                <input type="date" class="form-control" id="erDate" value="${todayStr}">
             </div>
             <div class="form-group">
                 <label>Test Calculation (Optional)</label>
@@ -311,7 +311,7 @@ async function printRateCharts() {
     const settings = await getSettingsCached();
 
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Milk Rate Chart History</h2><p>As of: ${formatDate(new Date().toISOString().split('T')[0])}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Milk Rate Chart History</h2>        <p>As of: ${formatDate(today())}</p></div>
         <table><thead><tr><th>Effective</th><th>Type</th><th class="text-right">FAT Mult</th><th class="text-right">SNF Mult</th><th class="text-right">Extra</th><th class="text-right">Fixed Rate</th><th>Notes</th></tr></thead>
         <tbody>${rates.map(r => `<tr><td>${formatDate(r.effective_from)}</td><td>${r.rate_type}</td><td class="text-right">${r.rate_type === 'formula' ? r.fat_multiplier : '-'}</td><td class="text-right">${r.rate_type === 'formula' ? r.snf_multiplier : '-'}</td><td class="text-right">${r.rate_type === 'formula' ? formatCurrency(r.extra_per_unit||0) : '-'}</td><td class="text-right">${r.rate_type === 'fixed' ? formatCurrency(r.fixed_rate) : '-'}</td><td>${escapeHtml(r.notes||'')}</td></tr>`).join('')}</tbody>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
