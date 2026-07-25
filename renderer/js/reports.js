@@ -274,10 +274,12 @@ async function showDayBook(fromDate = '', toDate = '') {
         </div>
         <div class="table-container">
             <table>
-                <thead><tr><th>Date</th><th>Ref No</th><th>Type</th><th>Account/Party</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th></tr></thead>
+                <thead><tr><th>Date</th><th>Ref No</th><th>Type</th><th>Account/Party</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th><th class="actions">Actions</th></tr></thead>
                 <tbody>
-                    ${(data.entries || []).map(e => `
-                        <tr>
+                    ${(data.entries || []).map(e => {
+                        const type = e.type || '';
+                        const entryId = e.id;
+                        return `<tr>
                             <td>${formatDate(e.date)}</td>
                             <td>${escapeHtml(e.ref_no || '')}</td>
                             <td><span class="badge ${e.type === 'sale' || e.type === 'receipt' ? 'badge-success' : 'badge-danger'}">${e.transaction_type || e.type}</span></td>
@@ -285,15 +287,19 @@ async function showDayBook(fromDate = '', toDate = '') {
                             <td>${escapeHtml(e.particulars || '')}</td>
                             <td class="text-right" style="color:${e.debit > 0 ? 'var(--accent)' : ''}">${e.debit > 0 ? formatCurrency(e.debit) : ''}</td>
                             <td class="text-right" style="color:${e.credit > 0 ? 'var(--danger)' : ''}">${e.credit > 0 ? formatCurrency(e.credit) : ''}</td>
-                        </tr>
-                    `).join('')}
-                    ${(!data.entries || data.entries.length === 0) ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No transactions in this period</td></tr>' : ''}
+                            <td class="actions">
+                                <button class="btn btn-info btn-sm" onclick="viewDaybookEntry('${type}', ${entryId})" title="View details">📋</button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                    ${(!data.entries || data.entries.length === 0) ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No transactions in this period</td></tr>' : ''}
                 </tbody>
                 <tfoot>
                     <tr>
                         <td colspan="5"><strong>Total</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.totalDebit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.totalCredit)}</strong></td>
+                        <td></td>
                     </tr>
                 </tfoot>
             </table>
@@ -351,10 +357,15 @@ async function showSalesRegister(fromDate = '', toDate = '', partyId = '', statu
         </div>
         <div class="table-container">
             <table>
-                <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Products</th><th class="text-right">Gross</th><th class="text-right">Disc</th><th class="text-right">Net</th><th class="text-right">Paid</th><th class="text-right">Due</th><th>Mode</th><th>Status</th></tr></thead>
-                <tbody>${data.sales.map(s => `<tr><td>${formatDate(s.date)}</td><td>${escapeHtml(s.invoice_no)}</td><td>${escapeHtml(s.party_name)}</td><td style="max-width:200px;font-size:11px">${escapeHtml((s.products_summary||'').substring(0,60))}${(s.products_summary||'').length > 60 ? '...' : ''}</td><td class="text-right">${formatCurrency(s.subtotal)}</td><td class="text-right">${formatCurrency(s.discount)}</td><td class="text-right">${formatCurrency(s.grand_total)}</td><td class="text-right">${formatCurrency(s.paid_amount)}</td><td class="text-right" style="color:${(s.grand_total - s.paid_amount) > 0 ? 'var(--danger)' : 'var(--accent)'}">${formatCurrency(s.grand_total - s.paid_amount)}</td><td>${statusBadge(s.payment_mode)}</td><td>${statusBadge(s.status)}</td></tr>`).join('')}
-                ${data.sales.length === 0 ? '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No sales found</td></tr>' : ''}</tbody>
-                <tfoot><tr><td colspan="6"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.total)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalPaid)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalDue)}</strong></td><td colspan="2"></td></tr></tfoot>
+                <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Products</th><th class="text-right">Gross</th><th class="text-right">Disc</th><th class="text-right">Net</th><th class="text-right">Paid</th><th class="text-right">Due</th><th>Mode</th><th>Status</th><th class="actions">Actions</th></tr></thead>
+                <tbody>${data.sales.map(s => `<tr><td>${formatDate(s.date)}</td><td>${escapeHtml(s.invoice_no)}</td><td>${escapeHtml(s.party_name)}</td><td style="max-width:200px;font-size:11px">${escapeHtml((s.products_summary||'').substring(0,60))}${(s.products_summary||'').length > 60 ? '...' : ''}</td><td class="text-right">${formatCurrency(s.subtotal)}</td><td class="text-right">${formatCurrency(s.discount)}</td><td class="text-right">${formatCurrency(s.grand_total)}</td><td class="text-right">${formatCurrency(s.paid_amount)}</td><td class="text-right" style="color:${(s.grand_total - s.paid_amount) > 0 ? 'var(--danger)' : 'var(--accent)'}">${formatCurrency(s.grand_total - s.paid_amount)}</td><td>${statusBadge(s.payment_mode)}</td><td>${statusBadge(s.status)}</td>
+    <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick="navigateTo('sales')" title="Edit in Sales">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteSaleFromRegister(${s.id})" title="Delete">🗑</button>
+    </td>
+</tr>`).join('')}
+                ${data.sales.length === 0 ? '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">No sales found</td></tr>' : ''}</tbody>
+                <tfoot><tr><td colspan="6"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.total)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalPaid)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalDue)}</strong></td><td colspan="3"></td></tr></tfoot>
             </table>
         </div>
     `;
@@ -414,10 +425,15 @@ async function showPurchaseRegister(fromDate = '', toDate = '', partyId = '', st
         </div>
         <div class="table-container">
             <table>
-                <thead><tr><th>Date</th><th>Bill No</th><th>Supplier</th><th>Items</th><th class="text-right">Gross</th><th class="text-right">Charges</th><th class="text-right">Net</th><th class="text-right">Paid</th><th class="text-right">Due</th><th>Status</th></tr></thead>
-                <tbody>${data.purchases.map(p => `<tr><td>${formatDate(p.date)}</td><td>${escapeHtml(p.bill_no)}</td><td>${escapeHtml(p.party_name)}</td><td style="max-width:200px;font-size:11px">${escapeHtml((p.products_summary||'').substring(0,60))}${(p.products_summary||'').length > 60 ? '...' : ''}</td><td class="text-right">${formatCurrency(p.subtotal)}</td><td class="text-right">${formatCurrency((p.transport_charges||0)+(p.extra_charges||0))}</td><td class="text-right">${formatCurrency(p.grand_total)}</td><td class="text-right">${formatCurrency(p.paid_amount)}</td><td class="text-right" style="color:${(p.grand_total - p.paid_amount) > 0 ? 'var(--danger)' : 'var(--accent)'}">${formatCurrency(p.grand_total - p.paid_amount)}</td><td>${statusBadge(p.status)}</td></tr>`).join('')}
-                ${data.purchases.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No purchases found</td></tr>' : ''}</tbody>
-                <tfoot><tr><td colspan="6"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.total)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalPaid)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalDue)}</strong></td><td></td></tr></tfoot>
+                <thead><tr><th>Date</th><th>Bill No</th><th>Supplier</th><th>Items</th><th class="text-right">Gross</th><th class="text-right">Charges</th><th class="text-right">Net</th><th class="text-right">Paid</th><th class="text-right">Due</th><th>Status</th><th class="actions">Actions</th></tr></thead>
+                <tbody>${data.purchases.map(p => `<tr><td>${formatDate(p.date)}</td><td>${escapeHtml(p.bill_no)}</td><td>${escapeHtml(p.party_name)}</td><td style="max-width:200px;font-size:11px">${escapeHtml((p.products_summary||'').substring(0,60))}${(p.products_summary||'').length > 60 ? '...' : ''}</td><td class="text-right">${formatCurrency(p.subtotal)}</td><td class="text-right">${formatCurrency((p.transport_charges||0)+(p.extra_charges||0))}</td><td class="text-right">${formatCurrency(p.grand_total)}</td><td class="text-right">${formatCurrency(p.paid_amount)}</td><td class="text-right" style="color:${(p.grand_total - p.paid_amount) > 0 ? 'var(--danger)' : 'var(--accent)'}">${formatCurrency(p.grand_total - p.paid_amount)}</td><td>${statusBadge(p.status)}</td>
+    <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick="navigateTo('purchases')" title="Edit in Purchases">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePurchaseFromRegister(${p.id})" title="Delete">🗑</button>
+    </td>
+</tr>`).join('')}
+                ${data.purchases.length === 0 ? '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No purchases found</td></tr>' : ''}</tbody>
+                <tfoot><tr><td colspan="6"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.total)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalPaid)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalDue)}</strong></td><td colspan="2"></td></tr></tfoot>
             </table>
         </div>
     `;
@@ -866,6 +882,164 @@ async function exportFarmerStatementPDF() {
     await window.api.printToPDF({ html });
 }
 
+// ============================================================
+// Helper: View Daybook Entry — shows transaction details in a modal
+// ============================================================
+function viewDaybookEntry(type, id) {
+    // Fetch the transaction details based on type
+    let fetchPromise;
+    if (type === 'sale') {
+        fetchPromise = window.api.getSale(id);
+    } else if (type === 'purchase') {
+        fetchPromise = window.api.getPurchase(id);
+    } else if (type === 'petty_cash') {
+        fetchPromise = window.api.getPettyCash(id);
+    } else if (type === 'expense') {
+        fetchPromise = window.api.getOtherExpense(id);
+    } else if (type === 'vehicle') {
+        fetchPromise = window.api.getVehicleExpense(id);
+    } else if (type === 'receipt' || type === 'payment') {
+        // Payment/receipt - fetch from payments API
+        fetchPromise = window.api.getPayments({}).then(r => {
+            if (r.success) {
+                const pm = (r.data || []).find(p => p.id === id);
+                return { success: !!pm, data: pm };
+            }
+            return r;
+        });
+    } else {
+        // Fallback: navigate to the page
+        const pageMap = {
+            'salary': 'salary'
+        };
+        const page = pageMap[type];
+        if (page) {
+            showToast('Opening ' + page + '...', 'info');
+            navigateTo(page);
+        }
+        return;
+    }
+    
+    Promise.resolve(fetchPromise).then(async (result) => {
+        if (!result.success || !result.data) {
+            showToast('Could not load transaction details', 'error');
+            return;
+        }
+        const d = result.data;
+        const typeLabels = {
+            'sale': 'Sale Invoice',
+            'purchase': 'Purchase Bill',
+            'receipt': 'Payment Receipt',
+            'payment': 'Payment Made',
+            'petty_cash': 'Petty Cash',
+            'expense': 'Expense',
+            'vehicle': 'Vehicle Expense'
+        };
+        
+        // Build details HTML based on type
+        let detailsHtml = '';
+        if (type === 'sale') {
+            detailsHtml = `
+                <div class="form-row"><div class="form-group"><label>Invoice No</label><div><strong>${escapeHtml(d.invoice_no)}</strong></div></div>
+                <div class="form-group"><label>Date</label><div>${formatDate(d.date)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Customer</label><div>${escapeHtml(d.party_name || 'N/A')}</div></div>
+                <div class="form-group"><label>Amount</label><div style="font-weight:700;font-size:16px;color:var(--accent)">${formatCurrency(d.grand_total)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Paid</label><div>${formatCurrency(d.paid_amount)}</div></div>
+                <div class="form-group"><label>Status</label><div>${statusBadge(d.status)}</div></div></div>`;
+        } else if (type === 'purchase') {
+            detailsHtml = `
+                <div class="form-row"><div class="form-group"><label>Bill No</label><div><strong>${escapeHtml(d.bill_no)}</strong></div></div>
+                <div class="form-group"><label>Date</label><div>${formatDate(d.date)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Supplier</label><div>${escapeHtml(d.party_name || 'N/A')}</div></div>
+                <div class="form-group"><label>Amount</label><div style="font-weight:700;font-size:16px;color:var(--danger)">${formatCurrency(d.grand_total)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Paid</label><div>${formatCurrency(d.paid_amount)}</div></div>
+                <div class="form-group"><label>Status</label><div>${statusBadge(d.status)}</div></div></div>`;
+        } else if (type === 'petty_cash') {
+            detailsHtml = `
+                <div class="form-row"><div class="form-group"><label>Voucher No</label><div><strong>${escapeHtml(d.voucher_no)}</strong></div></div>
+                <div class="form-group"><label>Date</label><div>${formatDate(d.date)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Head</label><div>${escapeHtml(d.expense_head)}</div></div>
+                <div class="form-group"><label>Amount</label><div style="font-weight:700;color:var(--danger)">${formatCurrency(d.amount)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Paid To</label><div>${escapeHtml(d.paid_to || '-')}</div></div>
+                <div class="form-group"><label>Mode</label><div>${statusBadge(d.payment_mode)}</div></div></div>`;
+        } else if (type === 'expense') {
+            detailsHtml = `
+                <div class="form-row"><div class="form-group"><label>Category</label><div><strong>${escapeHtml(d.category)}</strong> / ${escapeHtml(d.expense_head)}</div></div>
+                <div class="form-group"><label>Date</label><div>${formatDate(d.date)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Amount</label><div style="font-weight:700;color:var(--danger)">${formatCurrency(d.amount)}</div></div>
+                <div class="form-group"><label>Paid To</label><div>${escapeHtml(d.paid_to || '-')}</div></div></div>`;
+        } else if (type === 'vehicle') {
+            detailsHtml = `
+                <div class="form-row"><div class="form-group"><label>Vehicle</label><div><strong>${escapeHtml(d.vehicle_name)}</strong></div></div>
+                <div class="form-group"><label>Date</label><div>${formatDate(d.date)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Total</label><div style="font-weight:700;color:var(--danger)">${formatCurrency(d.total_amount)}</div></div>
+                <div class="form-group"><label>Driver</label><div>${escapeHtml(d.driver_name || '-')}</div></div></div>`;
+        } else if (type === 'receipt' || type === 'payment') {
+            detailsHtml = `
+                <div class="form-row"><div class="form-group"><label>Party</label><div><strong>${escapeHtml(d.party_name || 'N/A')}</strong></div></div>
+                <div class="form-group"><label>Date</label><div>${formatDate(d.date)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Type</label><div>${type === 'receipt' ? '💰 Receipt' : '💸 Payment'}</div></div>
+                <div class="form-group"><label>Amount</label><div style="font-weight:700;font-size:16px;color:${type === 'receipt' ? 'var(--accent)' : 'var(--danger)'}">${formatCurrency(d.amount)}</div></div></div>
+                <div class="form-row"><div class="form-group"><label>Mode</label><div>${statusBadge(d.mode)}</div></div>
+                <div class="form-group"><label>Notes</label><div>${escapeHtml(d.notes || '-')}</div></div></div>`;
+        }
+        
+        showModal(`
+            <div class="modal-header">
+                <h2>${typeLabels[type] || 'Transaction'} #${id}</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                ${detailsHtml}
+                <div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:6px;font-size:12px;color:var(--text-light)">
+                    💡 To edit this ${type}, go to the ${typeLabels[type] || 'transaction'} page via the sidebar.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        `);
+    });
+}
+
+// ============================================================
+// Helper: Delete sale directly from Sales Register
+// ============================================================
+async function deleteSaleFromRegister(id) {
+    const confirmed = await confirmAction(
+        'Delete this sale?',
+        'This will permanently remove the sale invoice and all its items. This action cannot be undone.',
+        'Yes, Delete Sale'
+    );
+    if (!confirmed) return;
+    const result = await window.api.deleteSale(id);
+    if (result.success) {
+        showToast('Sale deleted successfully!', 'success');
+        applySalesRegister();
+    } else {
+        showToast('Error: ' + (result.error || 'Failed to delete'), 'error');
+    }
+}
+
+// ============================================================
+// Helper: Delete purchase directly from Purchase Register
+// ============================================================
+async function deletePurchaseFromRegister(id) {
+    const confirmed = await confirmAction(
+        'Delete this purchase?',
+        'This will permanently remove the purchase bill and all its items. This action cannot be undone.',
+        'Yes, Delete Purchase'
+    );
+    if (!confirmed) return;
+    const result = await window.api.deletePurchase(id);
+    if (result.success) {
+        showToast('Purchase deleted successfully!', 'success');
+        applyPurchaseRegister();
+    } else {
+        showToast('Error: ' + (result.error || 'Failed to delete'), 'error');
+    }
+}
+
 // Globals
 window.renderReports = renderReports;
 window.showSalesReport = showSalesReport;
@@ -891,3 +1065,6 @@ window.printSalesRegister = printSalesRegister;
 window.exportSalesRegisterPDF = exportSalesRegisterPDF;
 window.printPurchaseRegister = printPurchaseRegister;
 window.exportPurchaseRegisterPDF = exportPurchaseRegisterPDF;
+window.viewDaybookEntry = viewDaybookEntry;
+window.deleteSaleFromRegister = deleteSaleFromRegister;
+window.deletePurchaseFromRegister = deletePurchaseFromRegister;
