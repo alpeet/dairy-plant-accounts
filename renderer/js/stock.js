@@ -582,7 +582,7 @@ async function printStockList() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Stock &amp; Inventory Report</h2>
             <p>Products: ${stock.length} | Stock Value: ${formatCurrency(stockValue)} | Low Stock Items: ${lowStock.length}</p>
         </div>
@@ -636,7 +636,7 @@ async function exportStockPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Stock &amp; Inventory Report</h2>
             <p>Products: ${stock.length} | Stock Value: ${formatCurrency(stockValue)}</p>
         </div>

@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Milk Rate Chart Operations
+ * Prarambha Account & Stock Management — Milk Rate Chart Operations
  * ==================================================
  * Dated rate history management and date-effective rate lookup.
  */

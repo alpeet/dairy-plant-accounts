@@ -308,7 +308,7 @@ async function printSalarySlip(id) {
         <div class="salary-slip-wrapper" style="max-width:700px;margin:0 auto;padding:20px 30px;font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;">
             <!-- Business Header -->
             <div style="text-align:center;border-bottom:3px double #1a5276;padding-bottom:12px;margin-bottom:16px;">
-                <h1 style="font-size:20pt;color:#1a5276;margin:0;letter-spacing:0.5px;">${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+                <h1 style="font-size:20pt;color:#1a5276;margin:0;letter-spacing:0.5px;">${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
                 ${settings.business_address ? `<p style="font-size:9pt;color:#555;margin:4px 0 2px;">${escapeHtml(settings.business_address)}</p>` : ''}
                 <div style="font-size:8pt;color:#888;">
                     ${settings.business_phone ? `📞 ${escapeHtml(settings.business_phone)}` : ''}

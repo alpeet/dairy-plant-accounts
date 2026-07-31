@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Route / Collection Center Operations
+ * Prarambha Account & Stock Management — Route / Collection Center Operations
  * ===========================================================
  * CRUD for route and collection center management.
  */

@@ -1,6 +1,6 @@
 @echo off
 REM
-REM Godhuli Dairy Plant - Portable Electron Desktop Launcher (Windows)
+REM Prarambha Account & Stock Management - Portable Electron Desktop Launcher (Windows)
 REM ================================================================
 REM Run this script from a USB drive or any folder to open the app
 REM as a desktop window (no browser needed).
@@ -33,7 +33,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo   🐄 Godhuli Dairy Plant — Desktop App
+echo   🐄 Prarambha Account & Stock Management — Desktop App
 echo   ─────────────────────────────────────
 for /f "tokens=*" %%i in ('node -v') do set NODE_VER=%%i
 echo   Node.js:  %NODE_VER%

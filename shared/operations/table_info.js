@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Database Table Info
+ * Prarambha Account & Stock Management — Database Table Info
  * ===========================================
  * Returns all tables with row counts, grouped by functional category.
  * Used in the Settings → Database Tables viewer for easy management.

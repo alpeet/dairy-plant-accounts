@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Financial Reports Operations
+ * Prarambha Account & Stock Management — Financial Reports Operations
  * ====================================================
  * Profit & Loss, Stock Statement, and other financial summary queries.
  * Used by both Electron (main.js) and Web (server.js).

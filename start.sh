@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Godhuli Dairy Plant - Portable Launcher (macOS / Linux)
+# Prarambha Account & Stock Management - Portable Launcher (macOS / Linux)
 # ========================================================
 # Run this script from a USB drive to start the application.
 # The database and all data stay local — nothing is installed
@@ -42,7 +42,7 @@ fi
 
 NODE_MAJOR=$(node -e "console.log(process.version.slice(1).split('.')[0])")
 echo ""
-echo "  🐄 Godhuli Dairy Plant"
+echo "  🐄 Prarambha Account & Stock Management"
 echo "  ───────────────────────"
 echo "  Node.js:  $(node -v)"
 echo "  Port:     $PORT"

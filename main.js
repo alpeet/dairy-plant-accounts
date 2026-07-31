@@ -193,12 +193,12 @@ function buildAppMenu() {
                 },
                 { type: 'separator' },
                 {
-                    label: 'About Godhuli Dairy Plant',
+                    label: 'About Prarambha Account & Stock Management',
                     click: () => {
                         dialog.showMessageBox(mainWindow, {
                             type: 'info',
-                            title: 'About Godhuli Dairy Plant',
-                            message: 'Godhuli Dairy Plant',
+                            title: 'About Prarambha Account & Stock Management',
+                            message: 'Prarambha Account & Stock Management',
                             detail: `Version ${app.getVersion()}\n\nAccounts & Stock Management Software\nBuilt with Electron & SQLite`
                         });
                     }
@@ -224,7 +224,7 @@ function createWindow() {
         y: savedState.y,
         minWidth: 1024,
         minHeight: 700,
-        title: 'Godhuli Dairy Plant',
+        title: 'Prarambha Account & Stock Management',
         icon: path.join(__dirname, 'assets', 'icon.png'),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -496,7 +496,7 @@ ipcMain.handle('print:pdf', async (event, { html, landscape, pageSize } = {}) =>
             <html>
             <head>
                 <meta charset="utf-8">
-                <title>Godhuli Dairy Plant - Export</title>
+                <title>Prarambha Account &amp; Stock Management - Export</title>
                 <style>${printCss}</style>
                 <style>@page { size: ${paperSize}; }</style>
             </head>

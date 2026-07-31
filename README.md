@@ -1,4 +1,4 @@
-# Godhuli Dairy Plant
+# Prarambha Account & Stock Management
 
 **Accounts & Stock Management System** — Desktop + Web
 
@@ -261,8 +261,8 @@ The Settings page allows configuring:
 ### Location
 - **Web mode:** `./data/dairy-plant.db` (in the project folder)
 - **Desktop mode:** Electron's `userData` directory:
-  - Windows: `%APPDATA%/Godhuli Dairy Plant/dairy-plant.db`
-  - macOS: `~/Library/Application Support/Godhuli Dairy Plant/dairy-plant.db`
+  - Windows: `%APPDATA%/Prarambha Account & Stock Management/dairy-plant.db`
+  - macOS: `~/Library/Application Support/Prarambha Account & Stock Management/dairy-plant.db`
 
 ### Schema
 

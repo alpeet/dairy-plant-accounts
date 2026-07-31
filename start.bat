@@ -1,6 +1,6 @@
 @echo off
 REM
-REM Godhuli Dairy Plant - Portable Launcher (Windows)
+REM Prarambha Account & Stock Management - Portable Launcher (Windows)
 REM ==================================================
 REM Run this script from a USB drive to start the application.
 REM The database and all data stay local on the USB drive.
@@ -39,7 +39,7 @@ if "%1"=="--port" (
 )
 
 echo.
-echo   🐄 Godhuli Dairy Plant
+echo   🐄 Prarambha Account & Stock Management
 echo   ───────────────────────
 for /f "tokens=*" %%i in ('node -v') do set NODE_VER=%%i
 echo   Node.js:  %NODE_VER%

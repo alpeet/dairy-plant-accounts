@@ -475,7 +475,7 @@ async function printPaymentReport() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Farmer Outstanding Report</h2>
             <p>Date: ${formatDate(today())}</p>
         </div>
@@ -510,7 +510,7 @@ async function exportFarmerPaymentPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Farmer Outstanding Report</h2>
             <p>Date: ${formatDate(today())} | Farmers Due: ${farmers.length} | Total: ${formatCurrency(totalOutstanding)}</p>
         </div>

@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Stock Operations
+ * Prarambha Account & Stock Management — Stock Operations
  * =======================================
  * Single source of truth for stock queries and adjustments.
  * Used by both Electron (main.js) and Web (server.js).

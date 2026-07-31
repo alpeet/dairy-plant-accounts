@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Payment Operations
+ * Prarambha Account & Stock Management — Payment Operations
  * =========================================
  * Single source of truth for payment CRUD.
  * Used by both Electron (main.js) and Web (server.js).

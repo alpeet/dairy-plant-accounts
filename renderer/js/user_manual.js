@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — User Manual
+ * Prarambha Account & Stock Management — User Manual
  * ===================================
  * A practical guide explaining which menus to use when,
  * how data flows between modules, and daily workflow.
@@ -18,7 +18,7 @@ async function renderUserManual() {
                 <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
                     <span style="font-size:36px">📖</span>
                     <div>
-                        <h1 style="font-size:22px;font-weight:700;margin:0">Godhuli Dairy Plant — User Manual</h1>
+                        <h1 style="font-size:22px;font-weight:700;margin:0">Prarambha Account &amp; Stock Management — User Manual</h1>
                         <p style="font-size:13px;color:rgba(255,255,255,0.6);margin-top:4px">Version ${appVersion} &middot; Complete Guide to Daily Accounting</p>
                     </div>
                 </div>
@@ -406,7 +406,7 @@ async function renderUserManual() {
 
             <!-- Footer -->
             <div style="text-align:center;padding:20px;color:var(--text-light);font-size:12px">
-                Godhuli Dairy Plant v${appVersion} &middot; User Manual &middot; Generated from the app
+                Prarambha Account &amp; Stock Management v${appVersion} &middot; User Manual &middot; Generated from the app
             </div>
         </div>
     `;

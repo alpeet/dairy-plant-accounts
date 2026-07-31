@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Web Server
+ * Prarambha Account & Stock Management — Web Server
  * =================================
  * Serves the application as a web application with:
  *   - Authentication (login/logout)
@@ -1590,7 +1590,7 @@ process.on('unhandledRejection', (reason) => {
 const server = app.listen(PORT, HOST, () => {
     const url = `http://localhost:${PORT}`;
     console.log('');
-    console.log('  🐄  Godhuli Dairy Plant — Web Server');
+    console.log('  🐄  Prarambha Account & Stock Management — Web Server');
     console.log('  ───────────────────────────────────────');
     console.log(`  URL:       ${url}`);
     console.log(`  Login:     ${url}/login`);

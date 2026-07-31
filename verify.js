@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Godhuli Dairy Plant — Portable Verification Script
+ * Prarambha Account & Stock Management — Portable Verification Script
  * ====================================================
  * Run this to check if the app is ready for USB transfer
  * or if all requirements are met on a target machine.

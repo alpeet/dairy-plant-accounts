@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Cash Deposit Operations
+ * Prarambha Account & Stock Management — Cash Deposit Operations
  * ===============================================
  * Manages bank deposits made from cash on hand.
  * Tracks deposits by date, bank, amount, and source.

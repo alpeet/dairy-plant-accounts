@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Shared Database Module
+ * Prarambha Account & Stock Management — Shared Database Module
  * ==============================================
  * Single source of truth for database initialization, schema loading,
  * and migration logic. Used by both the Electron main process (main.js)

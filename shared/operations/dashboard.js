@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Dashboard Operations
+ * Prarambha Account & Stock Management — Dashboard Operations
  * ===========================================
  * Single source of truth for dashboard data assembly.
  * Used by both Electron (main.js) and Web (server.js).

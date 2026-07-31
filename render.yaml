@@ -1,4 +1,4 @@
-# Godhuli Dairy Plant - Render Blueprint
+# Prarambha Account & Stock Management - Render Blueprint
 # ===============================================
 # Deploy config for Render.com (free tier compatible)
 # See https://render.com/docs/blueprint-spec for more info
@@ -20,7 +20,7 @@
 
 services:
   - type: web
-    name: godhuli-dairy-plant
+    name: prarambha-account-stock
     env: node
     buildCommand: npm install --production --ignore-scripts && npm rebuild better-sqlite3
     # Run the Excel import on startup (idempotent - skips if data already exists)

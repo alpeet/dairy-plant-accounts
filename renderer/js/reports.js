@@ -528,7 +528,7 @@ async function printSalesReport(fromDate, toDate, partyId) {
     const report = result.data;
     const settings = await getSettingsCached();
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1><h2>Sales Report</h2><p>Period: ${fromDate || 'Start'} to ${toDate || 'Today'} | Total Sales: ${report.sales.length} | Total: ${formatCurrency(report.total)}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>Sales Report</h2><p>Period: ${fromDate || 'Start'} to ${toDate || 'Today'} | Total Sales: ${report.sales.length} | Total: ${formatCurrency(report.total)}</p></div>
         <table><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th class="text-right">Amount</th><th class="text-right">Paid</th><th>Status</th></tr></thead>
         <tbody>${report.sales.map(s => `<tr><td>${formatDate(s.date)}</td><td>${escapeHtml(s.invoice_no)}</td><td>${escapeHtml(s.party_name)}</td><td class="text-right">${formatCurrency(s.grand_total)}</td><td class="text-right">${formatCurrency(s.paid_amount)}</td><td>${s.status}</td></tr>`).join('')}</tbody></table>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
@@ -823,7 +823,7 @@ async function printFarmerStatement() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>${escapeHtml(data.farmer.name)} — Farmer Statement</h2>
             <p>Period: ${data.from_date} to ${data.to_date}${data.farmer.route_name ? ' | Route: ' + escapeHtml(data.farmer.route_name) : ''}</p>
         </div>
@@ -864,7 +864,7 @@ async function exportFarmerStatementPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>${escapeHtml(data.farmer.name)} — Farmer Statement</h2>
             <p>Period: ${data.from_date} to ${data.to_date}</p>
         </div>

@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Customer/Supplier Statement Operations
+ * Prarambha Account & Stock Management — Customer/Supplier Statement Operations
  * ==============================================================
  * Generates party-wise statements with opening balance, debit/credit,
  * running balance, and closing balance for a given date range.

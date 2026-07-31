@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Purchase Operations
+ * Prarambha Account & Stock Management — Purchase Operations
  * ==========================================
  * Single source of truth for purchase CRUD with stock and ledger updates.
  * Used by both Electron (main.js) and Web (server.js).

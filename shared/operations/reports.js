@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Report Operations
+ * Prarambha Account & Stock Management — Report Operations
  * ========================================
  * Single source of truth for all report queries.
  * Used by both Electron (main.js) and Web (server.js).

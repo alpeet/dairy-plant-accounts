@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Vehicle Expenses Operations
+ * Prarambha Account & Stock Management — Vehicle Expenses Operations
  * ==================================================
  * CRUD for vehicle expenses register.
  *

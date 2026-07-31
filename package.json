@@ -1,8 +1,8 @@
 {
-  "name": "godhuli-dairy-plant",
+  "name": "prarambha-account-stock",
   "version": "1.0.0",
-  "description": "Godhuli Dairy Plant - Accounts & Stock Management (Desktop + Web)",
-  "homepage": "https://godhulidairy.com",
+  "description": "Prarambha Account & Stock Management (Desktop + Web)",
+  "homepage": "https://github.com/alpeet/dairy-plant-accounts",
   "main": "main.js",
   "scripts": {
     "start": "node server.js",
@@ -25,9 +25,9 @@
     "data:import-csv": "node data-exchange.js import --csv"
   },
   "build": {
-    "appId": "com.godhuli.dairyplant",
-    "productName": "Godhuli Dairy Plant",
-    "copyright": "Copyright © $(year) Godhuli Dairy",
+    "appId": "com.prarambha.accountstock",
+    "productName": "Prarambha Account & Stock Management",
+    "copyright": "Copyright © $(year) Prarambha",
     "directories": {
       "output": "dist",
       "buildResources": "assets"
@@ -59,7 +59,7 @@
       "icon": "assets/icon.png",
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "verifyUpdateCodeSignature": false,
-      "publisherName": "Godhuli Dairy"
+      "publisherName": "Prarambha"
     },
     "nsis": {
       "oneClick": false,
@@ -68,12 +68,12 @@
       "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Godhuli Dairy Plant",
+      "shortcutName": "Prarambha Accounts",
       "installerIcon": "assets/icon.png",
       "uninstallerIcon": "assets/icon.png",
       "installerHeaderIcon": "assets/icon.png",
       "installerSidebar": null,
-      "uninstallDisplayName": "Godhuli Dairy Plant ${version}",
+      "uninstallDisplayName": "Prarambha Account & Stock Management ${version}",
       "license": null,
       "language": "1033",
       "unicode": true,
@@ -138,16 +138,11 @@
       ],
       "icon": "assets/icon.png",
       "category": "Office",
-      "synopsis": "Dairy Plant Accounts & Stock Management",
-      "description": "Complete accounts and stock management solution for dairy plants. Manage sales, purchases, milk collection, stock, payments, and more.",
+      "synopsis": "Prarambha Account & Stock Management",
+      "description": "Complete accounts and stock management solution. Manage sales, purchases, milk collection, stock, payments, and more.",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
-    "publish": [
-      {
-        "provider": "generic",
-        "url": "https://releases.godhulidairy.com"
-      }
-    ]
+    "publish": []
   },
   "keywords": [
     "dairy",

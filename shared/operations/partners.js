@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Partner Capital Operations
+ * Prarambha Account & Stock Management — Partner Capital Operations
  * ==================================================
  * CRUD for partner capital contributions and withdrawals with running balance.
  */

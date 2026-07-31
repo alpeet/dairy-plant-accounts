@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Godhuli Dairy Plant — Post-install Script
+ * Prarambha Account & Stock Management — Post-install Script
  * ===========================================
  * Runs after `npm install`.
  *

@@ -1,5 +1,5 @@
 /**
- * Seed script for Godhuli Dairy Plant
+ * Seed script for Prarambha Account & Stock Management
  * Run: node database/seed.js
  * 
  * This script creates demo data for testing the application.

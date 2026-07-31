@@ -145,7 +145,7 @@ async function showSaleForm(saleId = null) {
 
     const isEdit = !!sale;
 
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
 
     showModal(`
         <div class="modal-header">
@@ -450,7 +450,7 @@ async function viewSaleDetail(id) {
 
     const s = result.data;
     const settings = await getSettingsCached();
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
 
     showModal(`
         <div class="modal-header">
@@ -556,7 +556,7 @@ async function printSale(id) {
 
     const s = result.data;
     const settings = await getSettingsCached();
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
     const businessAddress = settings.business_address || '';
     const businessPhone = settings.business_phone || '';
 
@@ -628,7 +628,7 @@ async function exportSalePDF(id) {
 
     const s = result.data;
     const settings = await getSettingsCached();
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
     const businessAddress = settings.business_address || '';
     const businessPhone = settings.business_phone || '';
 
@@ -704,7 +704,7 @@ async function printSalesList() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Sales Invoice List</h2>
             <p>${sales.length} invoices | Total: ${formatCurrency(total)}</p>
         </div>
@@ -739,7 +739,7 @@ async function exportSalesListPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Sales Invoice List</h2>
             <p>Total: ${formatCurrency(total)} (${sales.length} invoices)</p>
         </div>

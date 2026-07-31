@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Login Page Script
+ * Prarambha Account & Stock Management — Login Page Script
  * Handles authentication, registration, and forgot password for the web version.
  * Uses HttpOnly cookies — server sets the cookie, client just redirects.
  * Supports "Remember Me" — stores Bearer token in localStorage for 30-day persistence.
@@ -119,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
             subtitle.textContent = 'Reset your account password';
             document.getElementById('resetUsername').focus();
         } else {
-            title.textContent = 'Godhuli Dairy Plant';
+            title.textContent = 'Prarambha Account & Stock Management';
             subtitle.textContent = 'Accounts & Stock Management System';
             document.getElementById('username').focus();
         }

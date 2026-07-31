@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Audit Log Operations
+ * Prarambha Account & Stock Management — Audit Log Operations
  * ============================================
  * Simple audit trail helper that records who changed what and when.
  * Used by both Electron (main.js) and Web (server.js).

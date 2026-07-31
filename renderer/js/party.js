@@ -341,7 +341,7 @@ async function viewLedger(partyId, fromDate = '', toDate = '') {
     if (!party) return;
 
     const settings = await getSettingsCached();
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
 
     let totalDebit = 0, totalCredit = 0;
     entries.forEach(e => { totalDebit += e.debit; totalCredit += e.credit; });
@@ -450,7 +450,7 @@ async function printLedger(partyId, fromDate, toDate) {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2 style="font-size:14px">Ledger Statement: ${escapeHtml(party.name)}</h2>
             <p>${escapeHtml(party.address || '')} | ${escapeHtml(party.phone || '')}</p>
             <p>Period: ${fromDate || 'From start'} to ${toDate || 'Today'}</p>
@@ -487,7 +487,7 @@ async function exportLedgerPDF(partyId, fromDate, toDate) {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2 style="font-size:14px">Ledger Statement: ${escapeHtml(party.name)}</h2>
             <p>Period: ${fromDate || 'Start'} to ${toDate || 'Today'}</p>
         </div>
@@ -538,7 +538,7 @@ async function printPartiesList() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Parties List</h2>
             <p>Total: ${parties.length} parties</p>
         </div>
@@ -574,7 +574,7 @@ async function exportPartiesPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Parties List</h2>
             <p>Total: ${parties.length} parties</p>
         </div>

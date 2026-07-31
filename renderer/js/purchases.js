@@ -417,7 +417,7 @@ async function viewPurchaseDetail(id) {
 
     const p = result.data;
     const settings = await getSettingsCached();
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
 
     showModal(`
         <div class="modal-header">
@@ -518,7 +518,7 @@ async function printPurchase(id) {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <p>${escapeHtml(settings.business_address || '')} | ${escapeHtml(settings.business_phone || '')}</p>
             <h2 style="margin-top:10px;font-size:16px">PURCHASE BILL</h2>
         </div>
@@ -563,7 +563,7 @@ async function exportPurchasePDF(id) {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <p>${escapeHtml(settings.business_address || '')} | ${escapeHtml(settings.business_phone || '')}</p>
             <h2 style="margin-top:10px;font-size:16px">PURCHASE BILL</h2>
         </div>
@@ -606,7 +606,7 @@ async function printPurchasesList() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Purchase Bills List</h2>
             <p>${purchases.length} bills | Total: ${formatCurrency(total)}</p>
         </div>
@@ -641,7 +641,7 @@ async function exportPurchasesListPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Purchase Bills List</h2>
             <p>Total: ${formatCurrency(total)} (${purchases.length} bills)</p>
         </div>

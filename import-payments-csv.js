@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Godhuli Dairy Plant — Import Payments from CSV
+ * Prarambha Account & Stock Management — Import Payments from CSV
  * ================================================
  * Reads excelfiles/payments_sample.csv and imports all receipt records
  * into the payments table with corresponding ledger entries.
@@ -158,7 +158,7 @@ function findPartyId(parties, name) {
 
 async function main() {
     console.log('');
-    console.log('  🐄  Godhuli Dairy Plant — Import Payments from CSV');
+    console.log('  🐄  Prarambha Account & Stock Management — Import Payments from CSV');
     console.log('  ════════════════════════════════════════════════════');
     console.log('');
 

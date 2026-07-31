@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Daily Cash Collection Operations
+ * Prarambha Account & Stock Management — Daily Cash Collection Operations
  * =======================================================
  * Generates daily cash collection reports by aggregating
  * cash sales, cash receipts, and cash payments.

@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Petty Cash Operations
+ * Prarambha Account & Stock Management — Petty Cash Operations
  * ============================================
  * CRUD for petty cash register entries.
  *

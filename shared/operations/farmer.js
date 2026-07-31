@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Farmer Bulk Payment Operations
+ * Prarambha Account & Stock Management — Farmer Bulk Payment Operations
  * =====================================================
  * Single source of truth for farmer outstanding queries and bulk payments.
  * Used by both Electron (main.js) and Web (server.js).

@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — CSV Data Exchange Module
+ * Prarambha Account & Stock Management — CSV Data Exchange Module
  * ==============================================
  * Provides CSV import/export functionality for all data-entry tables,
  * with auto-generated sample CSV templates.

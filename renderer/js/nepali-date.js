@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Nepali Date (Bikram Sambat) Utility
+ * Prarambha Account & Stock Management — Nepali Date (Bikram Sambat) Utility
  * ===========================================================
  * Replaces all HTML <input type="date"> with BS-compatible date inputs.
  * BS dates are stored as YYYY-MM-DD strings, same format as Gregorian,

@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Sales Operations
+ * Prarambha Account & Stock Management — Sales Operations
  * =======================================
  * Single source of truth for sales CRUD with stock and ledger updates.
  * Used by both Electron (main.js) and Web (server.js).

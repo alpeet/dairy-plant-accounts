@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Settings Operations
+ * Prarambha Account & Stock Management — Settings Operations
  * ==========================================
  * Single source of truth for settings CRUD.
  * Used by both Electron (main.js) and Web (server.js).

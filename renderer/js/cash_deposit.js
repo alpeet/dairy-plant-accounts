@@ -272,7 +272,7 @@ async function printCashDeposit() {
     const totalAmount = deposits.reduce((s, d) => s + d.amount, 0);
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Cash Deposit Report</h2>
             <p>Period: ${from || 'Start'} to ${to || 'Today'} | Total Deposits: ${deposits.length} | Total Amount: ${formatCurrency(totalAmount)}</p>
         </div>
@@ -326,7 +326,7 @@ async function exportCashDepositPDF() {
     const totalAmount = deposits.reduce((s, d) => s + d.amount, 0);
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Cash Deposit Report</h2>
             <p>Total Deposits: ${deposits.length} | Total Amount: ${formatCurrency(totalAmount)}</p>
         </div>

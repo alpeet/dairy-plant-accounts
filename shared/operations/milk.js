@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Milk Collection Operations
+ * Prarambha Account & Stock Management — Milk Collection Operations
  * =================================================
  * Single source of truth for milk collection CRUD, summary, and Raw Milk product.
  * Used by both Electron (main.js) and Web (server.js).

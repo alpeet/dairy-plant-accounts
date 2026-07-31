@@ -503,7 +503,7 @@ async function viewMilkCollection(id) {
 
     const r = result.data;
     const settings = await getSettingsCached();
-    const businessName = settings.business_name || 'Godhuli Dairy Plant';
+    const businessName = settings.business_name || 'Prarambha Account & Stock Management';
 
     const rateType = r.rate_type || 'formula';
     let rateDetail = '';
@@ -618,7 +618,7 @@ async function printMilkRecord(id) {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <p>${escapeHtml(settings.business_address || '')} | ${escapeHtml(settings.business_phone || '')}</p>
             <h2 style="margin-top:10px;font-size:16px">MILK COLLECTION RECEIPT</h2>
         </div>
@@ -667,7 +667,7 @@ async function exportMilkPDF(id) {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <p>MILK COLLECTION RECEIPT</p>
         </div>
         <div style="display:flex;justify-content:space-between;margin:10px 0">
@@ -825,7 +825,7 @@ async function printMilkSummary() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Milk Collection Summary</h2>
             <p>Date: ${formatDate(date)}</p>
         </div>
@@ -859,7 +859,7 @@ async function printMilkCollectionsList() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Milk Collection Records</h2>
             <p>${records.length} collections | Total: ${formatNumber(totalLiters)} L | Amount: ${formatCurrency(totalAmount)}</p>
         </div>
@@ -896,7 +896,7 @@ async function exportMilkCollectionsListPDF() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>Milk Collection Records</h2>
             <p>${records.length} collections | Total: ${formatNumber(records.reduce((s, r) => s + r.quantity_liters, 0))} L</p>
         </div>

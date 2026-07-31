@@ -1,4 +1,4 @@
--- Godhuli Dairy Plant - Database Schema
+-- Prarambha Account & Stock Management - Database Schema
 -- SQLite
 -- 27 tables grouped into 8 functional categories
 --
@@ -388,7 +388,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Default settings
-INSERT OR IGNORE INTO settings (key, value) VALUES ('business_name', 'Godhuli Dairy Plant and Agro Foods Pvt. Ltd.');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('business_name', 'Prarambha Account & Stock Management');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('business_address', '');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('business_phone', '');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('business_email', '');

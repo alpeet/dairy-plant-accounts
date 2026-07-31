@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Product Operations
+ * Prarambha Account & Stock Management — Product Operations
  * =========================================
  * Single source of truth for product CRUD.
  * Used by both Electron (main.js) and Web (server.js).

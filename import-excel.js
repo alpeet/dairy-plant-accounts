@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Godhuli Dairy Plant — Import from Dairy_Accounts_Professional.xlsx
+ * Prarambha Account & Stock Management — Import from Dairy_Accounts_Professional.xlsx
  * ===================================================================
  * Migrates all data from the Excel workbook into the SQLite database.
  *
@@ -743,7 +743,7 @@ function main() {
     const forceReimport = args.includes('--force') || args.includes('-f');
 
     console.log('');
-    console.log('  🐄  Godhuli Dairy Plant — Excel Data Import');
+    console.log('  🐄  Prarambha Account & Stock Management — Excel Data Import');
     console.log('  ═══════════════════════════════════════════════');
     console.log('');
 

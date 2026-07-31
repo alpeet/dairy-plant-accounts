@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Operations Index
+ * Prarambha Account & Stock Management — Operations Index
  * =======================================
  * Exports all shared business operations for use by
  * both the Electron desktop app (main.js) and the web server (server.js).

@@ -1,5 +1,5 @@
 ================================================================================
-  GODHULI DAIRY PLANT — Accounts & Stock Management System
+  PRARAMBHA ACCOUNT & STOCK MANAGEMENT — Accounts & Stock Management System
                     Setup & Running Guide
 ================================================================================
 
@@ -83,7 +83,7 @@ TABLE OF CONTENTS
     node server.js
 
     You'll see:
-      🐄  Godhuli Dairy Plant — Web Server
+      🐄  Prarambha Account & Stock Management — Web Server
       URL:       http://localhost:3000
       Login:     http://localhost:3000/login
 
@@ -216,7 +216,7 @@ TABLE OF CONTENTS
 
     npm run start:electron
 
-    A new window titled "Godhuli Dairy Plant" will open.
+    A new window titled "Prarambha Account & Stock Management" will open.
 
   ─── Keyboard Shortcuts (Desktop) ───
 
@@ -335,7 +335,7 @@ TABLE OF CONTENTS
 
     npm run data:import-csv
 
-  The Excel file is generated at:  Godhuli_Dairy_Plant_Workbook.xlsx
+  The Excel file is generated at:  Prarambha_Account_Stock_Workbook.xlsx
   CSV files are in:                csv_exports/
 
 

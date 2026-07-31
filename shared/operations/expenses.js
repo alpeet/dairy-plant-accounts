@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Other Expenses Operations
+ * Prarambha Account & Stock Management — Other Expenses Operations
  * ================================================
  * CRUD for other expenses register.
  *

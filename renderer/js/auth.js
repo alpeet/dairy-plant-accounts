@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Web Auth
+ * Prarambha Account & Stock Management — Web Auth
  * ==============================
  * Handles client-side authentication with Bearer token fallback.
  * Primary: HttpOnly cookies (set by server).

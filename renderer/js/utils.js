@@ -1,5 +1,5 @@
 /**
- * Utility functions for Godhuli Dairy Plant
+ * Utility functions for Prarambha Account & Stock Management
  */
 
 // ============================================================

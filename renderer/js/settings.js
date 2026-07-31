@@ -43,7 +43,7 @@ async function renderSettings() {
                 <form id="settingsForm">
                     <div class="form-group">
                         <label>Business Name</label>
-                        <input type="text" class="form-control" name="business_name" value="${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}">
+                        <input type="text" class="form-control" name="business_name" value="${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}">
                     </div>
                     <div class="form-group">
                         <label>Address</label>
@@ -159,8 +159,8 @@ async function renderSettings() {
                 <h2>About</h2>
             </div>
             <div style="font-size:13px;color:var(--text-light);line-height:1.8">
-                <p><strong>Godhuli Dairy Plant</strong> v1.0.0</p>
-                <p>A desktop application for dairy plant accounting and stock management.</p>
+                <p><strong>Prarambha Account &amp; Stock Management</strong> v1.0.0</p>
+                <p>A professional accounting and stock management application (Desktop + Web).</p>
                 <p>Built with Electron + SQLite.</p>
                 <p style="margin-top:12px;font-size:12px">
                     <strong>Stack:</strong> Electron 22, better-sqlite3, vanilla JS<br>

@@ -55,7 +55,7 @@ jobs:
       - name: 📤 Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Godhuli-Dairy-Plant-Windows-${{ matrix.arch }}
+          name: Prarambha-Account-Stock-Windows-${{ matrix.arch }}
           path: |
             dist/*.exe
             dist/*.exe.blockmap
@@ -66,7 +66,7 @@ jobs:
       - name: 📤 Upload unpacked app (for debugging)
         uses: actions/upload-artifact@v4
         with:
-          name: Godhuli-Dairy-Plant-Windows-${{ matrix.arch }}-unpacked
+          name: Prarambha-Account-Stock-Windows-${{ matrix.arch }}-unpacked
           path: dist/win-${{ matrix.arch }}-unpacked/
           if-no-files-found: warn
           retention-days: 7

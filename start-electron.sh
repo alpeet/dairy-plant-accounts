@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Godhuli Dairy Plant - Portable Electron Desktop Launcher (macOS / Linux)
+# Prarambha Account & Stock Management - Portable Electron Desktop Launcher (macOS / Linux)
 # ========================================================================
 # Run this script from a USB drive or any folder to open the app
 # as a desktop window (no browser needed).
@@ -36,7 +36,7 @@ if ! command -v node &> /dev/null; then
 fi
 
 echo ""
-echo "  🐄 Godhuli Dairy Plant — Desktop App"
+echo "  🐄 Prarambha Account & Stock Management — Desktop App"
 echo "  ─────────────────────────────────────"
 echo "  Node.js:  $(node -v)"
 echo ""

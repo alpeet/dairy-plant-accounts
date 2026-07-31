@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Backup Operations
+ * Prarambha Account & Stock Management — Backup Operations
  * ========================================
  * Single source of truth for database backup.
  * Used by both Electron (main.js) and Web (server.js).

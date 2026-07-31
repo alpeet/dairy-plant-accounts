@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Salary / Payroll Operations
+ * Prarambha Account & Stock Management — Salary / Payroll Operations
  * ==================================================
  * CRUD for salary records and payroll register.
  *

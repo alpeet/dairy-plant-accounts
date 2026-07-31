@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Server-Side Input Validation
+ * Prarambha Account & Stock Management — Server-Side Input Validation
  * ===================================================
  * Reusable validation functions for all save endpoints.
  * Each function returns an error string or null (valid).

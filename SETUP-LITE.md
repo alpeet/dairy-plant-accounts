@@ -1,4 +1,4 @@
-# Godhuli Dairy Plant — Lite Setup Guide
+# Prarambha Account & Stock Management — Lite Setup Guide
 
 This is the **lite** version of the app — it excludes `node_modules/` to keep the
 download small (~1 MB). You'll need to install dependencies on the target machine.

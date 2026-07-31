@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Production / Batch Processing Operations
+ * Prarambha Account & Stock Management — Production / Batch Processing Operations
  * ================================================================
  * CRUD for production batches with stock updates:
  * - Consumes raw milk stock (stock_movements: production_input)

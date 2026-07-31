@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Denomination Count Operations
+ * Prarambha Account & Stock Management — Denomination Count Operations
  * ====================================================
  * CRUD for daily cash denomination counting.
  *

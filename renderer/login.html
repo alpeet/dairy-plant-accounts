@@ -3,61 +3,76 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Godhuli Dairy Plant - Login</title>
+    <title>Prarambha Account &amp; Stock Management - Login</title>
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="shortcut icon" type="image/png" href="favicon.png">
-    <link rel="stylesheet" href="css/login.css?v=2">
+    <link rel="stylesheet" href="css/login.css?v=3">
 </head>
 <body>
     <div class="login-container">
         <div class="login-card">
             <!-- Logo -->
             <div class="login-logo">
-                <svg viewBox="0 0 1024 1024" width="64" height="64" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                        <linearGradient id="bg-g" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stop-color="#1a3c2a"/>
-                            <stop offset="50%" stop-color="#2d5a3d"/>
-                            <stop offset="100%" stop-color="#1a3c2a"/>
-                        </linearGradient>
-                        <linearGradient id="sun-g" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#f4a460"/>
-                            <stop offset="100%" stop-color="#d4691a"/>
-                        </linearGradient>
-                        <linearGradient id="body-g" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#faf5eb"/>
-                            <stop offset="100%" stop-color="#f0e6d0"/>
-                        </linearGradient>
-                        <linearGradient id="spot-g" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#5a3a2a"/>
-                            <stop offset="100%" stop-color="#3a2215"/>
-                        </linearGradient>
-                        <linearGradient id="milk-g" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stop-color="#ffffff"/>
-                            <stop offset="100%" stop-color="#e8f0e8"/>
-                        </linearGradient>
-                    </defs>
-                    <circle cx="512" cy="512" r="500" fill="url(#bg-g)"/>
-                    <circle cx="512" cy="380" r="50" fill="url(#sun-g)" opacity="0.8"/>
-                    <g transform="translate(512, 560)">
-                        <ellipse cx="0" cy="-10" rx="100" ry="55" fill="url(#body-g)"/>
-                        <ellipse cx="-50" cy="-25" rx="22" ry="18" fill="url(#spot-g)" opacity="0.8"/>
-                        <ellipse cx="30" cy="-35" rx="18" ry="15" fill="url(#spot-g)" opacity="0.7"/>
-                        <ellipse cx="60" cy="-10" rx="20" ry="14" fill="url(#spot-g)" opacity="0.6"/>
-                        <ellipse cx="110" cy="-85" rx="45" ry="38" fill="url(#body-g)"/>
-                        <ellipse cx="145" cy="-75" rx="25" ry="20" fill="#f0dcc8"/>
-                        <ellipse cx="145" cy="-70" rx="8" ry="5" fill="#e8c8b0"/>
-                        <circle cx="125" cy="-95" r="7" fill="#2a1a10"/>
-                        <circle cx="100" cy="-95" r="7" fill="#2a1a10"/>
-                        <path d="M85,-115 Q80,-140 90,-155" stroke="#8a6a50" stroke-width="10" fill="none" stroke-linecap="round"/>
-                        <path d="M115,-115 Q120,-140 130,-155" stroke="#8a6a50" stroke-width="10" fill="none" stroke-linecap="round"/>
-                    </g>
-                    <path d="M512,410 Q527,430 527,445 Q527,465 512,470 Q497,465 497,445 Q497,430 512,410Z" fill="url(#milk-g)" opacity="0.9"/>
-                </svg>
+                <svg viewBox="0 0 1024 1024" width="64" height="64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<!-- ============================================================
+       Prarambha Account & Stock Management — App Icon
+       Concept: a rising sun (Prarambha = "new beginning / dawn")
+       rising behind three ascending growth bars (accounts & stock).
+       Palette matches the app theme: deep navy + green accent + gold.
+       ============================================================ -->
+  <defs>
+    <!-- Badge background — deep navy gradient (app sidebar / login theme) -->
+    <linearGradient id="pb-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22365e"/>
+      <stop offset="52%" stop-color="#16213e"/>
+      <stop offset="100%" stop-color="#0f3460"/>
+    </linearGradient>
+    <!-- Soft top sheen for depth -->
+    <radialGradient id="pb-sheen" cx="0.5" cy="0.32" r="0.8">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Rising sun (dawn / new beginning) -->
+    <linearGradient id="pb-sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd27a"/>
+      <stop offset="55%" stop-color="#f6a623"/>
+      <stop offset="100%" stop-color="#e67e22"/>
+    </linearGradient>
+    <!-- Growth bars (accounts / stock levels) -->
+    <linearGradient id="pb-bar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#1e8e4e"/>
+      <stop offset="100%" stop-color="#34d17b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square badge -->
+  <rect x="24" y="24" width="976" height="976" rx="212" fill="url(#pb-bg)"/>
+  <rect x="24" y="24" width="976" height="976" rx="212" fill="url(#pb-sheen)"/>
+  <rect x="24" y="24" width="976" height="976" rx="212" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="4"/>
+
+  <!-- Dawn glow behind the sun (soft — scales cleanly to any size) -->
+  <circle cx="512" cy="452" r="312" fill="url(#pb-sun)" opacity="0.09"/>
+  <circle cx="512" cy="452" r="222" fill="url(#pb-sun)" opacity="0.13"/>
+
+  <!-- Sun -->
+  <circle cx="512" cy="452" r="126" fill="url(#pb-sun)"/>
+  <circle cx="512" cy="420" r="54" fill="#ffe9b0" opacity="0.32"/>
+
+  <!-- Ground shadow -->
+  <ellipse cx="512" cy="772" rx="330" ry="12" fill="#000000" opacity="0.25"/>
+
+  <!-- Growth bars (ascending, sitting on the baseline at y=740) -->
+  <g>
+    <rect x="223" y="582" width="150" height="158" rx="22" fill="url(#pb-bar)"/>
+    <rect x="437" y="498" width="150" height="242" rx="22" fill="url(#pb-bar)"/>
+    <rect x="651" y="414" width="150" height="326" rx="22" fill="url(#pb-bar)"/>
+    <rect x="205" y="740" width="614" height="14" rx="7" fill="#ffffff" opacity="0.16"/>
+  </g>
+</svg>
             </div>
 
-            <h1 class="login-title" id="formTitle">Godhuli Dairy Plant</h1>
-            <p class="login-subtitle" id="formSubtitle">Accounts &amp; Stock Management System</p>
+            <h1 class="login-title" id="formTitle">Prarambha Account &amp; Stock Management</h1>
+            <p class="login-subtitle" id="formSubtitle">Account &amp; Stock Management System</p>
 
             <!-- ========== LOGIN FORM ========== -->
             <div id="loginView">
@@ -160,12 +175,12 @@
             </div>
 
             <div class="login-footer">
-                <p>Godhuli Dairy Plant v1.0.0</p>
+                <p>Prarambha Account &amp; Stock Management v1.0.0</p>
                 <p class="login-hint">Default: admin / admin123 — change it after first login</p>
             </div>
         </div>
     </div>
 
-    <script src="js/login.js?v=2"></script>
+    <script src="js/login.js?v=3"></script>
 </body>
 </html>

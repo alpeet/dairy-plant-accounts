@@ -213,7 +213,7 @@ async function printStatement() {
 
     const html = `
         <div class="header">
-            <h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1>
+            <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>${escapeHtml(data.party.name)} — Statement of Account</h2>
             <p>Party Type: ${data.party.type} | Period: ${data.from_date} to ${data.to_date}</p>
             ${data.party.address ? `<div class="business-detail">${escapeHtml(data.party.address)}</div>` : ''}
@@ -243,7 +243,7 @@ async function exportStatementPDF() {
     const settings = await getSettingsCached();
 
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name || 'Godhuli Dairy Plant')}</h1><h2>${escapeHtml(data.party.name)} — Statement of Account</h2><p>Period: ${data.from_date} to ${data.to_date}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>${escapeHtml(data.party.name)} — Statement of Account</h2><p>Period: ${data.from_date} to ${data.to_date}</p></div>
         <table><thead><tr><th>Date</th><th>Ref</th><th>Type</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th></tr></thead>
         <tbody>
             <tr><td colspan="6">Opening Balance</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>

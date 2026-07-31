@@ -1,5 +1,5 @@
 /**
- * Godhuli Dairy Plant — Party Operations
+ * Prarambha Account & Stock Management — Party Operations
  * =======================================
  * Single source of truth for party CRUD and ledger queries.
  * Used by both Electron (main.js) and Web (server.js).

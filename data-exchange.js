@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Godhuli Dairy Plant — Data Exchange Script
+ * Prarambha Account & Stock Management — Data Exchange Script
  * ============================================
  * Two-way data sync between the SQLite database and the Excel workbook.
  *
@@ -37,7 +37,7 @@ const XLSX = require('xlsx');
 // ──────────────────────────────────────────────────────────────
 const PROJECT_ROOT = __dirname;
 const DB_PATH = path.join(PROJECT_ROOT, 'data', 'dairy-plant.db');
-const EXCEL_PATH = path.join(PROJECT_ROOT, 'Godhuli_Dairy_Plant_Workbook.xlsx');
+const EXCEL_PATH = path.join(PROJECT_ROOT, 'Prarambha_Account_Stock_Workbook.xlsx');
 const CSV_DIR = path.join(PROJECT_ROOT, 'csv_exports');
 
 // ──────────────────────────────────────────────────────────────
@@ -345,7 +345,7 @@ function fromExcelValue(val) {
 // ──────────────────────────────────────────────────────────────
 
 function cmdExport() {
-  console.log('🐄  Godhuli Dairy Plant — Data Export (DB → Excel)');
+  console.log('🐄  Prarambha Account & Stock Management — Data Export (DB → Excel)');
   console.log(`   Database: ${DB_PATH}`);
   console.log(`   Excel:    ${EXCEL_PATH}`);
   console.log('');
@@ -354,7 +354,7 @@ function cmdExport() {
 
   if (!fs.existsSync(EXCEL_PATH)) {
     console.error('❌ Excel workbook not found. Generate it first:');
-    console.error('   python3 generate_godhuli_excel.py');
+    console.error('   python3 generate_prarambha_excel.py');
     process.exit(1);
   }
 
@@ -420,7 +420,7 @@ function cmdExport() {
 // ──────────────────────────────────────────────────────────────
 
 function cmdImport() {
-  console.log('🐄  Godhuli Dairy Plant — Data Import (Excel → DB)');
+  console.log('🐄  Prarambha Account & Stock Management — Data Import (Excel → DB)');
   console.log(`   Excel:    ${EXCEL_PATH}`);
   console.log(`   Database: ${DB_PATH}`);
   console.log('');
@@ -527,7 +527,7 @@ function cmdImport() {
 // ──────────────────────────────────────────────────────────────
 
 function cmdExportCSV() {
-  console.log('🐄  Godhuli Dairy Plant — CSV Export');
+  console.log('🐄  Prarambha Account & Stock Management — CSV Export');
   console.log(`   Database: ${DB_PATH}`);
   console.log(`   Output:   ${CSV_DIR}/`);
   console.log('');
@@ -561,7 +561,7 @@ function cmdExportCSV() {
 }
 
 function cmdImportCSV() {
-  console.log('🐄  Godhuli Dairy Plant — CSV Import');
+  console.log('🐄  Prarambha Account & Stock Management — CSV Import');
   console.log(`   Input:    ${CSV_DIR}/`);
   console.log(`   Database: ${DB_PATH}`);
   console.log('');
@@ -691,7 +691,7 @@ function parseCSVLine(line) {
 
 function printHelp() {
   console.log(`
-🐄  Godhuli Dairy Plant — Data Exchange Tool
+🐄  Prarambha Account & Stock Management — Data Exchange Tool
 =============================================
 
   node data-exchange.js <command> [options]
