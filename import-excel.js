@@ -9,7 +9,7 @@
  *   Stock_Master    → products + stock_movements (opening)
  *   Sales_Entry     → sales + sales_items
  *   Purchase_Entry  → purchases + purchase_items
- *   Cash_Collection → payments
+ *   Collection (or Cash_Collection) → payments
  *   Party_Ledger    → ledger_entries
  *
  * Usage:
@@ -93,7 +93,87 @@ function toStr(val) {
  * Normalize a party/type name for comparison.
  */
 function normalize(str) {
-    return str.trim().toLowerCase().replace(/\s+/g, ' ');
+    return String(str).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Base form of a name — strips parenthetical suffixes (e.g. "(DEVI NAGAR)", "(DRIVER)")
+ * and trailing codes/numbers (e.g. " -315", " 322") so variants resolve to the same party.
+ */
+function baseName(str) {
+    return normalize(str)
+        .replace(/\s*\([^)]*\)/g, ' ')   // remove ( ... ) content
+        .replace(/[-–,]\s*\d+$/g, '')      // remove trailing "-315" / ",315"
+        .replace(/\s+\d+$/g, '')           // remove trailing " 322"
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+/**
+ * Simple character-overlap similarity (0-1).
+ */
+function similarity(a, b) {
+    const longer = a.length >= b.length ? a : b;
+    const shorter = a.length < b.length ? a : b;
+    if (longer.length === 0) return 0;
+    let matches = 0;
+    for (const ch of shorter) {
+        if (longer.includes(ch)) matches++;
+    }
+    return matches / longer.length;
+}
+
+// ── Shared party resolution state (built by importParties, used by all transaction imports) ──
+let partyIndex = null;        // { exact: {name: id}, base: {baseName: id}, keys: [name] }
+let insertPartyStmt = null;   // prepared INSERT INTO parties ... (reused for auto-created parties)
+let autoCreatedParties = 0;
+
+/**
+ * Resolve a transaction's party name to a party id.
+ *   1. Exact normalized match
+ *   2. Base-name match (parens/code stripped)
+ *   3. Substring containment
+ *   4. Character-overlap similarity (>= 0.8)
+ *   5. Auto-create as a new customer (unless it's a skip marker like CANCELED/TOTALS)
+ * Returns null for skip markers (canceled invoices, totals rows, empty names).
+ */
+function resolveParty(name, allowCreate) {
+    if (!partyIndex) return null;
+    const n = normalize(name);
+    if (!n) return null;
+
+    // Skip non-party markers (canceled invoices / totals rows)
+    if (/^cancel/.test(n) || n.includes('total')) return null;
+
+    if (partyIndex.exact[n]) return partyIndex.exact[n];
+
+    const b = baseName(name);
+    if (b && b !== n && partyIndex.base[b]) return partyIndex.base[b];
+
+    for (const k of partyIndex.keys) {
+        if (k.length >= 4 && (k.includes(n) || n.includes(k))) {
+            return partyIndex.exact[k];
+        }
+    }
+
+    let bestKey = null, bestScore = 0;
+    for (const k of partyIndex.keys) {
+        const s = similarity(n, k);
+        if (s > bestScore) { bestScore = s; bestKey = k; }
+    }
+    if (bestKey && bestScore >= 0.8) return partyIndex.exact[bestKey];
+
+    if (allowCreate && insertPartyStmt) {
+        const result = insertPartyStmt.run(name, 'customer', '', '', 0,
+            'Auto-created from Excel', new Date().toISOString());
+        const id = result.lastInsertRowid;
+        partyIndex.exact[n] = id;
+        if (b && !partyIndex.base[b]) partyIndex.base[b] = id;
+        partyIndex.keys.push(n);
+        autoCreatedParties++;
+        return id;
+    }
+    return null;
 }
 
 /**
@@ -116,8 +196,8 @@ function mapPaymentMode(mode) {
     const m = normalize(mode);
     if (m === 'cash') return 'cash';
     if (m === 'credit') return 'credit';
-    if (m === 'bank' || m === 'bank transfer' || m === 'bank_transfer') return 'bank';
-    if (m === 'upi') return 'upi';
+    if (m === 'bank' || m === 'bank transfer' || m === 'bank_transfer' || m === 'online') return 'bank';
+    if (m === 'upi' || m === 'qr' || m === 'qr code') return 'upi';
     if (m === 'cheque') return 'bank';
     return 'cash';
 }
@@ -200,6 +280,11 @@ function importParties(db, sheetData) {
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
+    // Reset shared resolver state & register the prepared statement for auto-created parties
+    partyIndex = { exact: {}, base: {}, keys: [] };
+    insertPartyStmt = insertParty;
+    autoCreatedParties = 0;
+
     const insertLedger = db.prepare(`
         INSERT INTO ledger_entries (party_id, date, reference_type, description, debit, credit, balance, created_at)
         VALUES (?, ?, 'opening', 'Opening Balance', ?, 0, ?, ?)
@@ -231,6 +316,10 @@ function importParties(db, sheetData) {
             const result = insertParty.run(name, type, phone, address, openingBal, 'Imported from Excel', new Date().toISOString());
             const partyId = result.lastInsertRowid;
             partyNameToId[normalize(name)] = partyId;
+            partyIndex.exact[normalize(name)] = partyId;
+            const b = baseName(name);
+            if (b && !partyIndex.base[b]) partyIndex.base[b] = partyId;
+            partyIndex.keys.push(normalize(name));
 
             if (openingBal !== 0) {
                 // Opening balance as debit (receivable) if positive, credit (payable) if negative
@@ -388,7 +477,7 @@ function importSales(db, sheetData, partyNameToId, productNameToId) {
             const firstRow = rows[0];
             const dateStr = toDateStr(firstRow[dateIdx]) || new Date().toISOString().split('T')[0];
             const partyName = toStr(firstRow[partyIdx]);
-            const partyId = partyNameToId[normalize(partyName)];
+            const partyId = resolveParty(partyName, true);
 
             if (!partyId) {
                 skippedNoParty++;
@@ -534,7 +623,7 @@ function importPurchases(db, sheetData, partyNameToId, productNameToId) {
             const firstRow = rows[0];
             const dateStr = toDateStr(firstRow[dateIdx]) || new Date().toISOString().split('T')[0];
             const supplierName = toStr(firstRow[suppIdx]);
-            const partyId = partyNameToId[normalize(supplierName)];
+            const partyId = resolveParty(supplierName, true);
 
             if (!partyId) {
                 skippedNoParty++;
@@ -608,20 +697,22 @@ function importPurchases(db, sheetData, partyNameToId, productNameToId) {
 }
 
 /**
- * Import Cash_Collection → payments (receipts).
+ * Import Collection (formerly Cash_Collection) → payments.
+ *
+ * Sheet layout (2026 update): 0=Date, 1=ReceiptNo, 2=CustomerName, 3=AgainstBill,
+ * 4=Type (Collection|Payment|Advance), 5=OpeningDue, 6=Collected, 7=Paid,
+ * 8=PaymentMode, 9=ClosingDue, 10=Remarks. A TOTALS row (Type = 0) must be skipped.
  */
 function importCashCollections(db, sheetData, partyNameToId) {
     console.log('\n  📋 Importing Cash Collections...');
 
     const insertPayment = db.prepare(`
         INSERT INTO payments (party_id, date, type, amount, mode, reference_type, reference_id, notes, created_at)
-        VALUES (?, ?, 'receipt', ?, ?, 'cash_collection', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    // Col: 0=Date, 1=ReceiptNo, 2=CustomerName, 3=AgainstBill, 4=OpeningDue,
-    // 5=Collected, 6=PaymentMode, 7=ClosingDue, 8=Remarks
-    const dateIdx = 0, recIdx = 1, custIdx = 2, billIdx = 3,
-          collectedIdx = 5, modeIdx = 6, remarkIdx = 8;
+    const dateIdx = 0, recIdx = 1, custIdx = 2, billIdx = 3, typeIdx = 4,
+          collectedIdx = 6, paidIdx = 7, modeIdx = 8, remarkIdx = 10;
 
     let count = 0;
     let skipped = 0;
@@ -632,23 +723,39 @@ function importCashCollections(db, sheetData, partyNameToId) {
             if (!row || !row[custIdx]) continue;
 
             const customerName = toStr(row[custIdx]);
-            const partyId = partyNameToId[normalize(customerName)];
+            const rowType = normalize(toStr(row[typeIdx]));
 
+            // Skip totals/summary rows (Type = 0, name contains TOTAL)
+            if (rowType === '0' || rowType === 'total' || normalize(customerName).includes('total')) continue;
+
+            const partyId = resolveParty(customerName, true);
             if (!partyId) {
                 skipped++;
                 continue;
             }
 
             const dateStr = toDateStr(row[dateIdx]) || new Date().toISOString().split('T')[0];
-            const amount = toNum(row[collectedIdx]);
-            if (amount <= 0) continue;
+
+            // Collection = money received (amount in 'Collected'); Payment/Advance = money out (amount in 'Paid')
+            let payType = 'receipt';
+            let amount = toNum(row[collectedIdx]);
+            if (rowType === 'payment' || rowType === 'advance') {
+                payType = 'payment';
+                amount = toNum(row[paidIdx]);
+            }
+            // Fallback: use the other amount column if the primary one is empty
+            if (amount <= 0) {
+                const alt = (payType === 'receipt') ? toNum(row[paidIdx]) : toNum(row[collectedIdx]);
+                if (alt > 0) amount = alt;
+                else continue;
+            }
 
             const receiptNo = toNum(row[recIdx]) > 0 ? String(toNum(row[recIdx])) : '';
             const againstBill = toStr(row[billIdx]);
             const mode = mapPaymentMode(toStr(row[modeIdx]));
             const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${toStr(row[remarkIdx])}`;
 
-            insertPayment.run(partyId, dateStr, amount, mode,
+            insertPayment.run(partyId, dateStr, payType, amount, mode,
                 receiptNo || againstBill, receiptNo || againstBill, remarks,
                 new Date().toISOString());
             count++;
@@ -656,7 +763,7 @@ function importCashCollections(db, sheetData, partyNameToId) {
     });
 
     trx();
-    console.log(`  ✅ ${count} cash collections imported (as payments/receipts)`);
+    console.log(`  ✅ ${count} collections imported (as payments)`);
     if (skipped > 0) console.log(`  ⚠️  ${skipped} collections skipped (party not found)`);
 }
 
@@ -693,7 +800,7 @@ function importPartyLedger(db, sheetData, partyNameToId) {
             if (!row || !row[partyIdx]) continue;
 
             const partyName = toStr(row[partyIdx]);
-            const partyId = partyNameToId[normalize(partyName)];
+            const partyId = resolveParty(partyName, true);
 
             if (!partyId) {
                 skipped++;
@@ -711,8 +818,8 @@ function importPartyLedger(db, sheetData, partyNameToId) {
             // Map txn type to reference_type
             let refType = 'adjustment';
             if (txnType.includes('sale')) refType = 'sale';
-            else if (txnType.includes('purchase') || txnType.includes('purchase')) refType = 'purchase';
-            else if (txnType.includes('receipt') || txnType.includes('payment')) refType = 'payment_received';
+            else if (txnType.includes('purchase')) refType = 'purchase';
+            else if (txnType.includes('collection') || txnType.includes('receipt') || txnType.includes('payment')) refType = 'payment_received';
             else if (txnType.includes('opening')) refType = 'opening';
 
             // Skip if already exists (auto-generated by importSales/importPurchases)
@@ -740,7 +847,9 @@ function importPartyLedger(db, sheetData, partyNameToId) {
 
 function main() {
     const args = process.argv.slice(2);
-    const forceReimport = args.includes('--force') || args.includes('-f');
+    // Allow forcing the re-import via FORCE_IMPORT=1 env var (used on Render deployments)
+    const envForce = ['1', 'true', 'yes'].includes(String(process.env.FORCE_IMPORT || '').toLowerCase());
+    const forceReimport = args.includes('--force') || args.includes('-f') || envForce;
 
     console.log('');
     console.log('  🐄  Prarambha Account & Stock Management — Excel Data Import');
@@ -835,11 +944,13 @@ function main() {
             }
         }
 
-        // STEP 5: Import Cash Collections
-        if (workbook.SheetNames.includes('Cash_Collection')) {
-            const cashSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Cash_Collection'], { header: 1, defval: '' });
+        // STEP 5: Import Cash Collections (sheet renamed from Cash_Collection to Collection)
+        const collSheetName = workbook.SheetNames.includes('Collection') ? 'Collection'
+                            : workbook.SheetNames.includes('Cash_Collection') ? 'Cash_Collection' : null;
+        if (collSheetName) {
+            const cashSheet = XLSX.utils.sheet_to_json(workbook.Sheets[collSheetName], { header: 1, defval: '' });
             if (cashSheet.length > 2) {
-                console.log(`  → Cash_Collection: ${Math.max(0, cashSheet.length - 2)} data rows (${cashSheet.length} total rows)`);
+                console.log(`  → ${collSheetName}: ${Math.max(0, cashSheet.length - 2)} data rows (${cashSheet.length} total rows)`);
                 importCashCollections(db, cashSheet, partyNameToId);
             }
         }
@@ -874,6 +985,10 @@ function main() {
         } catch (e) {
             console.log(`  ${t.padEnd(20)}: error - ${e.message}`);
         }
+    }
+
+    if (autoCreatedParties > 0) {
+        console.log(`  ${'auto-created parties'.padEnd(20)}: ${autoCreatedParties} (new customers from transaction data)`);
     }
 
     db.close();
