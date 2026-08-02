@@ -41,10 +41,10 @@ services:
         value: admin123
       - key: DB_DIR
         value: /opt/render/project/src/data
-      # TEMPORARY: force a one-time re-import of the updated Excel file on the next deploy.
-      # REMOVE this entry and push again after the deployment completes (data will then persist).
-      - key: FORCE_IMPORT
-        value: "1"
+      # Excel data has been imported into the persistent disk. FORCE_IMPORT was
+      # removed so the deployed database persists across restarts and deploys.
+      # To refresh from a new Excel update: set FORCE_IMPORT=1 temporarily,
+      # push, wait for the deploy, then remove it again.
     disk:
       name: data
       mountPath: /opt/render/project/src/data
