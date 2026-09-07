@@ -318,6 +318,35 @@ node data-exchange.js import --csv
 
 See the script for detailed table-to-sheet mappings.
 
+## Update Data from Dairy Account Pro Excel
+
+Keep the app in sync with `Dairy_Accounts_Professional.xlsx` — the master workbook edited in
+Dairy Account Pro. All dates are imported as BS (Bikram Sambat).
+
+### In the app (easiest)
+
+**Settings → Data Management → "Update Data from Excel (Dairy Account Pro)"**:
+
+- **➕ Add / Update New Records** — non-destructive: adds new invoices/bills/payments and
+  updates existing ones by invoice/bill number. No duplicates, nothing is deleted.
+- **♻️ Replace ALL Data (Fresh)** — clears all transactional data and re-imports everything
+  from the Excel, rebuilding the stock ledger. A safety backup is created first.
+
+Desktop app: pick the file with the file dialog. Web app: the file is uploaded to the server.
+
+### Command line
+
+```bash
+# Fresh import (clears transactional data and re-imports everything)
+node import-fresh.js
+
+# Upsert import (adds new / updates existing, no deletions)
+node import-excel-upsert.js
+
+# Custom locations
+DB_DIR=/path/to/data EXCEL_PATH=/path/to/file.xlsx node import-fresh.js
+```
+
 ---
 
 ## Authentication (Web Only)
@@ -327,7 +356,7 @@ The web version includes a simple token-based authentication system:
 - **Login:** POST `/api/auth/login` with username/password
 - **Verify:** POST `/api/auth/verify` with Bearer token
 - **Logout:** POST `/api/auth/logout` invalidates the token
-- **Default credentials:** `admin` / `admin123` (change via `.env`)
+- **Default credentials:** `admin` / `admin123` (change via `.env`, or the app forces a password change on first login while the default is in use)
 - **Token storage:** In-memory on server, `sessionStorage` on client
 - **All API routes** require authentication (except auth endpoints)
 - **Static files** redirect unauthenticated users to the login page
@@ -417,7 +446,7 @@ After changes, verify:
 
 | Layer | Technology |
 |---|---|
-| Desktop Runtime | **Electron 22** (last version supporting Windows 7) |
+| Desktop Runtime | **Electron 33** |
 | Web Server | **Express.js** (Node.js) |
 | Database | **SQLite** via `better-sqlite3` |
 | Frontend | **Vanilla JS** (no framework) |

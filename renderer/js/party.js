@@ -65,9 +65,9 @@ async function renderParties() {
         </div>
 
         <div class="card">
-            <div class="card-header">
-                <h2>Parties (${parties.length})</h2>
-            </div>
+        <div class="card-header">
+            <h2>Parties (${parties.length})</h2>
+        </div>
             <div class="table-container">
                 <table>
                     <thead>
@@ -75,6 +75,7 @@ async function renderParties() {
                             <th>Code</th>
                             <th>Name</th>
                             <th>Phone</th>
+                            <th>Email</th>
                             <th>Type</th>
                             <th>Route/Details</th>
                             <th class="text-right">Opening Balance</th>
@@ -84,7 +85,7 @@ async function renderParties() {
                     </thead>
                     <tbody>
                         ${parties.length === 0
-                            ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
+                            ? '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
                             : parties.map(p => {
                                 const out = outstandingMap[p.id];
                                 let detailHtml = '-';
@@ -100,6 +101,7 @@ async function renderParties() {
                                         <td><code style="font-size:11px;color:var(--primary)">${escapeHtml(p.party_code || '-')}</code></td>
                                         <td><strong>${escapeHtml(p.name)}</strong></td>
                                         <td>${escapeHtml(p.phone || '-')}</td>
+                                        <td style="font-size:12px">${p.email ? `<a href="mailto:${escapeHtml(p.email)}" style="color:var(--primary)">${escapeHtml(p.email)}</a>` : '-'}</td>
                                         <td><span class="badge ${p.type === 'customer' ? 'badge-info' : p.type === 'supplier' ? 'badge-warning' : p.type === 'farmer' ? 'badge-success' : p.type === 'partner' ? 'badge-primary' : 'badge-secondary'}">${escapeHtml(p.type)}</span></td>
                                         <td style="font-size:12px">${detailHtml}</td>
                                         <td class="text-right ${p.opening_balance > 0 ? 'positive' : p.opening_balance < 0 ? 'negative' : ''}">${formatCurrency(p.opening_balance)}</td>
@@ -189,6 +191,12 @@ async function showPartyForm(partyId = null) {
                         <label>Phone</label>
                         <input type="text" class="form-control" name="phone" value="${escapeHtml(party ? party.phone : '')}">
                     </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" class="form-control" name="email" value="${escapeHtml(party ? party.email : '')}" placeholder="party@example.com">
+                    </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
                         <label>PAN / VAT</label>
                         <input type="text" class="form-control" name="pan_vat" value="${escapeHtml(party ? party.pan_vat : '')}">
@@ -281,6 +289,7 @@ async function saveParty(partyId) {
         id: partyId || null,
         name: formData.get('name'),
         phone: formData.get('phone'),
+        email: formData.get('email'),
         address: formData.get('address'),
         pan_vat: formData.get('pan_vat'),
         type: type,
@@ -355,7 +364,7 @@ async function viewLedger(partyId, fromDate = '', toDate = '') {
         <div class="modal-body">
             <div style="text-align:center;margin-bottom:16px">
                 <h3 style="color:var(--primary)">${escapeHtml(businessName)}</h3>
-                <p style="font-size:12px;color:var(--text-light)">${escapeHtml(party.address || '')} | ${escapeHtml(party.phone || '')}</p>
+                <p style="font-size:12px;color:var(--text-light)">${escapeHtml(party.address || '')}${party.phone ? ' | ' + escapeHtml(party.phone) : ''}${party.email ? ' | ' + escapeHtml(party.email) : ''}</p>
             </div>
 
             <div class="ledger-summary">
@@ -543,7 +552,7 @@ async function printPartiesList() {
             <p>Total: ${parties.length} parties</p>
         </div>
         <table>
-            <thead><tr><th>Code</th><th>Name</th><th>Phone</th><th>Type</th><th class="text-right">Opening Balance</th><th class="text-right">Outstanding</th></tr></thead>
+            <thead><tr><th>Code</th><th>Name</th><th>Phone</th><th>Email</th><th>Type</th><th class="text-right">Opening Balance</th><th class="text-right">Outstanding</th></tr></thead>
             <tbody>
                 ${parties.map(p => {
                     const out = outstandingMap[p.id];
@@ -551,6 +560,7 @@ async function printPartiesList() {
                         <td><code>${escapeHtml(p.party_code || '-')}</code></td>
                         <td><strong>${escapeHtml(p.name)}</strong></td>
                         <td>${escapeHtml(p.phone || '-')}</td>
+                        <td>${escapeHtml(p.email || '-')}</td>
                         <td>${escapeHtml(p.type)}</td>
                         <td class="text-right">${formatCurrency(p.opening_balance)}</td>
                         <td class="text-right">${out ? (out.receivable > 0 ? formatCurrency(out.receivable) + ' (Dr)' : out.payable > 0 ? formatCurrency(out.payable) + ' (Cr)' : '-') : '-'}</td>

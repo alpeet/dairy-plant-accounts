@@ -32,12 +32,28 @@ function getBackupDir(dbPath) {
 
 /**
  * Create a backup copy of the database file with a timestamped filename.
+ *
+ * IMPORTANT (WAL mode): SQLite runs in WAL journal mode, so recent transactions
+ * may still live in the -wal file rather than the main .db file. Before copying,
+ * we run a WAL checkpoint (TRUNCATE) to flush all pending transactions into the
+ * main database file — otherwise a backup could silently miss the newest data.
+ *
  * @param {string} dbPath - Full path to the current database file
+ * @param {object} [db]   - Optional open better-sqlite3 connection used to checkpoint the WAL
  * @returns {object} { path: backupFilePath, filename: backupFileName, size: fileSize, createdAt: timestamp }
  */
-function backupDatabase(dbPath) {
+function backupDatabase(dbPath, db) {
     if (!fs.existsSync(dbPath)) {
         throw new Error(`Database file not found: ${dbPath}`);
+    }
+
+    // Flush WAL transactions into the main database file before copying
+    if (db && typeof db.pragma === 'function') {
+        try {
+            db.pragma('wal_checkpoint(TRUNCATE)');
+        } catch (e) {
+            console.warn('  ⚠️  WAL checkpoint failed (continuing anyway):', e.message);
+        }
     }
 
     const backupDir = getBackupDir(dbPath);

@@ -1,0 +1,10 @@
+{
+  "name": "prarambha-excel-import",
+  "version": "1.0.0",
+  "bin": "import-excel-upsert.js",
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "assets": ["Dairy_Accounts_Professional.xlsx", "database/schema.sql"],
+    "outputPath": "dist-exe"
+  }
+}

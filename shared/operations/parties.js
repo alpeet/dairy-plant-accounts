@@ -50,11 +50,11 @@ function saveParty(db, party) {
         if (party.id) {
             const oldParty = db.prepare("SELECT * FROM parties WHERE id = ?").get(party.id);
             db.prepare(
-                `UPDATE parties SET name=?, phone=?, address=?, pan_vat=?, type=?,
+                `UPDATE parties SET name=?, phone=?, email=?, address=?, pan_vat=?, type=?,
                  opening_balance=?, route_id=?, partner_type=?, profit_share_percent=?,
                  notes=?, updated_at=datetime('now','localtime') WHERE id=?`
             ).run(
-                party.name, party.phone || '', party.address || '',
+                party.name, party.phone || '', party.email || '', party.address || '',
                 party.pan_vat || '', party.type || 'customer',
                 party.opening_balance || 0,
                 party.route_id || null,
@@ -66,11 +66,11 @@ function saveParty(db, party) {
             return { id: party.id };
         } else {
             const result = db.prepare(
-                `INSERT INTO parties (name, phone, address, pan_vat, type, opening_balance,
+                `INSERT INTO parties (name, phone, email, address, pan_vat, type, opening_balance,
                  route_id, partner_type, profit_share_percent, notes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).run(
-                party.name, party.phone || '', party.address || '',
+                party.name, party.phone || '', party.email || '', party.address || '',
                 party.pan_vat || '', party.type || 'customer',
                 party.opening_balance || 0,
                 party.route_id || null,

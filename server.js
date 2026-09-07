@@ -20,6 +20,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 
 // ── Load environment variables from .env if present ──
@@ -30,6 +31,12 @@ const { initDatabase, safeRun } = require('./shared/db');
 
 // ── Shared modules ──
 const ops = require('./shared/operations');
+
+// ── Shared BS-aware Excel import engine ──
+const excelImport = require('./shared/excel-import');
+
+// ── Shared authentication module (hashing + user management) ──
+const auth = require('./shared/auth');
 
 // ── CSV Data Exchange module ──
 const dataCSV = require('./shared/data-csv');
@@ -168,36 +175,17 @@ try {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Password Hashing (Node built-in crypto, no external deps)
+// Password Hashing (shared module — Node built-in crypto, no external deps)
 // ──────────────────────────────────────────────────────────────
 
 /**
- * Hash a password using scrypt with a random salt.
- * Returns "salt:hash" format string for storage.
- */
-function hashPassword(password) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-    return salt + ':' + hash;
-}
-
-/**
- * Verify a password against a stored "salt:hash" string.
- */
-function verifyPassword(password, stored) {
-    const [salt, hash] = stored.split(':');
-    if (!salt || !hash) return false;
-    const verifyHash = crypto.scryptSync(password, salt, 64).toString('hex');
-    return hash === verifyHash;
-}
-
-/**
  * Ensure the default admin user exists in the database on startup.
+ * (Desktop app does NOT use this — it has a first-run setup screen.)
  */
 function ensureAdminUser() {
     const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(AUTH_USERNAME);
     if (!existing) {
-        const hashed = hashPassword(AUTH_PASSWORD);
+        const hashed = auth.hashPassword(AUTH_PASSWORD);
         db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')").run(AUTH_USERNAME, hashed);
         console.log(`  → Created default user '${AUTH_USERNAME}' in database`);
     }
@@ -216,9 +204,7 @@ try {
         if (fs.existsSync(excelPath)) {
             console.log('  📂 Database has no business data. Running Excel import...');
             try {
-                // Run the import script programmatically
-                const { main: importExcel } = require('./import-excel');
-                importExcel();
+                excelImport.runExcelImport(db, excelPath, { mode: 'fresh' });
             } catch (importErr) {
                 console.error('  ❌ Excel import failed:', importErr.message);
                 console.error('     The server will start with an empty database.');
@@ -257,36 +243,47 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     // 1. Check env var fallback (backward compatibility)
+    //    The env credential is only accepted while the database password has not
+    //    been customized (still the default, or still matching the env password).
+    //    Once the user sets their own password, the env fallback is disabled and
+    //    the stored password becomes authoritative — the default can't be reused.
     if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
-        const token = crypto.randomBytes(32).toString('hex');
-        tokenStore.set(token, { createdAt: Date.now(), ttlMs: tokenTtl, role: 'admin', username: AUTH_USERNAME, rememberMe: !!remember_me });
-        res.cookie('auth_token', token, {
-            httpOnly: true,
-            sameSite: 'lax',
-            maxAge: tokenTtl,
-            path: '/',
-        });
-        // Update password hash in DB if it doesn't match (env var changed)
-        const user = db.prepare("SELECT id, password_hash FROM users WHERE username = ?").get(username);
-        if (!user || !verifyPassword(password, user.password_hash)) {
-            const hashed = hashPassword(password);
-            if (user) {
-                db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(hashed, user.id);
-            } else {
-                db.prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'admin')").run(username, hashed);
+        const envUser = db.prepare("SELECT id, password_hash FROM users WHERE username = ?").get(username);
+        const hashMatchesEnv = envUser ? auth.verifyPassword(AUTH_PASSWORD, envUser.password_hash) : false;
+        const hashIsDefault = envUser ? auth.isDefaultPassword(envUser.password_hash) : true;
+        if (hashMatchesEnv || hashIsDefault) {
+            const token = crypto.randomBytes(32).toString('hex');
+            tokenStore.set(token, { createdAt: Date.now(), ttlMs: tokenTtl, role: 'admin', username: AUTH_USERNAME, rememberMe: !!remember_me });
+            res.cookie('auth_token', token, {
+                httpOnly: true,
+                sameSite: 'lax',
+                maxAge: tokenTtl,
+                path: '/',
+            });
+            // Update password hash in DB if it doesn't match (env var changed)
+            if (!envUser || !auth.verifyPassword(password, envUser.password_hash)) {
+                const hashed = auth.hashPassword(password);
+                if (envUser) {
+                    db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(hashed, envUser.id);
+                } else {
+                    db.prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'admin')").run(username, hashed);
+                }
             }
+            const finalHash = db.prepare("SELECT password_hash FROM users WHERE username = ?").get(username);
+            const mustChangePassword = finalHash ? auth.isDefaultPassword(finalHash.password_hash) : (AUTH_PASSWORD === 'admin123');
+            recordLoginAttempt(username, true);
+            return res.json({
+                success: true,
+                data: { message: 'Login successful', mustChangePassword, token, rememberMe: !!remember_me }
+            });
         }
-        const mustChangePassword = AUTH_PASSWORD === 'admin123';
-        recordLoginAttempt(username, true);
-        return res.json({
-            success: true,
-            data: { message: 'Login successful', mustChangePassword, token, rememberMe: !!remember_me }
-        });
+        // Fall through to the database user check — the env password is no
+        // longer valid once the user has set their own password.
     }
 
     // 2. Check database users
     const user = db.prepare("SELECT id, password_hash, role, is_active FROM users WHERE username = ?").get(username);
-    if (user && user.is_active && verifyPassword(password, user.password_hash)) {
+    if (user && user.is_active && auth.verifyPassword(password, user.password_hash)) {
         const token = crypto.randomBytes(32).toString('hex');
         tokenStore.set(token, { createdAt: Date.now(), ttlMs: tokenTtl, userId: user.id, role: user.role, rememberMe: !!remember_me });
         res.cookie('auth_token', token, {
@@ -295,7 +292,7 @@ app.post('/api/auth/login', (req, res) => {
             maxAge: tokenTtl,
             path: '/',
         });
-        const mustChangePassword = verifyPassword('admin123', user.password_hash);
+        const mustChangePassword = auth.isDefaultPassword(user.password_hash);
         recordLoginAttempt(username, true);
         return res.json({
             success: true,
@@ -410,13 +407,15 @@ app.post('/api/auth/me', (req, res) => {
     // Get full user info from DB
     const userId = tokenData.userId;
     if (userId) {
-        const user = db.prepare("SELECT id, username, role FROM users WHERE id = ?").get(userId);
+        const user = db.prepare("SELECT id, username, role, password_hash FROM users WHERE id = ?").get(userId);
         if (user) {
-            return res.json({ success: true, data: { id: user.id, username: user.username, role: user.role } });
+            return res.json({ success: true, data: { id: user.id, username: user.username, role: user.role, mustChangePassword: auth.isDefaultPassword(user.password_hash) } });
         }
     }
     // Fallback for env-var based auth (no userId in token)
-    return res.json({ success: true, data: { id: null, username: tokenData.username || 'admin', role: 'admin' } });
+    const adminUser = db.prepare("SELECT id, username, role, password_hash FROM users WHERE username = ?").get(AUTH_USERNAME);
+    const mustChangePassword = adminUser ? auth.isDefaultPassword(adminUser.password_hash) : (AUTH_PASSWORD === 'admin123');
+    return res.json({ success: true, data: { id: null, username: tokenData.username || 'admin', role: 'admin', mustChangePassword } });
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -462,7 +461,7 @@ app.post('/api/auth/users/create', requireRole('admin'), (req, res) => {
         if (existing) {
             return res.json({ success: false, error: 'Username already exists' });
         }
-        const hashed = hashPassword(password);
+        const hashed = auth.hashPassword(password);
         db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)").run(username, hashed, userRole);
         return res.json({ success: true, data: { message: `User '${username}' created successfully` } });
     } catch (err) {
@@ -514,18 +513,25 @@ app.post('/api/auth/users/change-password', requireRole('operator'), (req, res) 
         return res.json({ success: false, error: 'New password must be at least 4 characters' });
     }
 
-    // Get the user from DB
-    const storedUser = db.prepare("SELECT id, password_hash FROM users WHERE username = ?").get(AUTH_USERNAME);
-    const userId = storedUser ? storedUser.id : 1;
+    // Change the password of the *currently logged-in* user.
+    let userId = tokenData.userId;
+    if (!userId) {
+        // env-var admin token (no userId) → fall back to the env admin row
+        const envAdmin = db.prepare("SELECT id FROM users WHERE username = ?").get(AUTH_USERNAME);
+        userId = envAdmin ? envAdmin.id : 1;
+    }
 
     // Verify current password
     const user = db.prepare("SELECT id, password_hash FROM users WHERE id = ?").get(userId);
-    if (user && !verifyPassword(currentPassword, user.password_hash)) {
+    if (!user) {
+        return res.json({ success: false, error: 'User not found' });
+    }
+    if (!auth.verifyPassword(currentPassword, user.password_hash)) {
         return res.json({ success: false, error: 'Current password is incorrect' });
     }
 
     try {
-        const hashed = hashPassword(newPassword);
+        const hashed = auth.hashPassword(newPassword);
         db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(hashed, userId);
         return res.json({ success: true, data: { message: 'Password changed successfully' } });
     } catch (err) {
@@ -561,7 +567,7 @@ app.post('/api/auth/register', (req, res) => {
             return res.json({ success: false, error: 'Username already exists. Please choose another.' });
         }
 
-        const hashed = hashPassword(password);
+        const hashed = auth.hashPassword(password);
         db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'operator')").run(username, hashed);
 
         // Auto-login after registration (session mode — no remember me)
@@ -601,7 +607,7 @@ app.post('/api/auth/reset-password', (req, res) => {
             return res.json({ success: false, error: 'Username not found. Please check and try again.' });
         }
 
-        const hashed = hashPassword(newPassword);
+        const hashed = auth.hashPassword(newPassword);
         db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(hashed, user.id);
 
         return res.json({ success: true, data: { message: `Password for '${username}' has been reset successfully! You can now login with your new password.` } });
@@ -640,6 +646,22 @@ function isValidToken(token) {
     return true;
 }
 
+/**
+ * True when the authenticated user's stored credential is still the default
+ * password (admin123) — the app must force a password change before use.
+ */
+function isForcedPasswordChange(tokenData) {
+    if (!tokenData) return false;
+    if (tokenData.userId) {
+        const user = db.prepare("SELECT password_hash FROM users WHERE id = ?").get(tokenData.userId);
+        return user ? auth.isDefaultPassword(user.password_hash) : false;
+    }
+    // env-var admin token (no userId)
+    const adminUser = db.prepare("SELECT password_hash FROM users WHERE username = ?").get(AUTH_USERNAME);
+    if (adminUser) return auth.isDefaultPassword(adminUser.password_hash);
+    return AUTH_PASSWORD === 'admin123';
+}
+
 function requireAuth(req, res, next) {
     if (!req.path.startsWith('/api/')) {
         return next();
@@ -668,6 +690,16 @@ function requireAuth(req, res, next) {
     // Fallback: no userId in token (env-var auth) — use generic admin
     if (!req.user) {
         req.user = { id: null, username: tokenData?.username || 'admin', role: 'admin' };
+    }
+
+    // ── Force password change: block the app while the default credential is in use ──
+    // Only the change-password endpoint is allowed until the password is updated.
+    if (isForcedPasswordChange(tokenData) && req.path !== '/api/auth/users/change-password') {
+        return res.status(403).json({
+            success: false,
+            code: 'PASSWORD_CHANGE_REQUIRED',
+            error: 'You must change the default password before using the app.'
+        });
     }
     next();
 }
@@ -729,6 +761,39 @@ function webAuthRedirect(req, res, next) {
 
 app.use(requireAuth);
 app.use(webAuthRedirect);
+
+// ──────────────────────────────────────────────────────────────
+// Excel data update (upload a Dairy Account Pro Excel file)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/excel/import', requireRole('admin'), (req, res) => {
+    const { fileName, fileBase64, mode } = req.body || {};
+    if (!fileBase64) {
+        return res.status(400).json({ success: false, error: 'fileBase64 is required — upload the Dairy Account Pro Excel file.' });
+    }
+
+    let tmpPath = null;
+    try {
+        const buf = Buffer.from(fileBase64, 'base64');
+        if (buf.length === 0) {
+            return res.status(400).json({ success: false, error: 'Uploaded file is empty.' });
+        }
+        tmpPath = path.join(os.tmpdir(), `prarambha-excel-${Date.now()}.xlsx`);
+        fs.writeFileSync(tmpPath, buf);
+
+        const importMode = mode === 'fresh' ? 'fresh' : 'upsert';
+        console.log(`  📂 Web: importing ${fileName || 'Excel file'} (${importMode})`);
+        const results = excelImport.runExcelImport(db, tmpPath, {
+            mode: importMode,
+            log: (msg) => console.log(msg)
+        });
+        res.json({ success: true, data: { mode: importMode, fileName, results } });
+    } catch (err) {
+        console.error('  ❌ Web Excel import failed:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    } finally {
+        if (tmpPath) { try { fs.unlinkSync(tmpPath); } catch (e) { /* ignore */ } }
+    }
+});
 
 // ──────────────────────────────────────────────────────────────
 // Health check
@@ -1283,10 +1348,27 @@ app.post('/api/settings/save', requireRole('admin'), (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Email (authenticated users — send party statements etc.)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/email/send', requireRole('operator'), async (req, res) => {
+    const { to, subject, html, text, cc, bcc, attachments } = req.body || {};
+    if (!to) return res.json({ success: false, error: 'Recipient email address is required' });
+    if (!subject && !html && !text) {
+        return res.json({ success: false, error: 'Email subject or content is required' });
+    }
+    try {
+        const result = await ops.sendEmail(db, { to, subject, html, text, cc, bcc, attachments });
+        res.json(result);
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
 // Backup (admin only — database export)
 // ──────────────────────────────────────────────────────────────
 app.post('/api/backup', requireRole('admin'), (req, res) => {
-    res.json(safeRun(() => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'))));
+    res.json(safeRun(() => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'), db)));
 });
 
 // POST /api/backup/list — List all available backups (admin only)
@@ -1379,6 +1461,32 @@ app.post('/api/backup/restore', requireRole('admin'), (req, res) => {
 
 app.post('/api/db-path', (req, res) => {
     res.json({ success: true, data: path.join(dbDir, 'dairy-plant.db') });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Export to Daily Account Pro Excel
+const { exportToDailyAccountExcel } = require('./shared/export-daily-account');
+
+app.post('/api/export/daily-account', requireAuth, (req, res) => {
+    try {
+        const outputPath = path.join(dbDir, 'Daily_Account_Professional_Export.xlsx');
+        const result = exportToDailyAccountExcel(db, outputPath);
+        if (result.success) {
+            // Send the file as a download
+            res.download(result.filePath, 'Daily_Account_Professional_Export.xlsx', (err) => {
+                if (err) {
+                    console.error('Export download error:', err.message);
+                    if (!res.headersSent) {
+                        res.json({ success: false, error: 'Download failed: ' + err.message });
+                    }
+                }
+            });
+        } else {
+            res.json(result);
+        }
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1512,7 +1620,7 @@ function startAutoBackup() {
 
     autoBackupTimer = setInterval(() => {
         try {
-            const result = ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'));
+            const result = ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'), db);
             console.log(`  💾 Auto-backup created: ${result.filename} (${ops.formatFileSize(result.size)})`);
         } catch (err) {
             console.error('  ❌ Auto-backup failed:', err.message);
@@ -1547,7 +1655,7 @@ function gracefulShutdown(signal, exitCode = 0) {
 
     // Step 2: Create a final backup before exiting
     try {
-        const result = ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'));
+        const result = ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'), db);
         console.log(`  💾 Shutdown backup saved: ${result.filename} (${ops.formatFileSize(result.size)})`);
     } catch (err) {
         console.error('  ❌ Shutdown backup failed:', err.message);

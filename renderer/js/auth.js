@@ -1,17 +1,55 @@
 /**
- * Prarambha Account & Stock Management — Web Auth
+ * Prarambha Account & Stock Management — Authentication
  * ==============================
- * Handles client-side authentication with Bearer token fallback.
- * Primary: HttpOnly cookies (set by server).
- * Fallback: Bearer token in sessionStorage (prevents redirect race conditions).
- * The /api/auth/me endpoint returns the current user's details.
+ * Works in BOTH modes:
+ *   - Desktop (Electron): the session lives in the main process. This script
+ *     loads the current user for role-based visibility and wires the logout
+ *     button to the IPC `auth:logout` handler.
+ *   - Web: HttpOnly cookies (set by the server) with a Bearer-token fallback
+ *     stored in sessionStorage/localStorage.
  */
 
 (function () {
-    // Don't run in Electron
-    if (window.electronAPI || window.process?.versions?.electron) {
+    const isElectron = !!(window.electronAPI ||
+        window.process?.versions?.electron ||
+        (typeof location !== 'undefined' && location.protocol === 'file:'));
+
+    // ════════════════════════════════════════════════════════════
+    // DESKTOP MODE (Electron)
+    // ════════════════════════════════════════════════════════════
+    if (isElectron) {
+        // Load the current user so role-based sidebar visibility works
+        async function loadDesktopUser() {
+            try {
+                const result = await window.api.getCurrentUser();
+                if (result && result.success && result.data) {
+                    window._currentUser = {
+                        id: result.data.id,
+                        username: result.data.username,
+                        role: result.data.role || 'admin'
+                    };
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+        loadDesktopUser();
+
+        // Logout → clear the main-process session, return to the login screen
+        window.logout = async function logout() {
+            try { await window.api.logout(); } catch (e) { /* ignore */ }
+            window.location.href = 'login-electron.html';
+        };
+
+        window.getAuthHeaders = function () {
+            return { 'Content-Type': 'application/json' };
+        };
         return;
     }
+
+    // ════════════════════════════════════════════════════════════
+    // WEB MODE
+    // ════════════════════════════════════════════════════════════
 
     // ── Helper: get auth token from storage ──
     // Checks localStorage first (Remember Me), then sessionStorage (session mode)
@@ -48,6 +86,13 @@
                     username: result.data.username,
                     role: result.data.role || 'admin'
                 };
+                if (result.data.mustChangePassword) {
+                    window._currentUser.mustChangePassword = true;
+                    // Block the app until the default password is changed
+                    if (typeof window.forcePasswordChange === 'function') {
+                        window.forcePasswordChange();
+                    }
+                }
             } else {
                 // Auth failed — clear any stale token
                 try { sessionStorage.removeItem('auth_token'); } catch (e) {}
@@ -67,7 +112,7 @@
         fetchCurrentUser();
     }
 
-    // Expose logout function globally — clears both cookie AND sessionStorage
+    // Expose logout function globally — clears both cookie AND storage
     window.logout = async function logout() {
         try {
             const headers = { 'Content-Type': 'application/json' };

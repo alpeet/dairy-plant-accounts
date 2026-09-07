@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS parties (
     party_code TEXT DEFAULT '',
     name TEXT NOT NULL,
     phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
     address TEXT DEFAULT '',
     pan_vat TEXT DEFAULT '',
     type TEXT NOT NULL CHECK(type IN ('customer', 'supplier', 'both', 'farmer', 'partner')) DEFAULT 'customer',
@@ -400,6 +401,13 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_path', '');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.0.0');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('default_fat_multiplier', '7.15');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('default_snf_multiplier', '4.55');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_host', '');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_port', '587');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_secure', '0');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_user', '');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_pass', '');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_from', '');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('smtp_from_name', '');
 
 -- ============================================================
 -- DENOMINATION COUNTS (daily cash counting)

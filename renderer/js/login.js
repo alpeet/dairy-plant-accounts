@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                             <div class="db-warning-content">
                                 <strong>⚠️ Fresh Installation</strong>
-                                <p>This is a new database. Create your first account below or login with the default admin credentials.</p>
+                                <p>This is a new database. Log in with the account created by your administrator.</p>
                             </div>
                         </div>
                     `;
@@ -221,8 +221,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // Server set the HttpOnly cookie. Now verify auth before redirect.
+                // If the default password is in use, the app will show a forced
+                // change-password screen before anything else is accessible.
                 if (result.data && result.data.mustChangePassword) {
-                    showError(errorEl, '⚠ Default password in use. Please change it in Settings → Users after login.');
+                    showError(errorEl, '⚠ Default password in use — you will be asked to set a new password now.');
                     errorEl.className = 'login-success';
                 }
 

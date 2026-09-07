@@ -111,6 +111,11 @@ function validateParty(data) {
 
     // String field lengths
     if (data.phone && data.phone.length > 30) return 'Phone number is too long (max 30 characters)';
+    if (data.email !== undefined && data.email !== null && data.email !== '') {
+        const email = String(data.email).trim();
+        if (email.length > 100) return 'Email is too long (max 100 characters)';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Please enter a valid email address';
+    }
     if (data.address && data.address.length > 500) return 'Address is too long (max 500 characters)';
     if (data.pan_vat && data.pan_vat.length > 50) return 'PAN/VAT is too long (max 50 characters)';
     if (data.notes && data.notes.length > 500) return 'Notes is too long (max 500 characters)';

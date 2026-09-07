@@ -110,17 +110,20 @@ function baseName(str) {
 }
 
 /**
- * Simple character-overlap similarity (0-1).
+ * Word-overlap (Jaccard) similarity (0-1) between two normalized names.
+ * Much stricter than character overlap: "PUSHPA ADHIKARI" vs "KRITIKA KIRANA"
+ * share no words (0.0), while "KALIKA CANTEEN A" vs "A KALIKA CANTEEN"
+ * share all words (1.0). This prevents unrelated names from being merged.
  */
 function similarity(a, b) {
-    const longer = a.length >= b.length ? a : b;
-    const shorter = a.length < b.length ? a : b;
-    if (longer.length === 0) return 0;
-    let matches = 0;
-    for (const ch of shorter) {
-        if (longer.includes(ch)) matches++;
-    }
-    return matches / longer.length;
+    const ta = String(a).split(' ').filter(Boolean);
+    const tb = String(b).split(' ').filter(Boolean);
+    if (ta.length === 0 || tb.length === 0) return 0;
+    const setB = new Set(tb);
+    let inter = 0;
+    for (const w of ta) if (setB.has(w)) inter++;
+    const union = new Set([...ta, ...tb]).size;
+    return union === 0 ? 0 : inter / union;
 }
 
 // ── Shared party resolution state (built by importParties, used by all transaction imports) ──
@@ -161,10 +164,10 @@ function resolveParty(name, allowCreate) {
         const s = similarity(n, k);
         if (s > bestScore) { bestScore = s; bestKey = k; }
     }
-    if (bestKey && bestScore >= 0.8) return partyIndex.exact[bestKey];
+    if (bestKey && bestScore >= 0.5) return partyIndex.exact[bestKey];
 
     if (allowCreate && insertPartyStmt) {
-        const result = insertPartyStmt.run(name, 'customer', '', '', 0,
+        const result = insertPartyStmt.run(name, 'customer', '', '', '', 0,
             'Auto-created from Excel', new Date().toISOString());
         const id = result.lastInsertRowid;
         partyIndex.exact[n] = id;
@@ -276,8 +279,8 @@ function importParties(db, sheetData) {
     console.log('\n  📋 Importing Parties...');
 
     const insertParty = db.prepare(`
-        INSERT INTO parties (name, type, phone, address, opening_balance, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO parties (name, type, phone, email, address, opening_balance, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Reset shared resolver state & register the prepared statement for auto-created parties
@@ -293,6 +296,16 @@ function importParties(db, sheetData) {
     // Header mapping
     // Col 0: Party Name, 1: Type, 2: Phone, 3: Address, 4: Opening Balance
     const nameIdx = 0, typeIdx = 1, phoneIdx = 2, addrIdx = 3, balIdx = 4;
+
+    // Optional Email column — detected from the header row (row 1) if present
+    const headerRow = sheetData[SHEET_DATA_START_ROW - 1] || [];
+    let emailIdx = -1;
+    for (let h = 0; h < headerRow.length; h++) {
+        if (String(headerRow[h]).trim().toLowerCase().includes('email')) {
+            emailIdx = h;
+            break;
+        }
+    }
 
     let partyCount = 0;
     let ledgerCount = 0;
@@ -312,8 +325,9 @@ function importParties(db, sheetData) {
             const phone = toStr(row[phoneIdx]);
             const address = toStr(row[addrIdx]);
             const openingBal = toNum(row[balIdx]);
+            const email = emailIdx >= 0 ? toStr(row[emailIdx]) : '';
 
-            const result = insertParty.run(name, type, phone, address, openingBal, 'Imported from Excel', new Date().toISOString());
+            const result = insertParty.run(name, type, phone, email, address, openingBal, 'Imported from Excel', new Date().toISOString());
             const partyId = result.lastInsertRowid;
             partyNameToId[normalize(name)] = partyId;
             partyIndex.exact[normalize(name)] = partyId;
@@ -338,6 +352,68 @@ function importParties(db, sheetData) {
     console.log(`  ✅ ${partyCount} parties imported`);
     if (ledgerCount > 0) console.log(`  📊 ${ledgerCount} opening balance ledger entries created`);
     return partyNameToId;
+}
+
+/**
+ * Import a "Party Email" sheet (Party Name ↔ Email) and attach the email to
+ * the matching party. The sheet may follow the workbook convention (row 0 = title,
+ * row 1 = header) or be a plain two-column sheet (row 0 = header).
+ * Returns the number of emails applied.
+ */
+function importPartyEmails(db, sheetData) {
+    const updateEmail = db.prepare("UPDATE parties SET email = ? WHERE id = ?");
+
+    // Find the header row (first row whose cells include an "email" header)
+    let headerIdx = -1, emailCol = -1, nameCol = -1;
+    for (let r = 0; r < Math.min(3, sheetData.length); r++) {
+        const row = sheetData[r] || [];
+        for (let c = 0; c < row.length; c++) {
+            const cell = String(row[c]).trim().toLowerCase();
+            if (cell.includes('email')) { emailCol = c; break; }
+        }
+        if (emailCol >= 0) {
+            headerIdx = r;
+            // Party name = the other of the first two non-empty columns
+            nameCol = emailCol === 0 ? 1 : 0;
+            if (!String(row[nameCol] || '').trim()) nameCol = emailCol === 0 ? 1 : 0;
+            break;
+        }
+    }
+
+    if (headerIdx < 0 || emailCol < 0) {
+        console.log('  ⚠️  Party Email sheet: no "Email" header column found, skipped');
+        return 0;
+    }
+
+    const findParty = db.prepare('SELECT id FROM parties WHERE name = ?');
+    let applied = 0, skipped = 0;
+
+    const trx = db.transaction(() => {
+        for (let i = headerIdx + 1; i < sheetData.length; i++) {
+            const row = sheetData[i];
+            if (!row || !row[nameCol]) continue;
+            const name = toStr(row[nameCol]);
+            const email = toStr(row[emailCol]);
+            if (!name || !email || !email.includes('@')) { skipped++; continue; }
+
+            const existing = findParty.get(name) || findParty.get(normalize(name));
+            if (!existing) {
+                // Try fuzzy/base matching
+                const b = baseName(name);
+                let target = null;
+                if (b) target = db.prepare('SELECT id FROM parties WHERE name = ?').get(b);
+                if (!target) { skipped++; continue; }
+                updateEmail.run(email, target.id);
+            } else {
+                updateEmail.run(email, existing.id);
+            }
+            applied++;
+        }
+    });
+
+    trx();
+    console.log(`  📧 Party Email sheet: ${applied} emails applied${skipped > 0 ? ` (${skipped} skipped - no match/no email)` : ''}`);
+    return applied;
 }
 
 /**
@@ -435,7 +511,7 @@ function importSales(db, sheetData, partyNameToId, productNameToId) {
 
     const insertLedger = db.prepare(`
         INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance, created_at)
-        VALUES (?, ?, 'sale', ?, ?, ?, 0, ?, ?)
+        VALUES (?, ?, 'sale', ?, ?, ?, ?, ?, ?)
     `);
 
     const insertStock = db.prepare(`
@@ -444,11 +520,11 @@ function importSales(db, sheetData, partyNameToId, productNameToId) {
         VALUES (?, ?, 'sale', 0, ?, ?, ?, ?, 'sale', ?, ?)
     `);
 
-    // Col: 0=Date, 1=InvoiceNo, 2=PartyName, 3=Product, 4=Qty, 5=Rate,
-    // 6=Amount, 7=Disc%, 8=NetAmount, 9=PaymentMode, 10=Status, 11=Remarks
-    const dateIdx = 0, invIdx = 1, partyIdx = 2, prodIdx = 3,
-          qtyIdx = 4, rateIdx = 5, amtIdx = 6, discPctIdx = 7,
-          netIdx = 8, modeIdx = 9, statusIdx = 10, remarkIdx = 11;
+    // Col: 0=Date, 1=(empty), 2=InvoiceNo, 3=PartyName, 4=Product, 5=Qty, 6=Rate,
+    // 7=Amount, 8=Disc%, 9=NetAmount, 10=PaymentMode, 11=Status, 12=Remarks
+    const dateIdx = 0, invIdx = 2, partyIdx = 3, prodIdx = 4,
+          qtyIdx = 5, rateIdx = 6, amtIdx = 7, discPctIdx = 8,
+          netIdx = 9, modeIdx = 10, statusIdx = 11, remarkIdx = 12;
 
     let saleCount = 0;
     let itemCount = 0;
@@ -520,7 +596,7 @@ function importSales(db, sheetData, partyNameToId, productNameToId) {
             // Create ledger entry for the sale (debit = customer owes this amount)
             const ledgerDesc = `Sale Invoice ${invNo}${remarks ? ' - ' + remarks : ''}`;
             const ledgerBal = grandTotal;
-            insertLedger.run(partyId, dateStr, invNo, ledgerDesc.substring(0, 200), grandTotal, ledgerBal, new Date().toISOString());
+            insertLedger.run(partyId, dateStr, invNo, ledgerDesc.substring(0, 200), grandTotal, 0, ledgerBal, new Date().toISOString());
 
             // If paid, also create a receipt ledger entry (credit = customer paid)
             if (paidAmount > 0) {
@@ -588,13 +664,13 @@ function importPurchases(db, sheetData, partyNameToId, productNameToId) {
         VALUES (?, ?, 'purchase', ?, 0, ?, ?, ?, 'purchase', ?, ?)
     `);
 
-    // Col: 0=Date, 1=BillNo, 2=Supplier, 3=Product, 4=FAT%, 5=SNF%, 6=Extra/Unit,
-    // 7=RateType, 8=FixedRate, 9=Rate/Unit, 10=Qty, 11=Amount, 12=Transport, 13=NetAmount,
-    // 14=PaymentMode, 15=Status, 16=Remarks
-    const dateIdx = 0, billIdx = 1, suppIdx = 2, prodIdx = 3,
-          fatIdx = 4, snfIdx = 5, extraIdx = 6, rateTypeIdx = 7,
-          fixedRateIdx = 8, rateUnitIdx = 9, qtyIdx = 10, amtIdx = 11,
-          transportIdx = 12, netIdx = 13, modeIdx = 14, statusIdx = 15, remarkIdx = 16;
+    // Col: 0=Date, 1=(empty), 2=BillNo, 3=Supplier, 4=Shift, 5=Product, 6=FAT%, 7=SNF%, 8=Extra/Unit,
+    // 9=RateType, 10=FixedRate, 11=Rate/Unit, 12=Qty, 13=Amount, 14=Transport, 15=NetAmount,
+    // 16=PaymentMode, 17=Status, 18=Remarks
+    const dateIdx = 0, billIdx = 2, suppIdx = 3, prodIdx = 5,
+          fatIdx = 6, snfIdx = 7, extraIdx = 8, rateTypeIdx = 9,
+          fixedRateIdx = 10, rateUnitIdx = 11, qtyIdx = 12, amtIdx = 13,
+          transportIdx = 14, netIdx = 15, modeIdx = 16, statusIdx = 17, remarkIdx = 18;
 
     let purchaseCount = 0;
     let itemCount = 0;
@@ -711,8 +787,8 @@ function importCashCollections(db, sheetData, partyNameToId) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const dateIdx = 0, recIdx = 1, custIdx = 2, billIdx = 3, typeIdx = 4,
-          collectedIdx = 6, paidIdx = 7, modeIdx = 8, remarkIdx = 10;
+    const dateIdx = 0, recIdx = 2, custIdx = 3, billIdx = 4, typeIdx = 5,
+          collectedIdx = 7, paidIdx = 8, modeIdx = 9, remarkIdx = 11;
 
     let count = 0;
     let skipped = 0;
@@ -736,10 +812,10 @@ function importCashCollections(db, sheetData, partyNameToId) {
 
             const dateStr = toDateStr(row[dateIdx]) || new Date().toISOString().split('T')[0];
 
-            // Collection = money received (amount in 'Collected'); Payment/Advance = money out (amount in 'Paid')
+            // Collection = money received (amount in 'Collected'); Payment/Advance/Petty Cash = money out (amount in 'Paid')
             let payType = 'receipt';
             let amount = toNum(row[collectedIdx]);
-            if (rowType === 'payment' || rowType === 'advance') {
+            if (rowType === 'payment' || rowType === 'advance' || rowType.includes('petty')) {
                 payType = 'payment';
                 amount = toNum(row[paidIdx]);
             }
@@ -785,10 +861,10 @@ function importPartyLedger(db, sheetData, partyNameToId) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    // Col: 0=Date, 1=PartyName, 2=TxnType, 3=Reference, 4=Description,
-    // 5=Debit, 6=Credit, 7=Balance, 8=Remarks, 9=MatchIdx
-    const dateIdx = 0, partyIdx = 1, txnIdx = 2, refIdx = 3, descIdx = 4,
-          debitIdx = 5, creditIdx = 6, balIdx = 7, remarkIdx = 8;
+    // Col: 0=Date, 1=(empty), 2=PartyName, 3=TxnType, 4=Reference, 5=Description,
+    // 6=Debit, 7=Credit, 8=Balance, 9=Remarks, 10=MatchIdx
+    const dateIdx = 0, partyIdx = 2, txnIdx = 3, refIdx = 4, descIdx = 5,
+          debitIdx = 6, creditIdx = 7, balIdx = 8, remarkIdx = 9;
 
     let count = 0;
     let skipped = 0;
@@ -920,6 +996,14 @@ function main() {
         const partySheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party_Master'], { header: 1, defval: '' });
         console.log(`  → Party_Master: ${Math.max(0, partySheet.length - 2)} data rows (${partySheet.length} total rows)`);
         const partyNameToId = importParties(db, partySheet);
+
+        // STEP 1.5: Import Party Email sheet (Party Name ↔ Email), if present
+        if (workbook.SheetNames.includes('Party Email')) {
+            const emailSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Party Email'], { header: 1, defval: '' });
+            if (emailSheet.length > 1) {
+                importPartyEmails(db, emailSheet);
+            }
+        }
 
         // STEP 2: Import Products
         const stockSheet = XLSX.utils.sheet_to_json(workbook.Sheets['Stock_Master'], { header: 1, defval: '' });

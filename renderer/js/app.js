@@ -237,6 +237,90 @@ window.toggleNavGroup = toggleNavGroup;
 window.navigateTo = navigateTo;
 
 // ============================================================
+// Forced password change (default credential still in use)
+// ============================================================
+
+/**
+ * Show a blocking, non-dismissable screen that forces the user to change
+ * their password before they can use the app. Called when the server reports
+ * mustChangePassword (or returns 403 PASSWORD_CHANGE_REQUIRED).
+ */
+function forcePasswordChange() {
+    if (document.getElementById('forcePasswordChangeOverlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'forcePasswordChangeOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(10,15,30,0.94);display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+        <div style="background:#fff;border-radius:14px;max-width:440px;width:100%;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+            <div style="font-size:34px;text-align:center">🔒</div>
+            <h2 style="text-align:center;margin:8px 0 6px">Change Your Password</h2>
+            <p style="text-align:center;color:#64748b;font-size:13px;margin:0 0 18px">You are using the default password (<strong>admin123</strong>). For security, you must set your own password before using the app.</p>
+            <form id="forcePasswordForm">
+                <div class="form-group">
+                    <label>Current Password</label>
+                    <input type="password" class="form-control" name="currentPassword" required autocomplete="current-password" placeholder="Enter current password">
+                </div>
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" class="form-control" name="newPassword" required minlength="4" autocomplete="new-password" placeholder="At least 4 characters">
+                </div>
+                <div class="form-group">
+                    <label>Confirm New Password</label>
+                    <input type="password" class="form-control" name="confirmPassword" required minlength="4" autocomplete="new-password" placeholder="Re-enter new password">
+                </div>
+                <div id="forcePasswordError" style="display:none;margin-top:8px;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#dc2626;font-size:13px"></div>
+                <button type="submit" id="forcePasswordBtn" class="btn btn-primary" style="width:100%;margin-top:16px">Change Password &amp; Continue</button>
+                <button type="button" id="forceLogoutBtn" class="btn btn-secondary" style="width:100%;margin-top:8px">Log out</button>
+            </form>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#forceLogoutBtn').addEventListener('click', () => {
+        if (typeof window.logout === 'function') window.logout();
+    });
+
+    overlay.querySelector('form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const currentPassword = (fd.get('currentPassword') || '').trim();
+        const newPassword = (fd.get('newPassword') || '').trim();
+        const confirmPassword = (fd.get('confirmPassword') || '').trim();
+        const errEl = document.getElementById('forcePasswordError');
+        const btn = document.getElementById('forcePasswordBtn');
+
+        if (newPassword !== confirmPassword) {
+            errEl.textContent = 'New passwords do not match';
+            errEl.style.display = 'block';
+            return;
+        }
+        errEl.style.display = 'none';
+        btn.disabled = true;
+        btn.textContent = 'Changing...';
+
+        try {
+            const result = await window.api.changePassword({ currentPassword, newPassword });
+            if (result && result.success) {
+                // Reload — /api/auth/me now reports mustChangePassword=false
+                window.location.reload();
+            } else {
+                errEl.textContent = (result && result.error) || 'Failed to change password';
+                errEl.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Change Password & Continue';
+            }
+        } catch (err) {
+            errEl.textContent = 'Connection error: ' + (err && err.message ? err.message : err);
+            errEl.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Change Password & Continue';
+        }
+    });
+}
+
+window.forcePasswordChange = forcePasswordChange;
+
+// ============================================================
 // Error handling wrapper for async operations
 // ============================================================
 async function safeAsync(fn, errorMsg = 'Operation failed') {

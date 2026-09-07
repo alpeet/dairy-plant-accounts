@@ -48,14 +48,14 @@ const {
 
 const {
     getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,
-    getSalesRegister, getPurchaseRegister, getTodaySummary
+    getSalesRegister, getPurchaseRegister, getTodaySummary, getFarmerStatement
 } = require('./reports');
 
 const {
     getSettings, saveSettings
 } = require('./settings');
 
-const { backupDatabase, listBackups, deleteBackup, formatFileSize, getBackupDir } = require('./backup');
+const { backupDatabase, restoreDatabase, listBackups, deleteBackup, formatFileSize, getBackupDir } = require('./backup');
 
 // ── New modules ──
 const { getPartyStatement, listPartiesWithBalance } = require('./statements');
@@ -80,6 +80,7 @@ const {
 } = require('./expenses');
 const { logAudit, getAuditLogs } = require('./audit');
 const { getTableInfo } = require('./table_info');
+const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
 
 // ── Financial Reports ──
 const { getProfitLoss, getStockStatement, getEnhancedDaybook } = require('./financial_reports');
@@ -128,13 +129,14 @@ module.exports = {
 
     // Reports
     getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,
-    getSalesRegister, getPurchaseRegister, getTodaySummary,
+    getSalesRegister, getPurchaseRegister, getTodaySummary, getFarmerStatement,
 
     // Settings
     getSettings, saveSettings,
 
     // Backup
     backupDatabase,
+    restoreDatabase,
     listBackups,
     deleteBackup,
     formatFileSize,
@@ -174,6 +176,9 @@ module.exports = {
 
     // Database Table Info
     getTableInfo,
+
+    // Email
+    sendEmail, getSmtpSettings, isValidEmail,
 
     // Audit
     logAudit, getAuditLogs,

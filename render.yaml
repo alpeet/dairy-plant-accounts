@@ -23,9 +23,10 @@ services:
     name: prarambha-account-stock
     env: node
     buildCommand: npm install --production --ignore-scripts && npm rebuild better-sqlite3
-    # Run the Excel import on startup (idempotent - skips if data already exists)
-    # Server starts regardless of import result (semicolon, not &&)
-    startCommand: node import-excel.js; npm start
+    # On first boot (empty database) server.js automatically imports
+    # Dairy_Accounts_Professional.xlsx (BS dates, correct mappings) — idempotent.
+    # To refresh data later, log in → Settings → "Update Data from Excel".
+    startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
@@ -41,10 +42,9 @@ services:
         value: admin123
       - key: DB_DIR
         value: /opt/render/project/src/data
-      # Excel data has been imported into the persistent disk. FORCE_IMPORT was
-      # removed so the deployed database persists across restarts and deploys.
-      # To refresh from a new Excel update: set FORCE_IMPORT=1 temporarily,
-      # push, wait for the deploy, then remove it again.
+      # Excel data lives on the persistent disk and survives restarts.
+      # To refresh from an updated Excel file: log in → Settings →
+      # "Update Data from Excel (Dairy Account Pro)" and upload the workbook.
     disk:
       name: data
       mountPath: /opt/render/project/src/data

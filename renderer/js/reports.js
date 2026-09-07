@@ -38,6 +38,10 @@ async function renderReports() {
                 <span class="label">🧑‍🌾 Farmer Statement</span>
                 <span class="value" style="font-size:16px">With FAT/SNF →</span>
             </div>
+            <div class="summary-card card-info" style="cursor:pointer" onclick="exportDailyAccountExcel()">
+                <span class="label">📁 Export to Excel</span>
+                <span class="value" style="font-size:16px">Daily Account Pro →</span>
+            </div>
         </div>
 
         <div style="margin-top:20px">
@@ -1068,3 +1072,4 @@ window.exportPurchaseRegisterPDF = exportPurchaseRegisterPDF;
 window.viewDaybookEntry = viewDaybookEntry;
 window.deleteSaleFromRegister = deleteSaleFromRegister;
 window.deletePurchaseFromRegister = deletePurchaseFromRegister;
+window.exportDailyAccountExcel = exportDailyAccountExcel;

@@ -332,6 +332,27 @@ function runMigrations(db) {
         }
     }
 
+    // Migration 12: Add email column to parties table
+    try {
+        db.prepare("SELECT email FROM parties LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE parties ADD COLUMN email TEXT DEFAULT '';`);
+            console.log('Added email column to parties table');
+        } catch (e2) {
+            console.log('Migration 12 (parties email column) skipped:', e2.message);
+        }
+    }
+
+    // Migration 13: Ensure SMTP settings exist (for in-app email sending)
+    const smtpDefaults = [
+        ['smtp_host', ''], ['smtp_port', '587'], ['smtp_secure', '0'],
+        ['smtp_user', ''], ['smtp_pass', ''], ['smtp_from', ''], ['smtp_from_name', '']
+    ];
+    for (const [key, value] of smtpDefaults) {
+        db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

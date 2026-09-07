@@ -1,6 +1,6 @@
 {
   "name": "prarambha-account-stock",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "Prarambha Account & Stock Management (Desktop + Web)",
   "homepage": "https://github.com/alpeet/dairy-plant-accounts",
   "main": "main.js",
@@ -35,6 +35,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "import-excel.js",
+      "Dairy_Accounts_Professional.xlsx",
       "renderer/**/*",
       "database/schema.sql",
       "shared/**/*",
@@ -44,7 +46,9 @@
     "asar": true,
     "asarUnpack": [
       "shared/**/*",
-      "database/schema.sql"
+      "database/schema.sql",
+      "import-excel.js",
+      "Dairy_Accounts_Professional.xlsx"
     ],
     "compression": "maximum",
     "removePackageScripts": true,
@@ -53,13 +57,31 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.png",
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "verifyUpdateCodeSignature": false,
       "publisherName": "Prarambha"
+    },
+    "portable": {
+      "artifactName": "Prarambha-Accounts-Portable-${version}.exe",
+      "requestExecutionLevel": "user"
     },
     "nsis": {
       "oneClick": false,
@@ -86,7 +108,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "assets/icon.png",
@@ -129,11 +154,15 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.png",
@@ -166,6 +195,7 @@
     "better-sqlite3": "^12.11.1",
     "dotenv": "^16.6.1",
     "express": "^5.2.1",
+    "nodemailer": "^10.0.1",
     "xlsx": "^0.18.5"
   }
 }

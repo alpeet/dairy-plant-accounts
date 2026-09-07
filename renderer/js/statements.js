@@ -144,8 +144,12 @@ async function generateStatement() {
         <div style="margin-bottom:12px;padding:10px 14px;background:var(--bg);border-radius:6px;font-size:13px">
             <strong>${escapeHtml(data.party.name)}</strong> — ${data.party.type} 
             ${data.party.phone ? '| ' + escapeHtml(data.party.phone) : ''}
+            ${data.party.email ? '| ✉️ ' + escapeHtml(data.party.email) : ''}
             ${data.party.address ? '| ' + escapeHtml(data.party.address) : ''}
             <span style="float:right">Period: ${data.from_date} to ${data.to_date}</span>
+            <div style="margin-top:8px">
+                <button class="btn btn-primary btn-sm" onclick="showEmailDialog()">✉️ Email Statement</button>
+            </div>
         </div>
         <div class="table-container">
             <table>
@@ -206,12 +210,8 @@ function showSupplierStatements() {
 // ============================================================
 // Print Statement
 // ============================================================
-async function printStatement() {
-    const data = window._lastStatement;
-    if (!data) { showToast('Generate a statement first', 'warning'); return; }
-    const settings = await getSettingsCached();
-
-    const html = `
+function buildStatementHtml(data, settings) {
+    return `
         <div class="header">
             <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>${escapeHtml(data.party.name)} — Statement of Account</h2>
@@ -234,7 +234,89 @@ async function printStatement() {
         </table>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
-    printHTML(html);
+}
+
+async function printStatement() {
+    const data = window._lastStatement;
+    if (!data) { showToast('Generate a statement first', 'warning'); return; }
+    const settings = await getSettingsCached();
+    printHTML(buildStatementHtml(data, settings));
+}
+
+// ============================================================
+// Email Statement (recipient pre-filled from party email)
+// ============================================================
+async function showEmailDialog() {
+    const data = window._lastStatement;
+    if (!data) { showToast('Generate a statement first', 'warning'); return; }
+
+    const partyEmail = (data.party && data.party.email || '').trim();
+    if (!partyEmail) {
+        showToast(`No email address on file for ${data.party.name}. Add one in Parties → Edit.`, 'warning');
+        return;
+    }
+
+    const settings = await getSettingsCached();
+    const closingLabel = data.closing_balance >= 0 ? 'Dr' : 'Cr';
+
+    showModal(`
+        <div class="modal-header">
+            <h2>✉️ Email Statement — ${escapeHtml(data.party.name)}</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="emailForm">
+                <div class="form-group">
+                    <label>To (recipient)</label>
+                    <input type="email" class="form-control" name="to" value="${escapeHtml(partyEmail)}">
+                </div>
+                <div class="form-group">
+                    <label>Subject</label>
+                    <input type="text" class="form-control" name="subject" value="Statement of Account — ${escapeHtml(data.party.name)} (${data.from_date} to ${data.to_date})">
+                </div>
+                <div class="form-group">
+                    <label>Message</label>
+                    <textarea class="form-control" name="message" rows="5">Dear ${escapeHtml(data.party.name)},\n\nPlease find attached your statement of account for the period ${data.from_date} to ${data.to_date}.\n\nOpening Balance: ${formatCurrency(data.opening_balance)}\nTotal Debit: ${formatCurrency(data.total_debit)}\nTotal Credit: ${formatCurrency(data.total_credit)}\nClosing Balance: ${formatCurrency(data.closing_balance)} (${closingLabel})\n\nRegards,\n${escapeHtml(settings.business_name || '')}</textarea>
+                </div>
+                <p style="font-size:12px;color:var(--text-light)">The statement table will be included in the email body automatically.</p>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="sendStatementEmail()">📤 Send Email</button>
+        </div>
+    `);
+}
+
+async function sendStatementEmail() {
+    const data = window._lastStatement;
+    if (!data) return;
+
+    const form = document.getElementById('emailForm');
+    if (!form) return;
+    const formData = new FormData(form);
+    const to = (formData.get('to') || '').trim();
+    const subject = (formData.get('subject') || '').trim();
+    const message = (formData.get('message') || '').trim();
+
+    if (!to) { showToast('Recipient email is required', 'error'); return; }
+    if (!subject) { showToast('Subject is required', 'error'); return; }
+
+    const settings = await getSettingsCached();
+    const bodyHtml = `<p>${escapeHtml(message).replace(/\n/g, '<br>')}</p><hr>${buildStatementHtml(data, settings)}`;
+
+    // Show sending state
+    const sendBtn = document.querySelector('#modalContainer button.btn-primary');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '⏳ Sending...'; }
+
+    const result = await window.api.sendEmail({ to, subject, html: bodyHtml });
+    if (result && result.success) {
+        showToast(`✅ Email sent to ${to}`);
+        closeModal();
+    } else {
+        showToast(`Email failed: ${result?.error || 'Unknown error'}`, 'error');
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '📤 Send Email'; }
+    }
 }
 
 async function exportStatementPDF() {

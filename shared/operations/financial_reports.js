@@ -103,7 +103,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
                        totalPettyCash.total + totalSalary.total + totalVehicle.total
     };
 
-    const grossProfit = income.total_sales - expenses.milk_collection - expenses.purchases;
+    const grossProfit = income.total_sales - (expenses.milk_collection.total || 0) - (expenses.purchases.total || 0);
     const netProfit = income.total_income - expenses.total_expenses;
 
     return {

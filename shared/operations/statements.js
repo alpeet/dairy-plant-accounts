@@ -33,7 +33,7 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
         WHERE party_id = ? AND date < ?
     `).get(party_id, from);
 
-    const openingBalance = (openingEntry.total_credit || 0) - (openingEntry.total_debit || 0) + (party.opening_balance || 0);
+    const openingBalance = (party.opening_balance || 0) + (openingEntry.total_debit || 0) - (openingEntry.total_credit || 0);
 
     // Get entries for the period
     const entries = db.prepare(`
@@ -102,7 +102,7 @@ function listPartiesWithBalance(db, { type, as_of_date } = {}) {
             SELECT COALESCE(SUM(debit), 0) as debit, COALESCE(SUM(credit), 0) as credit
             FROM ledger_entries WHERE party_id = ? AND date <= ?
         `).get(party.id, asOf);
-        const balance = (party.opening_balance || 0) + (ledger.credit || 0) - (ledger.debit || 0);
+        const balance = (party.opening_balance || 0) + (ledger.debit || 0) - (ledger.credit || 0);
         return { ...party, balance };
     });
 }

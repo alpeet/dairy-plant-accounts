@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>Prarambha Account &amp; Stock Management - Login</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="shortcut icon" type="image/png" href="favicon.png">
+    <link rel="stylesheet" href="css/login.css?v=4">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <!-- Logo -->
+            <div class="login-logo">
+                <svg viewBox="0 0 1024 1024" width="64" height="64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <linearGradient id="pb-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22365e"/>
+      <stop offset="52%" stop-color="#16213e"/>
+      <stop offset="100%" stop-color="#0f3460"/>
+    </linearGradient>
+    <radialGradient id="pb-sheen" cx="0.5" cy="0.32" r="0.8">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="pb-sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd27a"/>
+      <stop offset="55%" stop-color="#f6a623"/>
+      <stop offset="100%" stop-color="#e67e22"/>
+    </linearGradient>
+    <linearGradient id="pb-bar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#1e8e4e"/>
+      <stop offset="100%" stop-color="#34d17b"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="976" height="976" rx="212" fill="url(#pb-bg)"/>
+  <rect x="24" y="24" width="976" height="976" rx="212" fill="url(#pb-sheen)"/>
+  <circle cx="512" cy="452" r="312" fill="url(#pb-sun)" opacity="0.09"/>
+  <circle cx="512" cy="452" r="222" fill="url(#pb-sun)" opacity="0.13"/>
+  <circle cx="512" cy="452" r="126" fill="url(#pb-sun)"/>
+  <circle cx="512" cy="420" r="54" fill="#ffe9b0" opacity="0.32"/>
+  <ellipse cx="512" cy="772" rx="330" ry="12" fill="#000000" opacity="0.25"/>
+  <g>
+    <rect x="223" y="582" width="150" height="158" rx="22" fill="url(#pb-bar)"/>
+    <rect x="437" y="498" width="150" height="242" rx="22" fill="url(#pb-bar)"/>
+    <rect x="651" y="414" width="150" height="326" rx="22" fill="url(#pb-bar)"/>
+    <rect x="205" y="740" width="614" height="14" rx="7" fill="#ffffff" opacity="0.16"/>
+  </g>
+</svg>
+            </div>
+
+            <h1 class="login-title" id="formTitle">Prarambha Account &amp; Stock Management</h1>
+            <p class="login-subtitle" id="formSubtitle">Account &amp; Stock Management System</p>
+
+            <!-- ========== FIRST-RUN SETUP VIEW ========== -->
+            <div id="setupView" style="display:none">
+                <div class="auth-info">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <span>Welcome! This is the first run. Create the administrator account to secure this installation.</span>
+                </div>
+                <form id="setupForm" class="login-form" autocomplete="off">
+                    <div class="form-group">
+                        <label for="setupUsername">Admin Username</label>
+                        <input type="text" id="setupUsername" class="form-control" placeholder="At least 3 characters" required minlength="3" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="setupPassword">Admin Password</label>
+                        <input type="password" id="setupPassword" class="form-control" placeholder="At least 4 characters" required minlength="4" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="setupConfirm">Confirm Password</label>
+                        <input type="password" id="setupConfirm" class="form-control" placeholder="Re-enter the password" required minlength="4" autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="login-btn" id="setupBtn">
+                        <span class="login-btn-text">🔒 Create Admin Account</span>
+                        <span class="login-btn-spinner" style="display:none">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round">
+                                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                                </circle>
+                            </svg>
+                        </span>
+                    </button>
+                    <div id="setupError" class="login-error" style="display:none"></div>
+                </form>
+            </div>
+
+            <!-- ========== LOGIN VIEW ========== -->
+            <div id="loginView" style="display:none">
+                <form id="loginForm" class="login-form" autocomplete="off">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" class="form-control" placeholder="Enter your username" required autofocus autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <div style="position:relative">
+                            <input type="password" id="password" class="form-control" placeholder="Enter your password" required autocomplete="current-password" style="padding-right:44px">
+                            <button type="button" id="togglePassword" class="password-toggle" title="Show password" aria-label="Show password">👁</button>
+                        </div>
+                    </div>
+                    <button type="submit" class="login-btn" id="loginBtn">
+                        <span class="login-btn-text">Sign In</span>
+                        <span class="login-btn-spinner" style="display:none">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10" stroke-dasharray="31.4 31.4" stroke-linecap="round">
+                                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                                </circle>
+                            </svg>
+                        </span>
+                    </button>
+                    <div id="loginError" class="login-error" style="display:none"></div>
+                </form>
+            </div>
+
+            <div class="login-footer">
+                <p>Prarambha Account &amp; Stock Management v1.1.0</p>
+                <p class="login-hint">🔒 Your data and backups are stored locally on this PC.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/login-electron.js?v=4"></script>
+</body>
+</html>

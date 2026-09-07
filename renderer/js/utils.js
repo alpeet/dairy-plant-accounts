@@ -307,21 +307,33 @@ async function printHTML(html) {
         } catch(e) {}
     }
 
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
-    if (!printWindow) {
-        showToast('Please allow pop-ups for printing', 'error');
-        return;
+    // Use hidden iframe for printing (avoids popup blocker)
+    let iframe = document.getElementById('print-iframe');
+    if (!iframe) {
+        iframe = document.createElement('iframe');
+        iframe.id = 'print-iframe';
+        iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;visibility:hidden;';
+        document.body.appendChild(iframe);
     }
-    printWindow.document.write('<html><head><title>Print</title>');
-    printWindow.document.write('<style>');
-    printWindow.document.write(PRINT_CSS);
-    printWindow.document.write(`@page { size: ${paperSize}; }`);
-    printWindow.document.write('</style></head><body>');
-    printWindow.document.write(html);
-    printWindow.document.write('</body></html>');
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => printWindow.print(), 500);
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    doc.open();
+    doc.write('<html><head><title>Print</title>');
+    doc.write('<style>');
+    doc.write(PRINT_CSS);
+    doc.write(`@page { size: ${paperSize}; }`);
+    doc.write('</style></head><body>');
+    doc.write(html);
+    doc.write('</body></html>');
+    doc.close();
+    // Wait for content to render, then trigger print
+    setTimeout(() => {
+        try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        } catch(e) {
+            showToast('Print failed. Please try again.', 'error');
+        }
+    }, 600);
 }
 
 // ============================================================

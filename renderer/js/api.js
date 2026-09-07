@@ -38,6 +38,18 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
             
             // Check for non-OK status
             if (!response.ok) {
+                // Forced password change: show the blocking change-password screen
+                if (response.status === 403) {
+                    try {
+                        const parsed = JSON.parse(text);
+                        if (parsed && parsed.code === 'PASSWORD_CHANGE_REQUIRED') {
+                            if (typeof window.forcePasswordChange === 'function') {
+                                window.forcePasswordChange();
+                            }
+                            return { success: false, error: parsed.error || 'You must change the default password first' };
+                        }
+                    } catch (e) { /* not JSON — fall through */ }
+                }
                 return { 
                     success: false, 
                     error: `Server error (${response.status}): ${response.statusText}` 
@@ -229,6 +241,9 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getSettings: () => apiPost('/settings/get'),
         saveSettings: (settings) => apiPost('/settings/save', settings),
 
+        // Email
+        sendEmail: (opts) => apiPost('/email/send', opts),
+
         // Backup
         backupDatabase: () => apiPost('/backup'),
         listBackups: () => apiPost('/backup/list'),
@@ -255,22 +270,32 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
                     } catch(e) {}
                 }
 
-                const printWindow = window.open('', '_blank', 'width=800,height=600');
-                if (!printWindow) {
-                    return { success: false, error: 'Popup blocked. Allow pop-ups for printing.' };
+                // Use hidden iframe for printing (avoids popup blocker)
+                let iframe = document.getElementById('print-iframe');
+                if (!iframe) {
+                    iframe = document.createElement('iframe');
+                    iframe.id = 'print-iframe';
+                    iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;visibility:hidden;';
+                    document.body.appendChild(iframe);
                 }
                 const css = window.PRINT_CSS || '';
-                printWindow.document.write('<html><head><title>Print</title>');
-                printWindow.document.write('<style>');
-                printWindow.document.write(css);
-                printWindow.document.write(`@page { size: ${paperSize}; }`);
-                printWindow.document.write('</style></head><body>');
-                printWindow.document.write(opts.html);
-                printWindow.document.write('</body></html>');
-                printWindow.document.close();
-                printWindow.focus();
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                doc.open();
+                doc.write('<html><head><title>Print</title>');
+                doc.write('<style>');
+                doc.write(css);
+                doc.write(`@page { size: ${paperSize}; }`);
+                doc.write('</style></head><body>');
+                doc.write(opts.html);
+                doc.write('</body></html>');
+                doc.close();
                 // Auto-open print dialog after a short delay
-                setTimeout(() => printWindow.print(), 500);
+                setTimeout(() => {
+                    try {
+                        iframe.contentWindow.focus();
+                        iframe.contentWindow.print();
+                    } catch(e) {}
+                }, 600);
                 return { success: true, path: 'printed' };
             }
             return { success: false, error: 'No HTML content' };

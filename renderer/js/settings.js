@@ -83,6 +83,50 @@ async function renderSettings() {
                             <option value="Letter" ${settings.paper_size === 'Letter' ? 'selected' : ''}>Letter (216 × 279 mm)</option>
                         </select>
                     </div>
+
+                    <div style="border-top:1px solid var(--border);margin:18px 0 12px;padding-top:14px">
+                        <h3 style="font-size:14px;margin:0 0 4px">📧 Email (SMTP) — for sending party statements</h3>
+                        <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                            Add your Gmail/Outlook/SMTP details here. Then use the ✉️ Email button on the Statements page to send statements to parties.
+                            Gmail example: host <code>smtp.gmail.com</code>, port <code>587</code>, and an App Password (not your normal password).
+                        </p>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group" style="flex:2">
+                            <label>SMTP Host</label>
+                            <input type="text" class="form-control" name="smtp_host" value="${escapeHtml(settings.smtp_host || '')}" placeholder="smtp.gmail.com">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label>Port</label>
+                            <input type="number" class="form-control" name="smtp_port" value="${escapeHtml(settings.smtp_port || '587')}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" name="smtp_secure" value="1" ${settings.smtp_secure === '1' ? 'checked' : ''}>
+                            Use Secure Connection (SSL/TLS — usually for port 465)
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>SMTP Username</label>
+                            <input type="text" class="form-control" name="smtp_user" value="${escapeHtml(settings.smtp_user || '')}" placeholder="you@gmail.com" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label>SMTP Password / App Password</label>
+                            <input type="password" class="form-control" name="smtp_pass" value="${escapeHtml(settings.smtp_pass || '')}" placeholder="••••••••" autocomplete="new-password">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>From Email (sender address)</label>
+                            <input type="email" class="form-control" name="smtp_from" value="${escapeHtml(settings.smtp_from || '')}" placeholder="${escapeHtml(settings.business_email || 'you@gmail.com')}">
+                        </div>
+                        <div class="form-group">
+                            <label>From Name</label>
+                            <input type="text" class="form-control" name="smtp_from_name" value="${escapeHtml(settings.smtp_from_name || settings.business_name || '')}" placeholder="${escapeHtml(settings.business_name || 'Your Business')}">
+                        </div>
+                    </div>
                 </form>
                 <div class="btn-group" style="margin-top:16px">
                     <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
@@ -136,6 +180,34 @@ async function renderSettings() {
 
         <div class="card" style="max-width:700px;margin-top:20px">
             <div class="card-header">
+                <h2>📥 Update Data from Excel (Dairy Account Pro)</h2>
+            </div>
+            <div style="padding:16px">
+                <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                    Upload the latest <strong>Dairy_Accounts_Professional.xlsx</strong> to bring fresh data into this app —
+                    new invoices, bills and collections are added, existing records are updated, and <strong>no duplicates are created</strong>.
+                    The file stays on your computer (desktop app) or is uploaded to this server (web app).
+                </p>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                    <div style="padding:16px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                        <div style="font-size:32px;margin-bottom:8px">➕</div>
+                        <h3 style="font-size:14px;margin:0 0 8px">Add / Update New Records</h3>
+                        <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">Adds new invoices/bills/payments and updates existing ones. Nothing is deleted.</p>
+                        <button class="btn btn-primary btn-sm" onclick="importExcelFromFile()">📥 Select Excel &amp; Update</button>
+                    </div>
+                    <div style="padding:16px;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+                        <div style="font-size:32px;margin-bottom:8px">♻️</div>
+                        <h3 style="font-size:14px;margin:0 0 8px">Replace ALL Data (Fresh)</h3>
+                        <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">Clears &amp; re-imports everything from the Excel. A safety backup is created first.</p>
+                        <button class="btn btn-danger btn-sm" onclick="importExcelFromFile('fresh')">♻️ Select Excel &amp; Replace All</button>
+                    </div>
+                </div>
+                <div id="excelImportResult" style="margin-top:14px;font-size:12px"></div>
+            </div>
+        </div>
+
+        <div class="card" style="max-width:700px;margin-top:20px">
+            <div class="card-header">
                 <h2>📂 CSV Import / Export</h2>
                 <button class="btn btn-secondary btn-sm" onclick="renderCSVSection()">🔄 Refresh</button>
             </div>
@@ -159,11 +231,11 @@ async function renderSettings() {
                 <h2>About</h2>
             </div>
             <div style="font-size:13px;color:var(--text-light);line-height:1.8">
-                <p><strong>Prarambha Account &amp; Stock Management</strong> v1.0.0</p>
+                <p><strong>Prarambha Account &amp; Stock Management</strong> v1.1.1</p>
                 <p>A professional accounting and stock management application (Desktop + Web).</p>
                 <p>Built with Electron + SQLite.</p>
                 <p style="margin-top:12px;font-size:12px">
-                    <strong>Stack:</strong> Electron 22, better-sqlite3, vanilla JS<br>
+                    <strong>Stack:</strong> Electron 33, better-sqlite3, vanilla JS<br>
                     <strong>Database:</strong> SQLite (local, offline) — 27 tables in 8 functional groups<br>
                     <strong>PDF:</strong> Electron built-in printToPDF
                 </p>
@@ -403,6 +475,7 @@ async function saveSettings() {
         settings[key] = value;
     }
     if (!settings.allow_negative_stock) settings.allow_negative_stock = '0';
+    if (!settings.smtp_secure) settings.smtp_secure = '0';
 
     const result = await window.api.saveSettings(settings);
     if (result.success) {
@@ -543,6 +616,19 @@ async function loadBackupHistory() {
 
 async function downloadBackup(filename) {
     try {
+        // Desktop (Electron): copy the backup to a user-chosen location
+        if (window.api && typeof window.api.downloadBackupFile === 'function') {
+            const result = await window.api.downloadBackupFile(filename);
+            if (result && result.success) {
+                showToast(`✅ Backup saved to: ${result.data.path}`, 'success');
+            } else if (result && result.canceled) {
+                // user cancelled — no message needed
+            } else {
+                showToast(`Download failed: ${result && result.error}`, 'error');
+            }
+            return;
+        }
+        // Web: download via the server
         const resp = await fetch('/api/backup/download', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -969,6 +1055,120 @@ function clearDBTables() {
     if (input) { input.value = ''; filterDBTables(); input.focus(); }
 }
 
+// ============================================================
+// Excel Data Update (Dairy Account Pro) — desktop + web
+// ============================================================
+
+/**
+ * Import data from a Dairy_Accounts_Professional.xlsx file.
+ * @param {'upsert'|'fresh'} [mode] — 'fresh' clears & re-imports everything
+ */
+async function importExcelFromFile(mode) {
+    if (mode === 'fresh') {
+        const confirmed = await confirmAction(
+            '⚠️ Replace ALL data from Excel?',
+            'All transactional data (sales, purchases, payments, ledger, stock) will be cleared and re-imported from the selected Excel file. A safety backup is created first.\n\nContinue?',
+            'Yes, Replace All',
+            'Cancel'
+        );
+        if (!confirmed) return;
+    }
+
+    const resultEl = document.getElementById('excelImportResult');
+    if (resultEl) {
+        resultEl.innerHTML = '<p style="color:var(--text-light)">⏳ Please wait — importing data from Excel...</p>';
+    }
+
+    // Desktop (Electron): the main process shows the file picker and imports
+    if (window.api && typeof window.api.importExcelFromFile === 'function') {
+        const result = await window.api.importExcelFromFile({ mode });
+        if (result && result.canceled) {
+            if (resultEl) resultEl.innerHTML = '';
+            return;
+        }
+        if (result && result.success) {
+            showImportSummary(result.data, resultEl);
+        } else {
+            if (resultEl) resultEl.innerHTML = `<p style="color:var(--danger)">Import failed: ${escapeHtml((result && result.error) || 'unknown error')}</p>`;
+        }
+        return;
+    }
+
+    // Web: pick a file and upload it as base64
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xlsm,.xls';
+    input.onchange = () => {
+        const file = input.files && input.files[0];
+        if (!file) {
+            if (resultEl) resultEl.innerHTML = '';
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = async () => {
+            const bytes = new Uint8Array(reader.result);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const fileBase64 = btoa(binary);
+            try {
+                const resp = await fetch('/api/excel/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileName: file.name, fileBase64, mode })
+                });
+                const json = await resp.json();
+                if (json && json.success) {
+                    showImportSummary(json.data, resultEl);
+                } else {
+                    if (resultEl) resultEl.innerHTML = `<p style="color:var(--danger)">Import failed: ${escapeHtml((json && json.error) || 'unknown error')}</p>`;
+                }
+            } catch (err) {
+                if (resultEl) resultEl.innerHTML = `<p style="color:var(--danger)">Import failed: ${escapeHtml(err.message)}</p>`;
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
+    input.click();
+}
+
+function showImportSummary(data, el) {
+    if (!el) return;
+    const r = (data && data.results) || {};
+    const mode = (data && data.mode) || 'upsert';
+    const sales = r.sales || {};
+    const purchases = r.purchases || {};
+    const collections = r.collections || {};
+    const ledger = r.ledger || {};
+    const parties = r.parties || {};
+    const products = r.products || {};
+    const counts = r.tableCounts || {};
+
+    const fmt = (n) => (n || 0).toLocaleString('en-IN');
+    const row = (label, value) => `<tr><td style="padding:4px 8px;color:var(--text-light)">${label}</td><td style="padding:4px 8px;text-align:right;font-weight:600">${value}</td></tr>`;
+
+    const ledgerInfo = mode === 'fresh'
+        ? row('Ledger entries imported', fmt(ledger.inserted))
+        : (ledger && ledger.inserted ? row('New ledger entries added', fmt(ledger.inserted)) : '');
+
+    el.innerHTML = `
+        <div style="padding:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;color:#166534">
+            <p style="font-weight:600;margin:0 0 8px">✅ Import completed — ${mode === 'fresh' ? 'Replace All (fresh import)' : 'Add / Update new records'}</p>
+            <table style="width:100%;font-size:12px;border-collapse:collapse">
+                ${row('Sales invoices added', fmt(sales.inserted))}
+                ${row('Sales invoices updated', fmt(sales.updated))}
+                ${row('Purchase bills added', fmt(purchases.inserted))}
+                ${row('Purchase bills updated', fmt(purchases.updated))}
+                ${row('Payments / collections added', fmt(collections.inserted))}
+                ${ledgerInfo}
+                ${row('Parties added / updated', `${fmt(parties.inserted)} / ${fmt(parties.updated)}`)}
+                ${row('Products added / updated', `${fmt(products.inserted)} / ${fmt(products.updated)}`)}
+                ${counts && counts.sales ? row('Total sales in database now', fmt(counts.sales)) : ''}
+            </table>
+            ${mode === 'fresh' ? '<p style="margin:8px 0 0;font-size:11px">💾 A safety backup was created before the import.</p>' : ''}
+        </div>
+    `;
+}
+
 // Globals
 window.saveSettings = saveSettings;
 window.backupDatabase = backupDatabase;
@@ -988,6 +1188,7 @@ window.toggleTableGroup = toggleTableGroup;
 window.renderDBTables = renderDBTables;
 window.filterDBTables = filterDBTables;
 window.clearDBTables = clearDBTables;
+window.importExcelFromFile = importExcelFromFile;
 
 // ============================================================
 // CSV Import / Export UI
@@ -996,6 +1197,30 @@ window.clearDBTables = clearDBTables;
 let _csvTables = [];
 let _csvImportResults = null;
 
+/**
+ * Route CSV data-exchange requests to the right backend:
+ *   - Desktop (Electron): window.api IPC handlers
+ *   - Web: fetch() to the server
+ */
+async function csvRequest(path, body) {
+    if (window.api && typeof window.api.getCSVTables === 'function') {
+        switch (path) {
+            case '/api/data-csv/tables': return window.api.getCSVTables();
+            case '/api/data-csv/sample': return window.api.getCSVSample(body && body.table);
+            case '/api/data-csv/export': return window.api.exportCSV(body && body.table);
+            case '/api/data-csv/import': return window.api.importCSV(body && body.table, body && body.csv);
+            case '/api/data-csv/export-all': return window.api.exportAllCSV();
+            default: return { success: false, error: 'Unknown CSV endpoint' };
+        }
+    }
+    const resp = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+    });
+    return resp.json();
+}
+
 async function renderCSVSection() {
     const container = document.getElementById('csvSection');
     if (!container) return;
@@ -1003,11 +1228,7 @@ async function renderCSVSection() {
     container.innerHTML = '<p style="color:var(--text-light);font-size:13px;padding:12px">Loading CSV tools...</p>';
 
     // Fetch all tables
-    const tablesResult = await fetch('/api/data-csv/tables', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}'
-    }).then(r => r.json());
+    const tablesResult = await csvRequest('/api/data-csv/tables', {});
 
     if (!tablesResult.success) {
         container.innerHTML = `<p style="color:var(--danger);font-size:13px">Error: ${escapeHtml(tablesResult.error)}</p>`;
@@ -1110,11 +1331,7 @@ function renderImportResults(results) {
 
 async function downloadSampleCSV(tableName) {
     try {
-        const result = await fetch('/api/data-csv/sample', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ table: tableName })
-        }).then(r => r.json());
+        const result = await csvRequest('/api/data-csv/sample', { table: tableName });
 
         if (!result.success) {
             showToast(`Error: ${result.error}`, 'error');
@@ -1139,11 +1356,7 @@ async function downloadSampleCSV(tableName) {
 
 async function exportTableCSV(tableName) {
     try {
-        const result = await fetch('/api/data-csv/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ table: tableName })
-        }).then(r => r.json());
+        const result = await csvRequest('/api/data-csv/export', { table: tableName });
 
         if (!result.success) {
             showToast(`Error: ${result.error}`, 'error');
@@ -1180,11 +1393,7 @@ async function importCSVFile(tableName, fileInput) {
         showToast(`⏳ Importing ${file.name}...`, 'info');
         
         try {
-            const result = await fetch('/api/data-csv/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ table: tableName, csv: csvContent })
-            }).then(r => r.json());
+            const result = await csvRequest('/api/data-csv/import', { table: tableName, csv: csvContent });
 
             // Store results for display
             _csvImportResults = result;
@@ -1213,11 +1422,7 @@ async function exportAllTablesCSV() {
     showToast('⏳ Exporting all tables...', 'info');
     
     try {
-        const result = await fetch('/api/data-csv/export-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}'
-        }).then(r => r.json());
+        const result = await csvRequest('/api/data-csv/export-all', {});
 
         if (!result.success || !result.data) {
             showToast(`Export failed: ${result.error || 'No data returned'}`, 'error');
@@ -1277,11 +1482,7 @@ async function downloadSingleCSV(filename, btnEl) {
         if (!csvData) {
             // Fallback: fetch from server
             const tableName = filename.replace(/\.csv$/, '');
-            const result = await fetch('/api/data-csv/export', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ table: tableName })
-            }).then(r => r.json());
+            const result = await csvRequest('/api/data-csv/export', { table: tableName });
 
             if (!result.success || !result.data) {
                 showToast(`Download failed: ${result.error || 'No data'}`, 'error');
