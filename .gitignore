@@ -36,3 +36,7 @@ out/
 # Logs
 *.log
 /tmp/
+
+# Local audit artifacts (do not ship)
+data/*.bak-*
+Prarambha-Handover-*.zip

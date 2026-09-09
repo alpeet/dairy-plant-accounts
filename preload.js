@@ -82,6 +82,16 @@ contextBridge.exposeInMainWorld('api', {
     deletePettyCash: (id) => ipcRenderer.invoke('db:petty-cash:delete', id),
     getPettyCashSummary: (opts) => ipcRenderer.invoke('db:petty-cash:summary', opts),
 
+    // Bank Transactions
+    getBankList: (opts) => ipcRenderer.invoke('db:bank:list', opts),
+    getBankTransaction: (id) => ipcRenderer.invoke('db:bank:get', id),
+    saveBankTransaction: (data) => ipcRenderer.invoke('db:bank:save', data),
+    deleteBankTransaction: (id) => ipcRenderer.invoke('db:bank:delete', id),
+    getBankReviewQueue: () => ipcRenderer.invoke('db:bank:review-queue'),
+    getBankStatement: (opts) => ipcRenderer.invoke('db:bank:statement', opts),
+    matchBankTransaction: (data) => ipcRenderer.invoke('db:bank:match', data),
+    postBankToLedger: (id) => ipcRenderer.invoke('db:bank:post', id),
+
     // Salary
     getSalaryList: (opts) => ipcRenderer.invoke('db:salary:list', opts),
     getSalaryRecord: (id) => ipcRenderer.invoke('db:salary:get', id),

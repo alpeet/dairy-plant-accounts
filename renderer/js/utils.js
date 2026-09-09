@@ -285,6 +285,20 @@ const PRINT_CSS = `
 // Make it accessible via window for other modules (e.g. api.js printToPDF)
 window.PRINT_CSS = PRINT_CSS;
 
+/**
+ * Move <tfoot> totals rows into the end of the preceding <tbody>.
+ * Browsers repeat <tfoot> on EVERY printed page, which makes the total
+ * look like a per-page running sum. Moving the row into <tbody> makes it
+ * print exactly once — on the final page, after the last transaction.
+ * Applied centrally to all print/PDF output (statements, reports, invoices).
+ */
+function moveTotalsIntoBody(html) {
+    if (!html || typeof html !== 'string') return html;
+    return html.replace(/<tbody>([\s\S]*?)<\/tbody>\s*<tfoot>([\s\S]*?)<\/tfoot>/gi,
+        (m, body, foot) => '<tbody>' + body + foot.replace(/<tr/gi, '<tr class="total-row"') + '</tbody>');
+}
+window.moveTotalsIntoBody = moveTotalsIntoBody;
+
 // ============================================================
 // Print helper - opens print dialog for a given HTML template
 // ============================================================
@@ -317,6 +331,7 @@ async function printHTML(html) {
     }
     const doc = iframe.contentDocument || iframe.contentWindow.document;
     doc.open();
+    html = moveTotalsIntoBody(html);
     doc.write('<html><head><title>Print</title>');
     doc.write('<style>');
     doc.write(PRINT_CSS);

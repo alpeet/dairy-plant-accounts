@@ -97,6 +97,13 @@ const { listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffecti
 const { listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes } = require('./production');
 const { listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance } = require('./partners');
 
+// ── Bank Transactions ──
+const {
+    ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
+    getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
+    postBankToLedger, importBankRows, findPartyByName, normalizeName
+} = require('./bank');
+
 module.exports = {
     // Dashboard
     getDashboard,
@@ -194,4 +201,9 @@ module.exports = {
 
     // Partner Capital
     listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance,
+
+    // Bank Transactions
+    ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
+    getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
+    postBankToLedger, importBankRows, findPartyByName, normalizeName,
 };

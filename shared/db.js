@@ -344,6 +344,109 @@ function runMigrations(db) {
         }
     }
 
+    // Migration 14: Add archived column to parties (soft-delete / duplicate archive)
+    try {
+        db.prepare("SELECT archived FROM parties LIMIT 1").get();
+    } catch (e) {
+        try {
+            db.exec(`ALTER TABLE parties ADD COLUMN archived INTEGER DEFAULT 0;`);
+            console.log('Added archived column to parties table');
+        } catch (e2) {
+            console.log('Migration 14 (parties archived column) skipped:', e2.message);
+        }
+    }
+
+    // Migration 15: Add 'advance' to payments type CHECK constraint
+    db.pragma('foreign_keys = OFF');
+    try {
+        db.prepare("INSERT INTO payments (party_id, date, type, amount) VALUES (1, '2000-01-01', 'advance', 0)").run();
+        db.prepare("DELETE FROM payments WHERE date = '2000-01-01' AND type = 'advance' AND amount = 0").run();
+    } catch (e) {
+        db.prepare("DELETE FROM payments WHERE date = '2000-01-01' AND amount = 0 AND type = 'advance'").run();
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS payments_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                party_id INTEGER NOT NULL,
+                date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+                type TEXT NOT NULL CHECK(type IN ('receipt', 'payment', 'advance')),
+                amount REAL NOT NULL DEFAULT 0.0,
+                mode TEXT DEFAULT 'cash' CHECK(mode IN ('cash', 'bank', 'upi', 'cheque')),
+                reference_type TEXT DEFAULT '',
+                reference_id INTEGER DEFAULT NULL,
+                notes TEXT DEFAULT '',
+                created_by INTEGER DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (party_id) REFERENCES parties(id),
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            );
+            INSERT INTO payments_new SELECT * FROM payments;
+            DROP TABLE payments;
+            ALTER TABLE payments_new RENAME TO payments;
+        `);
+        console.log('Migrated payments table to include advance type');
+    }
+    db.pragma('foreign_keys = ON');
+
+    // Migration 16: Add 'advance' to ledger_entries reference_type CHECK constraint
+    db.pragma('foreign_keys = OFF');
+    try {
+        db.prepare("INSERT INTO ledger_entries (party_id, date, reference_type, description, debit, credit, balance) VALUES (1, '2000-01-01', 'advance', 'migration test', 0, 0, 0)").run();
+        db.prepare("DELETE FROM ledger_entries WHERE date = '2000-01-01' AND description = 'migration test' AND reference_type = 'advance'").run();
+    } catch (e) {
+        db.prepare("DELETE FROM ledger_entries WHERE date = '2000-01-01' AND description = 'migration test'").run();
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS ledger_entries_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                party_id INTEGER NOT NULL,
+                date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+                reference_type TEXT NOT NULL CHECK(reference_type IN ('sale', 'purchase', 'payment_received', 'payment_made', 'opening', 'adjustment', 'milk_collection', 'production', 'partner_contribution', 'partner_withdrawal', 'advance')),
+                reference_id INTEGER DEFAULT NULL,
+                description TEXT DEFAULT '',
+                debit REAL DEFAULT 0.0,
+                credit REAL DEFAULT 0.0,
+                balance REAL DEFAULT 0.0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (party_id) REFERENCES parties(id) ON DELETE CASCADE
+            );
+            INSERT INTO ledger_entries_new SELECT * FROM ledger_entries;
+            DROP TABLE ledger_entries;
+            ALTER TABLE ledger_entries_new RENAME TO ledger_entries;
+            CREATE INDEX IF NOT EXISTS idx_ledger_entries_party ON ledger_entries(party_id);
+            CREATE INDEX IF NOT EXISTS idx_ledger_entries_date ON ledger_entries(date);
+        `);
+        console.log('Migrated ledger_entries table to include advance reference type');
+    }
+    db.pragma('foreign_keys = ON');
+
+    // Migration 17: Ensure bank_transactions table exists (for existing DBs)
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS bank_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+            reference_no TEXT DEFAULT '',
+            counterparty_name TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            debit REAL DEFAULT 0.0,
+            credit REAL DEFAULT 0.0,
+            amount REAL DEFAULT 0.0,
+            payment_mode TEXT DEFAULT 'QR/Bank',
+            bank_account TEXT DEFAULT '',
+            txn_type TEXT DEFAULT '',
+            party_id INTEGER DEFAULT NULL,
+            match_status TEXT DEFAULT 'none' CHECK(match_status IN ('auto', 'review', 'unmatched', 'none')),
+            ledger_posted INTEGER DEFAULT 0,
+            ledger_entry_id INTEGER DEFAULT NULL,
+            remarks TEXT DEFAULT '',
+            created_by INTEGER DEFAULT NULL,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (party_id) REFERENCES parties(id),
+            FOREIGN KEY (created_by) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
+        CREATE INDEX IF NOT EXISTS idx_bank_transactions_party ON bank_transactions(party_id);
+    `);
+
     // Migration 13: Ensure SMTP settings exist (for in-app email sending)
     const smtpDefaults = [
         ['smtp_host', ''], ['smtp_port', '587'], ['smtp_secure', '0'],

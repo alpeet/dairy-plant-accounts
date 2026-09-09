@@ -116,7 +116,69 @@ Both print a summary of what was imported and create a safety backup first.
 
 ---
 
-## 4. The better-sqlite3 rebuild gotcha (important)
+## 4. Bank Transactions, advances & migrated historical data
+
+### 🏦 Bank Transactions (new tab)
+
+A **Bank Transactions** tab now exists under Cash & Finance, separate from cash and petty
+cash. It mirrors the workbook's **BANK RECON** sheet and tracks the Sushil QR / bank
+account:
+
+- **52 bank transactions** imported (all rows up to 2083/05/18; reference-number duplicates
+  within the sheet were skipped). Running balance, per-account statement, and search
+  included.
+- **Auto-matching:** bank rows whose counterparty matches a party **exactly** are marked
+  auto-matched. Because the account ledger already contains those postings (via the
+  workbook's Party Ledger), they are marked "already reflected" — **no double-posting**.
+- **Needs Review queue:** near/unmatched rows (currently 1: MINA LAMICHHANE) wait in the
+  queue for a human to assign a party and post. Nothing is posted blind.
+- New bank transactions entered in the app post to the matched party's ledger
+  automatically (idempotent — never twice).
+- Deposits are just bank transactions with type "Bank Deposit (own)" — the Bank tab is the
+  primary record, the Cash Deposit tab remains for physical cash deposits.
+
+### 💸 Advances
+
+Payments and ledger entries now support an **`advance`** type (salary advances, advances
+paid to parties). The Salary Advance sheet (24 rows) and PETTY CASH advances were checked
+against the ledger — they were **already reflected** in the Party Ledger, so nothing was
+re-posted (balances stay exactly in sync with the workbook). New advances entered in the
+app use the new type and appear in party statements as receivable.
+
+### 📊 Other migrated sheets
+
+| Sheet | Imported into | Rows | Notes |
+|---|---|---|---|
+| BANK RECON | `bank_transactions` | 52 | exact-match auto-post, review queue for the rest |
+| Cash_Demon | Cash & Denom | 79 dates | counted cash vs app-expected **differences flagged**, not overwritten |
+| PETTY CASH | Petty Cash | 100 | 61 payments + 39 advance/register rows; Collection-type rows skipped (already in payments) |
+| Collection (missing rows) | Payments + ledger | 8 | "KALIKA CANTEEN A" receipts (₹21,675) matched to A KALIKA CANTEEN — an intentional correction the workbook itself didn't apply |
+
+Balances were re-verified against the workbook's Receivable/Payable sheet: **55 of 58
+parties match exactly**; 2 pre-existing workbook quirks (J AND J SISTERS, MINA LAMICHHANE)
+and the intentional KALIKA correction are documented in the migration report. A duplicate
+party (PARSURAM THARU -333, id 321) was soft-archived and merged into id 333.
+
+Migration scripts live in `scripts/audit/` (all idempotent — safe to re-run):
+`merge-duplicate-parties.js`, `import-bank.js`, `import-cash-demon.js`,
+`import-petty-cash.js`, `import-advances.js`, `import-collections-fix.js`,
+`verify-vs-excel.js`.
+
+---
+
+## 5. Printing, PDF & statement totals
+
+- **Totals now print once** (on the final page) instead of repeating on every page.
+  Statements and all report templates had their totals row moved from the page-repeating
+  `<tfoot>` into the table body; this applies to print and PDF output everywhere.
+- **PDF export fixed.** The desktop PDF button was crashing with
+  `margins must be less than or equal to pageSize` because the margins were passed in
+  inches (10"). Margins are now 0.4" and controlled by the page CSS. Verified on a short
+  statement, a 4-page statement, and a Devanagari-containing statement.
+
+---
+
+## 6. The better-sqlite3 rebuild gotcha (important)
 
 The app uses the native module `better-sqlite3`, which is compiled for a specific Node or
 Electron version. **Building the desktop DMG recompiles it for Electron**, which breaks web
@@ -148,7 +210,7 @@ Electron packaging and web mode — an end-user install of the DMG is unaffected
 
 ---
 
-## 6. Known notes & limitations
+## 7. Known notes & limitations
 
 - **Email (SMTP):** Statements can be emailed via **Settings → Email (SMTP)**, but the
   customer must enter their SMTP host/port/user/password (e.g., Gmail App Password) first.
@@ -173,3 +235,5 @@ Electron packaging and web mode — an end-user install of the DMG is unaffected
 | Web mode broken after DMG build | `npm rebuild better-sqlite3` |
 | Desktop broken after web mode | `npm run rebuild` |
 | Verify install | `npm run verify` |
+| Import BANK RECON sheet | `node scripts/audit/import-bank.js` |
+| Verify balances vs Excel | `node scripts/audit/verify-vs-excel.js` |

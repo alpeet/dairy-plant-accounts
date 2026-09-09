@@ -830,6 +830,39 @@ authHandle('db:petty-cash:summary', async (event, params = {}) => {
     return safeRun(() => ops.getPettyCashSummary(db, params));
 });
 
+// --- Bank Transactions ---
+authHandle('db:bank:list', async (event, params = {}) => {
+    return safeRun(() => ops.listBankTransactions(db, params));
+});
+
+authHandle('db:bank:get', async (event, id) => {
+    return safeRun(() => ops.getBankTransaction(db, id));
+});
+
+authHandle('db:bank:save', async (event, data) => {
+    return safeRun(() => ops.saveBankTransaction(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:bank:delete', async (event, id) => {
+    return safeRun(() => ops.deleteBankTransaction(db, id));
+});
+
+authHandle('db:bank:review-queue', async () => {
+    return safeRun(() => ops.getBankReviewQueue(db));
+});
+
+authHandle('db:bank:statement', async (event, params = {}) => {
+    return safeRun(() => ops.getBankStatement(db, params));
+});
+
+authHandle('db:bank:match', async (event, data) => {
+    return safeRun(() => ops.setBankMatch(db, data.id, data));
+});
+
+authHandle('db:bank:post', async (event, id) => {
+    return safeRun(() => ops.postBankToLedger(db, id));
+});
+
 // --- Salary ---
 authHandle('db:salary:list', async (event, params = {}) => {
     return safeRun(() => ops.listSalaryRecords(db, params));
@@ -1179,6 +1212,13 @@ authHandle('print:pdf', async (event, { html, landscape, pageSize } = {}) => {
             } catch(e) {}
         }
 
+        // Move <tfoot> totals into <tbody> so the total prints only on the final page
+        // (browsers otherwise repeat <tfoot> on every printed page).
+        html = String(html || '').replace(
+            /<tbody>([\s\S]*?)<\/tbody>\s*<tfoot>([\s\S]*?)<\/tfoot>/gi,
+            (m, body, foot) => '<tbody>' + body + foot.replace(/<tr/gi, '<tr class="total-row"') + '</tbody>'
+        );
+
         const printWindow = new BrowserWindow({
             width: 800,
             height: 600,
@@ -1216,7 +1256,10 @@ authHandle('print:pdf', async (event, { html, landscape, pageSize } = {}) => {
             printBackground: true,
             landscape: landscape || false,
             pageSize: paperSize,
-            margins: { top: 10, bottom: 10, left: 10, right: 10 }
+            // NOTE: Electron printToPDF margins are in INCHES. Values like 10
+            // previously produced a nearly-blank PDF (10" margins). The page
+            // margins are now controlled by the @page rule in print.css.
+            margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 }
         });
 
         // Show save dialog

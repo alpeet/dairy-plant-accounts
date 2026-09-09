@@ -101,7 +101,7 @@
       "unicode": true,
       "warningsAsErrors": false,
       "runAfterFinish": true,
-      "menuCategory": true,
+      "menuCategory": false,
       "differentialPackage": true
     },
     "mac": {
@@ -184,7 +184,7 @@
   "engines": {
     "node": "20.x"
   },
-  "author": "",
+  "author": "Prarambha",
   "license": "MIT",
   "devDependencies": {
     "electron": "^33.4.11",

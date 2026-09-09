@@ -1118,6 +1118,41 @@ app.post('/api/petty-cash/summary', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Bank Transactions
+// ──────────────────────────────────────────────────────────────
+app.post('/api/bank/list', (req, res) => {
+    res.json(safeRun(() => ops.listBankTransactions(db, req.body || {})));
+});
+
+app.post('/api/bank/get', (req, res) => {
+    res.json(safeRun(() => ops.getBankTransaction(db, req.body.id)));
+});
+
+app.post('/api/bank/save', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveBankTransaction(db, req.body, req.user?.id)));
+});
+
+app.post('/api/bank/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteBankTransaction(db, req.body.id)));
+});
+
+app.post('/api/bank/review-queue', (req, res) => {
+    res.json(safeRun(() => ops.getBankReviewQueue(db)));
+});
+
+app.post('/api/bank/statement', (req, res) => {
+    res.json(safeRun(() => ops.getBankStatement(db, req.body || {})));
+});
+
+app.post('/api/bank/match', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.setBankMatch(db, req.body.id, req.body)));
+});
+
+app.post('/api/bank/post', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.postBankToLedger(db, req.body.id)));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Salary Records
 // ──────────────────────────────────────────────────────────────
 app.post('/api/salary/list', (req, res) => {

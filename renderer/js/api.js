@@ -163,6 +163,16 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         deletePettyCash: (id) => apiPost('/petty-cash/delete', { id }),
         getPettyCashSummary: (opts) => apiPost('/petty-cash/summary', opts || {}),
 
+        // Bank Transactions
+        getBankList: (opts) => apiPost('/bank/list', opts || {}),
+        getBankTransaction: (id) => apiPost('/bank/get', { id }),
+        saveBankTransaction: (data) => apiPost('/bank/save', data),
+        deleteBankTransaction: (id) => apiPost('/bank/delete', { id }),
+        getBankReviewQueue: () => apiPost('/bank/review-queue'),
+        getBankStatement: (opts) => apiPost('/bank/statement', opts || {}),
+        matchBankTransaction: (data) => apiPost('/bank/match', data),
+        postBankToLedger: (id) => apiPost('/bank/post', { id }),
+
         // Salary
         getSalaryList: (opts) => apiPost('/salary/list', opts || {}),
         getSalaryRecord: (id) => apiPost('/salary/get', { id }),
@@ -270,9 +280,13 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
                     } catch(e) {}
                 }
 
-                // Use hidden iframe for printing (avoids popup blocker)
-                let iframe = document.getElementById('print-iframe');
-                if (!iframe) {
+            // Move tfoot totals into tbody so they print only on the final page
+            if (typeof window.moveTotalsIntoBody === 'function') {
+                opts.html = window.moveTotalsIntoBody(opts.html);
+            }
+            // Use hidden iframe for printing (avoids popup blocker)
+            let iframe = document.getElementById('print-iframe');
+            if (!iframe) {
                     iframe = document.createElement('iframe');
                     iframe.id = 'print-iframe';
                     iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;visibility:hidden;';

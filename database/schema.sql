@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS parties (
     profit_share_percent REAL DEFAULT 0.0,
     partner_type TEXT DEFAULT '' CHECK(partner_type IN ('', 'active', 'silent')),
     notes TEXT DEFAULT '',
+    archived INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (route_id) REFERENCES routes(id)
@@ -226,7 +227,7 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     party_id INTEGER NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
-    reference_type TEXT NOT NULL CHECK(reference_type IN ('sale', 'purchase', 'payment_received', 'payment_made', 'opening', 'adjustment', 'milk_collection', 'production', 'partner_contribution', 'partner_withdrawal')),
+    reference_type TEXT NOT NULL CHECK(reference_type IN ('sale', 'purchase', 'payment_received', 'payment_made', 'opening', 'adjustment', 'milk_collection', 'production', 'partner_contribution', 'partner_withdrawal', 'advance')),
     reference_id INTEGER DEFAULT NULL,
     description TEXT DEFAULT '',
     debit REAL DEFAULT 0.0,
@@ -277,7 +278,7 @@ CREATE TABLE IF NOT EXISTS payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     party_id INTEGER NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
-    type TEXT NOT NULL CHECK(type IN ('receipt', 'payment')),
+    type TEXT NOT NULL CHECK(type IN ('receipt', 'payment', 'advance')),
     amount REAL NOT NULL DEFAULT 0.0,
     mode TEXT DEFAULT 'cash' CHECK(mode IN ('cash', 'bank', 'upi', 'cheque')),
     reference_type TEXT DEFAULT '',
@@ -288,6 +289,35 @@ CREATE TABLE IF NOT EXISTS payments (
     FOREIGN KEY (party_id) REFERENCES parties(id),
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
+
+-- ============================================================
+-- BANK TRANSACTIONS (separate from cash / petty cash)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS bank_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    reference_no TEXT DEFAULT '',
+    counterparty_name TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    debit REAL DEFAULT 0.0,
+    credit REAL DEFAULT 0.0,
+    amount REAL DEFAULT 0.0,
+    payment_mode TEXT DEFAULT 'QR/Bank',
+    bank_account TEXT DEFAULT '',
+    txn_type TEXT DEFAULT '',
+    party_id INTEGER DEFAULT NULL,
+    match_status TEXT DEFAULT 'none' CHECK(match_status IN ('auto', 'review', 'unmatched', 'none')),
+    ledger_posted INTEGER DEFAULT 0,
+    ledger_entry_id INTEGER DEFAULT NULL,
+    remarks TEXT DEFAULT '',
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (party_id) REFERENCES parties(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_party ON bank_transactions(party_id);
 
 -- ============================================================
 -- PRODUCTION BATCHES (processing: raw milk → products)

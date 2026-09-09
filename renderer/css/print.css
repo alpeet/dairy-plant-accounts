@@ -191,6 +191,15 @@ tfoot td {
     print-color-adjust: exact;
 }
 
+/* Totals row moved into tbody so it prints once, on the final page */
+tr.total-row td {
+    background: #e8edf2 !important;
+    font-weight: 600;
+    border-top: 2px solid #bbb;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+
 /* ============================================================
    Summary Section (totals, subtotals, etc.)
    ============================================================ */

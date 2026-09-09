@@ -94,6 +94,7 @@ npm run start:electron
 | **Stock / Inventory** | ✅ | ✅ | Product master, current stock, stock movements, adjustments, print, PDF |
 | **Milk Collection** | ✅ | ✅ | Farmer milk intake tracking with fat/SNF, quality parameters, auto-ledger |
 | **Party / Ledger** | ✅ | ✅ | Customer/supplier management, full financial ledger with running balance |
+| **Bank Transactions** | ✅ | ✅ | Bank/QR account register with running balance, auto-matching to party ledger, needs-review queue |
 | **Farmer Payments** | ✅ | ✅ | Bulk payment settlement for milk collections, batch processing |
 | **Reports** | ✅ | ✅ | Sales, purchases, day book, outstanding receivables/payables, print, PDF |
 | **Settings** | ✅ | ✅ | Business info, currency, paper size, database backup |
@@ -105,6 +106,7 @@ Both modes support professional print and PDF export:
 - **Desktop:** Uses Electron's built-in `webContents.printToPDF()` for native PDF generation
 - **Web:** Uses `window.open()` + `window.print()` with "Save as PDF" option
 - **Shared templates:** All print layouts use the same `PRINT_CSS` from `renderer/js/utils.js`
+- **Totals print once:** totals rows are moved out of the page-repeating `<tfoot>` so they appear only on the final page
 - **Professional design:** Business header, company details, itemized tables, totals, signatures, page numbers
 
 ---
