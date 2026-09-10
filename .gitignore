@@ -39,4 +39,11 @@ out/
 
 # Local audit artifacts (do not ship)
 data/*.bak-*
+data/Daily_Account_Professional_Export.xlsx
 Prarambha-Handover-*.zip
+
+# Local-only working copies & snapshots
+audit-backup/
+backup/
+data-backup-original/
+.freebuff/

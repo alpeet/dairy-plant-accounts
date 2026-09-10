@@ -198,8 +198,17 @@ function deleteMilkCollection(db, id, changedBy = null) {
 /**
  * Get milk collection summary/dashboard data for a given date (default today).
  */
+
+// Exact AD → BS conversion (stored dates are BS dates)
+const { adToBS } = require('../excel-import');
+
 function getMilkSummary(db, { date } = {}) {
-    const today = date || new Date().toISOString().split('T')[0];
+    const adToday = new Date().toISOString().split('T')[0];
+    const today = date || adToBS(adToday) || adToday;
+    const bsMonthPrefix = today.slice(0, 7);
+    // "Last 7 days" boundary: convert the AD date 7 days ago to BS (exact)
+    const weekAgoAD = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    const weekAgoBS = adToBS(weekAgoAD) || weekAgoAD;
 
     const todayTotal = db.prepare(
         "SELECT COALESCE(SUM(quantity_liters), 0) as total_liters, COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as collection_count FROM milk_collections WHERE date = ?"
@@ -213,17 +222,19 @@ function getMilkSummary(db, { date } = {}) {
         "SELECT shift, COALESCE(SUM(quantity_liters), 0) as liters, COALESCE(SUM(amount), 0) as amount FROM milk_collections WHERE date = ? GROUP BY shift"
     ).all(today);
 
+    // BS-month prefix comparison (strftime() returns NULL for valid BS dates
+    // like 2083-03-32, so string slicing is used instead)
     const weeklyTotal = db.prepare(
-        "SELECT COALESCE(SUM(quantity_liters), 0) as liters, COALESCE(SUM(amount), 0) as amount FROM milk_collections WHERE date >= date('now', '-7 days')"
-    ).get();
+        "SELECT COALESCE(SUM(quantity_liters), 0) as liters, COALESCE(SUM(amount), 0) as amount FROM milk_collections WHERE date >= ?"
+    ).get(weekAgoBS);
 
     const monthlyTotal = db.prepare(
-        "SELECT COALESCE(SUM(quantity_liters), 0) as liters, COALESCE(SUM(amount), 0) as amount FROM milk_collections WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now')"
-    ).get();
+        "SELECT COALESCE(SUM(quantity_liters), 0) as liters, COALESCE(SUM(amount), 0) as amount FROM milk_collections WHERE substr(date, 1, 7) = ?"
+    ).get(bsMonthPrefix);
 
     const topFarmers = db.prepare(
-        "SELECT p.name, COALESCE(SUM(mc.quantity_liters), 0) as liters, COALESCE(SUM(mc.amount), 0) as amount FROM milk_collections mc JOIN parties p ON mc.party_id = p.id WHERE strftime('%Y-%m', mc.date) = strftime('%Y-%m', 'now') GROUP BY mc.party_id, p.name ORDER BY liters DESC LIMIT 5"
-    ).all();
+        "SELECT p.name, COALESCE(SUM(mc.quantity_liters), 0) as liters, COALESCE(SUM(mc.amount), 0) as amount FROM milk_collections mc JOIN parties p ON mc.party_id = p.id WHERE substr(mc.date, 1, 7) = ? GROUP BY mc.party_id, p.name ORDER BY liters DESC LIMIT 5"
+    ).all(bsMonthPrefix);
 
     const pendingDue = db.prepare(
         "SELECT COALESCE(SUM(amount), 0) as total FROM milk_collections WHERE status IN ('pending', 'processed')"

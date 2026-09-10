@@ -74,7 +74,7 @@
           ]
         }
       ],
-      "icon": "assets/icon.png",
+      "icon": "assets/icon.ico",
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "verifyUpdateCodeSignature": false,
       "publisherName": "Prarambha"
@@ -91,9 +91,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Prarambha Accounts",
-      "installerIcon": "assets/icon.png",
-      "uninstallerIcon": "assets/icon.png",
-      "installerHeaderIcon": "assets/icon.png",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
       "installerSidebar": null,
       "uninstallDisplayName": "Prarambha Account & Stock Management ${version}",
       "license": null,

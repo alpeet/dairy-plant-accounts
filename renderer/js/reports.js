@@ -1072,4 +1072,46 @@ window.exportPurchaseRegisterPDF = exportPurchaseRegisterPDF;
 window.viewDaybookEntry = viewDaybookEntry;
 window.deleteSaleFromRegister = deleteSaleFromRegister;
 window.deletePurchaseFromRegister = deletePurchaseFromRegister;
+
+/**
+ * Export the database to a Daily Account Pro Excel workbook.
+ * Electron: main process saves via dialog. Web: downloads the generated file.
+ */
+async function exportDailyAccountExcel() {
+    try {
+        if (window.api && typeof window.api.exportDailyAccount === 'function') {
+            // Electron desktop mode — main process shows the save dialog
+            const result = await window.api.exportDailyAccount();
+            if (result && result.success) {
+                alert('✅ Daily Account Pro export saved:\n' + (result.filePath || ''));
+            } else if (result && !result.cancelled) {
+                alert('⚠️ Export failed: ' + ((result && result.error) || 'unknown error'));
+            }
+            return;
+        }
+        // Web mode — POST and download the response as a file
+        const headers = { 'Content-Type': 'application/json' };
+        try {
+            const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+        } catch (e) { /* storage unavailable */ }
+        const res = await fetch('/api/export/daily-account', { method: 'POST', headers, body: '{}', credentials: 'include' });
+        if (!res.ok) {
+            alert('⚠️ Export failed (HTTP ' + res.status + ')');
+            return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Daily_Account_Professional_Export.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        console.error('Daily Account export failed:', err);
+        alert('⚠️ Export failed: ' + err.message);
+    }
+}
 window.exportDailyAccountExcel = exportDailyAccountExcel;

@@ -5,13 +5,19 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+// Exact AD → BS conversion (the whole ledger uses BS dates)
+const { adToBS } = require('../excel-import');
+
 /**
  * Get all dashboard summary data.
  * @param {object} db - better-sqlite3 database instance
  * @returns {object} Dashboard data (todaySales, todayPurchases, receivables, etc.)
  */
 function getDashboard(db) {
-    const today = new Date().toISOString().split('T')[0];
+    // All stored dates are BS (Bikram Sambat) — "today" must be BS too,
+    // otherwise the Today panels always compare against the wrong day.
+    const today = adToBS(new Date().toISOString().split('T')[0])
+        || new Date().toISOString().split('T')[0];
 
     const todaySales = db.prepare(
         "SELECT COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(paid_amount), 0) as paid FROM sales WHERE date = ?"
@@ -82,13 +88,16 @@ function getDashboard(db) {
         "SELECT p.id, p.bill_no as ref_no, p.date, p.grand_total, p.status, pa.name as party_name, 'purchase' as type FROM purchases p LEFT JOIN parties pa ON p.party_id = pa.id ORDER BY p.created_at DESC LIMIT 5"
     ).all();
 
+    // Group by BS month prefix (YYYY-MM). strftime() returns NULL for valid BS
+    // dates like 2083-03-32 (BS months can have 29–32 days, not valid AD dates),
+    // so use a plain string slice instead.
     const monthlySales = db.prepare(
-        "SELECT strftime('%Y-%m', date) as month, COALESCE(SUM(grand_total), 0) as total FROM sales WHERE date >= date('now', '-6 months') GROUP BY month ORDER BY month"
-    ).all();
+        "SELECT substr(date, 1, 7) as month, COALESCE(SUM(grand_total), 0) as total FROM sales WHERE date LIKE '____-__-__' GROUP BY month ORDER BY month"
+    ).all().slice(-6);
 
     const monthlyPurchases = db.prepare(
-        "SELECT strftime('%Y-%m', date) as month, COALESCE(SUM(grand_total), 0) as total FROM purchases WHERE date >= date('now', '-6 months') GROUP BY month ORDER BY month"
-    ).all();
+        "SELECT substr(date, 1, 7) as month, COALESCE(SUM(grand_total), 0) as total FROM purchases WHERE date LIKE '____-__-__' GROUP BY month ORDER BY month"
+    ).all().slice(-6);
 
     const lowStock = db.prepare(
         "SELECT p.name, p.unit, p.reorder_level, COALESCE((SELECT inward_qty - outward_qty FROM stock_movements WHERE product_id = p.id ORDER BY id DESC LIMIT 1), p.opening_stock) as current_stock FROM products p WHERE COALESCE((SELECT inward_qty - outward_qty FROM stock_movements WHERE product_id = p.id ORDER BY id DESC LIMIT 1), p.opening_stock) <= p.reorder_level AND p.reorder_level > 0"
