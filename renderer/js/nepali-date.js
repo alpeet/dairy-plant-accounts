@@ -113,55 +113,82 @@ function validateBSDate(dateStr) {
 }
 
 /**
- * Get today's date as BS date string.
- * Uses a simple AD→BS conversion approximation.
- * For exact conversion, this maps known BS dates.
+ * Pad a number to two digits.
+ */
+function pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+/**
+ * Exact AD → BS date conversion (day-accurate).
+ * Reference: April 14, 2025 AD = Baisakh 1, 2082 BS.
+ * Walks the BS calendar day by day using the real per-month day counts,
+ * so dates like 2083-03-32 (Ashadh has 32 days) come out correctly.
+ *
+ * @param {string|Date} adDate - 'YYYY-MM-DD' string or Date object
+ * @returns {string} BS date 'YYYY-MM-DD' or null if unparseable
+ */
+function adToBS(adDate) {
+    let targetAD;
+    if (adDate instanceof Date) {
+        targetAD = new Date(adDate.getFullYear(), adDate.getMonth(), adDate.getDate());
+    } else if (typeof adDate === 'string') {
+        const parts = adDate.split('-');
+        if (parts.length !== 3) return null;
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+        targetAD = new Date(y, m - 1, d);
+    } else {
+        return null;
+    }
+    if (isNaN(targetAD.getTime())) return null;
+
+    const refAD = new Date(2025, 3, 14); // April 14, 2025 AD = Baisakh 1, 2082 BS
+    const diffDays = Math.round((targetAD - refAD) / 86400000);
+
+    let bsYear = 2082;
+    let bsMonth = 1;
+    let bsDay = 1;
+    let remaining = diffDays;
+
+    if (remaining >= 0) {
+        while (remaining > 0) {
+            const daysInMonth = getBSDaysInMonth(bsYear, bsMonth);
+            const daysLeft = daysInMonth - bsDay + 1;
+            if (remaining < daysLeft) {
+                bsDay += remaining;
+                remaining = 0;
+            } else {
+                remaining -= daysLeft;
+                bsMonth++;
+                if (bsMonth > 12) { bsYear++; bsMonth = 1; }
+                bsDay = 1;
+            }
+        }
+    } else {
+        while (remaining < 0) {
+            if (bsDay + remaining >= 1) {
+                bsDay += remaining;
+                remaining = 0;
+            } else {
+                remaining += (bsDay - 1);
+                bsMonth--;
+                if (bsMonth < 1) { bsYear--; bsMonth = 12; }
+                bsDay = getBSDaysInMonth(bsYear, bsMonth);
+            }
+        }
+    }
+
+    return `${bsYear}-${pad2(bsMonth)}-${pad2(bsDay)}`;
+}
+
+/**
+ * Get today's date as BS date string (exact conversion).
  */
 function getTodayBS() {
-    const now = new Date();
-    
-    // Approximate conversion: BS year ≈ AD year + 57
-    // More precisely: 
-    //   Mid-April (4月) is BS New Year (Baisakh 1)
-    //   Before mid-April: BS year = AD year + 56
-    //   After mid-April: BS year = AD year + 57
-    
-    const adYear = now.getFullYear();
-    const adMonth = now.getMonth() + 1; // 1-12
-    const adDay = now.getDate();
-    
-    // BS New Year starts around April 13-14
-    let bsYear = adYear + 56;
-    let bsMonth = 9; // Start from Poush (month 9) roughly
-    let bsDay = adDay;
-    
-    // Rough mapping: 
-    // Jan (1) → Poush/Magh (9/10)
-    // Feb (2) → Magh/Falgun (10/11)
-    // Mar (3) → Falgun/Chaitra (11/12)
-    // Apr (4) → Chaitra/Baisakh (12/1)
-    // May (5) → Baisakh/Jestha (1/2)
-    // Jun (6) → Jestha/Ashadh (2/3)
-    // Jul (7) → Ashadh/Shrawan (3/4)
-    // Aug (8) → Shrawan/Bhadra (4/5)
-    // Sep (9) → Bhadra/Ashwin (5/6)
-    // Oct (10) → Ashwin/Kartik (6/7)
-    // Nov (11) → Kartik/Mangsir (7/8)
-    // Dec (12) → Mangsir/Poush (8/9)
-    
-    // Simplified: BS month roughly = ((AD month + 8) % 12) + 1
-    bsMonth = ((adMonth + 8) % 12) + 1;
-    bsDay = adDay;
-    
-    if (adMonth >= 4) {
-        bsYear = adYear + 57;
-    }
-    
-    // Clamp day to valid range
-    const maxDay = getBSDaysInMonth(bsYear, bsMonth);
-    if (bsDay > maxDay) bsDay = maxDay;
-    
-    return `${bsYear}-${String(bsMonth).padStart(2, '0')}-${String(bsDay).padStart(2, '0')}`;
+    return adToBS(new Date()) || '2082-01-01';
 }
 
 /**
@@ -376,8 +403,10 @@ function initBSDateInput(input) {
     `;
     input.readOnly = true; // Make read-only since we use the picker
     
-    // Only set default for empty inputs — trust existing values (they're BS dates from DB or user)
-    if (!input.value) {
+    // Only set default for empty inputs — trust existing values (they're BS dates from DB or user).
+    // Inputs with data-no-default="1" (e.g. filter bars where empty means "all dates")
+    // stay empty so the backend query isn't accidentally restricted to today.
+    if (!input.value && input.dataset.noDefault !== '1') {
         input.value = getTodayBS();
     }
     
@@ -399,6 +428,60 @@ function initAllBSDateInputs() {
     document.querySelectorAll('input[type="date"], input[data-bs-date]').forEach(input => {
         initBSDateInput(input);
     });
+    enhanceBSMonthInputs(document);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BS Month Picker — replaces <input type="month"> (which is always AD)
+// with a BS year/month select pair. Writes YYYY-MM (BS) back to the input.
+// Used by the Salary module where records are filtered by BS month.
+// ═══════════════════════════════════════════════════════════════
+function enhanceBSMonthInputs(scope) {
+    (scope || document).querySelectorAll('input[type="month"]:not([data-bs-month-initialized="true"])').forEach(input => {
+        const current = input.value && /^\d{4}-\d{2}$/.test(input.value) ? input.value : getTodayBS().substring(0, 7);
+        input.type = 'text';
+        input.readOnly = true;
+        input.style.display = 'none';
+        input.style.cursor = 'pointer';
+        input.value = current;
+        input.setAttribute('data-bs-month-initialized', 'true');
+
+        const wrap = document.createElement('div');
+        wrap.className = 'bs-date-picker';
+        wrap.style.cssText = 'display:flex;gap:6px;align-items:center';
+
+        const ySel = document.createElement('select');
+        ySel.className = 'form-control';
+        const mSel = document.createElement('select');
+        mSel.className = 'form-control';
+
+        const cy = parseInt(current.substring(0, 4), 10);
+        for (let y = cy - 15; y <= cy + 2; y++) {
+            const opt = document.createElement('option');
+            opt.value = y;
+            opt.textContent = y + ' BS';
+            ySel.appendChild(opt);
+        }
+        for (let m = 1; m <= 12; m++) {
+            const opt = document.createElement('option');
+            opt.value = pad2(m);
+            opt.textContent = (BS_MONTHS_EN[m - 1] || '') + ' / ' + (BS_MONTHS_NP[m - 1] || '');
+            mSel.appendChild(opt);
+        }
+        ySel.value = String(cy);
+        mSel.value = current.substring(5, 7);
+
+        const sync = () => {
+            input.value = ySel.value + '-' + mSel.value;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        ySel.addEventListener('change', sync);
+        mSel.addEventListener('change', sync);
+
+        wrap.appendChild(ySel);
+        wrap.appendChild(mSel);
+        input.parentNode.insertBefore(wrap, input.nextSibling);
+    });
 }
 
 /**
@@ -410,6 +493,7 @@ function refreshBSDateInputs(container) {
     scope.querySelectorAll('input[type="date"]:not([data-bs-initialized="true"])').forEach(input => {
         initBSDateInput(input);
     });
+    enhanceBSMonthInputs(scope);
 }
 
 /**
@@ -489,6 +573,10 @@ function setupBSDateSystem() {
             const uninit = document.querySelectorAll('input[type="date"]:not([data-bs-initialized="true"])');
             if (uninit.length > 0) {
                 uninit.forEach(input => initBSDateInput(input));
+            }
+            const uninitMonth = document.querySelectorAll('input[type="month"]:not([data-bs-month-initialized="true"])');
+            if (uninitMonth.length > 0) {
+                enhanceBSMonthInputs(document);
             }
         });
         observer.observe(document.body, {

@@ -32,11 +32,11 @@ async function renderPurchases() {
                 </div>
                 <div class="form-group">
                     <label>From</label>
-                    <input type="date" class="form-control" id="purchaseFrom" value="${purchasesFilter.from_date}">
+                    <input type="date" class="form-control" id="purchaseFrom" data-no-default="1" value="${purchasesFilter.from_date}">
                 </div>
                 <div class="form-group">
                     <label>To</label>
-                    <input type="date" class="form-control" id="purchaseTo" value="${purchasesFilter.to_date}">
+                    <input type="date" class="form-control" id="purchaseTo" data-no-default="1" value="${purchasesFilter.to_date}">
                 </div>
                 <div class="form-group">
                     <label>&nbsp;</label>

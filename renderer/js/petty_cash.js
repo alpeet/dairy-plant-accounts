@@ -4,6 +4,10 @@
  * Manages petty cash entries with add/edit/delete, print & PDF.
  */
 
+// Active search/filter state for the petty cash register.
+// When null, defaults to the current BS month (this_month preset).
+let pettyCashFilter = null;
+
 async function renderPettyCash() {
     const container = document.getElementById('page-petty-cash');
     document.getElementById('topActions').innerHTML = `
@@ -11,11 +15,13 @@ async function renderPettyCash() {
     `;
 
     const preset = getDatePreset('this_month');
-    const result = await window.api.getPettyCashList({ from_date: preset.from, to_date: preset.to });
+    const filter = pettyCashFilter || { from_date: preset.from, to_date: preset.to };
+    const result = await window.api.getPettyCashList(filter);
     const entries = result.success ? result.data : [];
 
-    const summary = await window.api.getPettyCashSummary({ from_date: preset.from, to_date: preset.to });
+    const summary = await window.api.getPettyCashSummary({ from_date: filter.from_date, to_date: filter.to_date });
     const s = summary.success ? summary.data : { count: 0, total: 0 };
+    const filterHead = filter.expense_head || '';
 
     container.innerHTML = `
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr">
@@ -38,15 +44,15 @@ async function renderPettyCash() {
         <div class="filter-bar">
             <div class="form-group">
                 <label>From</label>
-                <input type="date" class="form-control" id="pcFrom" value="${preset.from}">
+                <input type="date" class="form-control" id="pcFrom" value="${filter.from_date || ''}">
             </div>
             <div class="form-group">
                 <label>To</label>
-                <input type="date" class="form-control" id="pcTo" value="${preset.to}">
+                <input type="date" class="form-control" id="pcTo" value="${filter.to_date || ''}">
             </div>
             <div class="form-group">
                 <label>Expense Head</label>
-                <input type="text" class="form-control" id="pcSearch" placeholder="Filter by head...">
+                <input type="text" class="form-control" id="pcSearch" placeholder="Filter by head..." value="${escapeHtml(filterHead)}">
             </div>
             <div class="form-group">
                 <label>&nbsp;</label>
@@ -93,9 +99,12 @@ async function refreshPettyCash() {
     const from = document.getElementById('pcFrom')?.value || '';
     const to = document.getElementById('pcTo')?.value || '';
     const head = document.getElementById('pcSearch')?.value || '';
-    const result = await window.api.getPettyCashList({ from_date: from, to_date: to, expense_head: head || undefined });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastPettyCash = result.data;
+    // Store the active filter so renderPettyCash uses it instead of resetting to the default month.
+    pettyCashFilter = {
+        from_date: from || undefined,
+        to_date: to || undefined,
+        expense_head: head || undefined
+    };
     renderPettyCash();
 }
 

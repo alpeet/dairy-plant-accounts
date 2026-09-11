@@ -171,7 +171,8 @@ async function saveExpenseEntry(id) {
 
 async function editExpense(id) {
     const result = await window.api.getOtherExpense(id);
-    if (result.success) showAddExpense(result.data);
+    if (result.success && result.data) showAddExpense(result.data);
+    else showToast('This entry belongs to Petty Cash — edit it from the Petty Cash tab', 'warning');
 }
 
 async function deleteExpenseEntry(id) {

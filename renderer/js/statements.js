@@ -42,14 +42,18 @@ async function renderStatements() {
 // ============================================================
 // Party Selection & Statement View
 // ============================================================
-async function showPartyStatement() {
+async function showPartyStatement(type = '') {
     const container = document.getElementById('statementContent');
 
+    // Filter parties by the requested type (customer / supplier / both / all)
+    const partyType = type || document.getElementById('stType')?.value || '';
     const [partiesResult, preset] = await Promise.all([
-        window.api.getParties({}),
+        window.api.getParties(partyType ? { type: partyType } : {}),
         Promise.resolve(getDatePreset('this_month'))
     ]);
     const parties = partiesResult.success ? partiesResult.data : [];
+
+    const typeSelected = (t) => partyType === t ? ' selected' : '';
 
     container.innerHTML = `
         <div class="card-header">
@@ -63,10 +67,10 @@ async function showPartyStatement() {
             <div class="form-group">
                 <label>Party Type</label>
                 <select class="form-control" id="stType" onchange="filterPartiesByType()">
-                    <option value="">All</option>
-                    <option value="customer">Customer</option>
-                    <option value="supplier">Supplier</option>
-                    <option value="both">Both</option>
+                    <option value=""${typeSelected('')}>All</option>
+                    <option value="customer"${typeSelected('customer')}>Customer</option>
+                    <option value="supplier"${typeSelected('supplier')}>Supplier</option>
+                    <option value="both"${typeSelected('both')}>Both</option>
                 </select>
             </div>
             <div class="form-group">
@@ -196,15 +200,11 @@ async function generateStatement() {
 }
 
 function showCustomerStatements() {
-    document.getElementById('stType').value = 'customer';
-    filterPartiesByType();
-    showPartyStatement();
+    showPartyStatement('customer');
 }
 
 function showSupplierStatements() {
-    document.getElementById('stType').value = 'supplier';
-    filterPartiesByType();
-    showPartyStatement();
+    showPartyStatement('supplier');
 }
 
 // ============================================================

@@ -246,7 +246,9 @@ function applyPurchasesReport() {
 // ============================================================
 async function showDayBook(fromDate = '', toDate = '') {
     const container = document.getElementById('reportContent');
-    const preset = getDatePreset('today');
+    // Default to the current BS month — a "today" default shows nothing when the
+    // latest transaction is older than today (common with Excel-synced data).
+    const preset = getDatePreset('this_month');
     if (!fromDate) fromDate = preset.from;
     if (!toDate) toDate = preset.to;
 

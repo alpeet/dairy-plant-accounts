@@ -543,11 +543,21 @@ app.post('/api/auth/users/change-password', requireRole('operator'), (req, res) 
 // Public Registration & Password Reset (no auth required)
 // ──────────────────────────────────────────────────────────────
 
-// POST /api/auth/register — Create a new user account (open registration)
+// POST /api/auth/register — Create a new user account
+// Open registration is allowed while the database is still in its initial
+// state (no non-admin users yet). Once the owner has set up their team,
+// creating accounts requires an admin login. This makes the login page's
+// "Create New Account" button work on a fresh Render deployment without
+// leaving permanent open registration on an established database.
 app.post('/api/auth/register', (req, res) => {
-    // #2 Only an authenticated admin may create accounts
-    if (!isAdminToken(extractToken(req))) {
-        return res.status(403).json({ success: false, error: 'Admin login required to create accounts' });
+    // Allow public registration only on a fresh install (no operator/staff/etc yet)
+    const nonAdminCount = (() => {
+        try {
+            return db.prepare("SELECT COUNT(*) as count FROM users WHERE role != 'admin'").get().count;
+        } catch (e) { return 0; }
+    })();
+    if (!isAdminToken(extractToken(req)) && nonAdminCount > 0) {
+        return res.status(403).json({ success: false, error: 'Account creation is currently restricted. Please contact your administrator.' });
     }
     const { username, password } = req.body || {};
 
@@ -587,12 +597,21 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // POST /api/auth/reset-password — Forgot password: reset any user's password
+// Public reset is allowed for an account that still uses the default password
+// (fresh install — the owner has not set a custom password yet). Accounts with
+// a custom password can only be reset by an authenticated admin.
 app.post('/api/auth/reset-password', (req, res) => {
-    // #1 Only an authenticated admin may reset a password
-    if (!isAdminToken(extractToken(req))) {
-        return res.status(403).json({ success: false, error: 'Admin login required to reset passwords' });
-    }
     const { username, newPassword } = req.body || {};
+    const adminAuthed = isAdminToken(extractToken(req));
+    if (!adminAuthed && username) {
+        try {
+            const target = db.prepare("SELECT password_hash FROM users WHERE username = ?").get(username);
+            const stillDefault = target && auth.isDefaultPassword(target.password_hash);
+            if (!stillDefault) {
+                return res.status(403).json({ success: false, error: 'This account already has a custom password. Only an administrator can reset it — log in as admin, or ask your admin.' });
+            }
+        } catch (e) { /* fall through to the shared checks below */ }
+    }
 
     if (!username || !newPassword) {
         return res.json({ success: false, error: 'Username and new password are required' });

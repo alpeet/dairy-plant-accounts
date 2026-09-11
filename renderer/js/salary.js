@@ -238,9 +238,11 @@ async function saveSalaryEntry(id) {
     if (result.success) {
         closeModal();
         showToast(id ? 'Salary updated' : 'Salary record saved', 'success');
+        // Reload the month the record was saved to, so the new entry is immediately visible.
         renderSalary(data.month);
     } else {
-        showToast(result.error, 'error');
+        showToast(result.error || 'Failed to save salary record', 'error');
+        // Keep the modal open so the entered data is not lost.
     }
 }
 

@@ -11,7 +11,7 @@ let _finLastData = {};
 // Profit & Loss Statement
 // ============================================================
 async function showProfitLoss() {
-    const container = document.getElementById('page-financial-reports');
+    const container = document.getElementById('page-profit-loss');
     const preset = getDatePreset('this_month');
     const result = await window.api.getProfitLoss({ from_date: preset.from, to_date: preset.to });
     const data = result.success ? result.data : { 
@@ -347,7 +347,9 @@ async function exportStockStatementPDF() {
 async function showDaybookPage() {
     const container = document.getElementById('page-daybook');
     document.getElementById('topActions').innerHTML = '';
-    const preset = getDatePreset('today');
+    // Default to the current BS month — a "today" default shows nothing when the
+    // latest transaction is older than today (which is common with Excel-synced data).
+    const preset = getDatePreset('this_month');
 
     const result = await window.api.getDayBook({ from_date: preset.from, to_date: preset.to });
     const data = result.success ? result.data : { entries: [], totalDebit: 0, totalCredit: 0, net: 0, count: 0 };
@@ -445,8 +447,12 @@ async function showCashCollectionPage() {
     document.getElementById('topActions').innerHTML = '';
     const preset = getDatePreset('this_month');
 
-    const result = await window.api.getDailyCashCollection({ from_date: preset.from, to_date: preset.to });
-    const data = result.success ? result.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
+    const [collResult, payResult] = await Promise.all([
+        window.api.getDailyCashCollection({ from_date: preset.from, to_date: preset.to }),
+        window.api.getPayments({ from_date: preset.from, to_date: preset.to })
+    ]);
+    const data = collResult.success ? collResult.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
+    data.payment_records = payResult.success ? payResult.data || [] : [];
 
     const modeIcon = (mode) => {
         const m = PAYMENT_MODES.find(p => p.value === mode);
@@ -1000,7 +1006,7 @@ async function deletePaymentRecord(id) {
 // Render function for Profit/Loss (used by app.js navigation)
 // ============================================================
 async function renderFinancialReports() {
-    const container = document.getElementById('page-financial-reports');
+    const container = document.getElementById('page-profit-loss');
     document.getElementById('topActions').innerHTML = '';
     container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-light)"><span style="font-size:24px">⏳</span><p>Loading...</p></div>`;
     await showProfitLoss();
