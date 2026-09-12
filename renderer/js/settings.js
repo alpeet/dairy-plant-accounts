@@ -267,7 +267,7 @@ async function renderSettings() {
                 <h2>About</h2>
             </div>
             <div style="font-size:13px;color:var(--text-light);line-height:1.8">
-                <p><strong>Prarambha Account &amp; Stock Management</strong> v1.1.1</p>
+                <p><strong>Prarambha Account &amp; Stock Management</strong> v1.3.0</p>
                 <p>A professional accounting and stock management application (Desktop + Web).</p>
                 <p>Built with Electron + SQLite.</p>
                 <p style="margin-top:12px;font-size:12px">
