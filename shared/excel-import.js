@@ -1055,6 +1055,191 @@ function rebuildStockLedger(db, log) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// PETTY CASH / BANK RECON / CASH DENOMINATION sheets
+// (field mappings proven in scripts/audit/import-*.js)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * PETTY CASH register sheet → petty_cash (+ advance postings to ledger).
+ * Cols: 0 Date, [1 AD], 2 Receipt No, 3 Customer, 4 Against Bill, 5 Description,
+ *       6 Type, 7 Opening Due, 8 Collected, 9 Paid, 10 Mode, 11 Closing, 12 Remarks
+ * - "Payment" rows → petty_cash expense entries.
+ * - "Advance" rows → petty_cash entry + 'advance' payment + ledger debit for the
+ *   matched party (deduped against advances already in the ledger — the
+ *   Salary Advance sheet and Party_Ledger record some of the same advances).
+ * - "Collection" rows → skipped: they duplicate the Collection sheet, which
+ *   already produced payments/ledger entries.
+ */
+function importPettyCashSheet(db, data, { log }) {
+    const report = { payment: 0, advance: 0, advance_ledger: 0, collection_skipped: 0, unmatched: [], skipped_dup: 0 };
+    const insertPC = db.prepare(`
+        INSERT INTO petty_cash (voucher_no, date, expense_head, description, amount, paid_to, payment_mode, remarks, approved_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+    `);
+    const insertPay = db.prepare(`
+        INSERT INTO payments (party_id, date, type, amount, mode, reference_type, notes, created_by)
+        VALUES (?, ?, 'advance', ?, ?, ?, ?, NULL)
+    `);
+    const insertLedger = db.prepare(`
+        INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance)
+        VALUES (?, ?, 'advance', ?, ?, ?, 0, 0)
+    `);
+    let seq = db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(voucher_no, 4) AS INTEGER)), 0) m FROM petty_cash WHERE voucher_no LIKE 'PC-%'").get().m;
+
+    // Dedup key includes the description: several genuinely different expenses can
+    // share a date, amount and payee (e.g. "AUTO FARE 700" vs "IRON ROD TRANSPORT 700").
+    const existingPC = new Set(db.prepare('SELECT date, amount, paid_to, expense_head, description FROM petty_cash').all()
+        .map(r => `${r.date}|${Math.round(r.amount * 100)}|${(r.paid_to || '').trim().toLowerCase()}|${(r.expense_head || '').trim().toLowerCase()}|${(r.description || '').trim().toLowerCase()}`));
+    const existingAdv = new Set(db.prepare('SELECT date, party_id, debit FROM ledger_entries WHERE debit > 0').all()
+        .map(r => `${r.date}|${r.party_id}|${Math.round(r.debit * 100)}`));
+
+    for (let i = 2; i < data.length; i++) {
+        const r = data[i];
+        if (!r) continue;
+        const date = toBSDate(r[0]);
+        if (!date) continue; // blank tail rows and the TOTAL row
+        const type = toStr(r[6]);
+        const customer = toStr(r[3]);
+        if (/^cancel/i.test(type) || /^cancel/i.test(customer)) continue;
+
+        const receiptNo = toStr(r[2]);
+        const desc = toStr(r[5]);
+        const paid = toNum(r[9]);
+        const modeRaw = toStr(r[10]).toLowerCase();
+        const payMode = modeRaw.includes('bank') ? 'bank' : modeRaw.includes('upi') ? 'upi' : 'cash';
+
+        if (type === 'Collection') { report.collection_skipped++; continue; }
+
+        if (type === 'Payment' && paid > 0) {
+            const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|payment|${desc.toLowerCase()}`;
+            if (existingPC.has(key)) { report.skipped_dup++; continue; }
+            seq++;
+            insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, 'Payment', desc, paid, customer, payMode, '');
+            existingPC.add(key);
+            report.payment++;
+        } else if (type === 'Advance' && paid > 0) {
+            const pid = resolveParty(customer, db, false);
+            const pcKey = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|advance|${(desc || 'advance paid').toLowerCase()}`;
+            seq++;
+            if (!existingPC.has(pcKey)) {
+                insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, 'Advance', desc || 'Advance paid', paid, customer, payMode, '');
+                existingPC.add(pcKey);
+                report.advance++;
+            }
+            if (!pid) { report.unmatched.push(`${date} | ${customer} | ${paid} | ${desc}`); continue; }
+            const advKey = `${date}|${pid}|${Math.round(paid * 100)}`;
+            if (existingAdv.has(advKey)) { report.skipped_dup++; continue; }
+            const info = insertPay.run(pid, date, paid, payMode, receiptNo || '', `Advance: ${desc || customer}`);
+            insertLedger.run(pid, date, info.lastInsertRowid, `Advance: ${desc || customer}`, paid);
+            existingAdv.add(advKey);
+            report.advance_ledger++;
+        }
+    }
+
+    log(`  💰 Petty cash: ${report.payment} payments, ${report.advance} advances registered` +
+        (report.advance_ledger ? `, ${report.advance_ledger} advance postings to ledgers` : '') +
+        (report.collection_skipped ? `, ${report.collection_skipped} collection rows skipped (duplicates)` : '') +
+        (report.unmatched.length ? `, ⚠️ ${report.unmatched.length} advances without a party match` : ''));
+    return report;
+}
+
+/**
+ * BANK RECON sheet → bank_transactions (with party auto-match + ledger posting
+ * via the idempotent importBankRows operation).
+ * Header at row index 2, data from 3. Cols: 0 Txn Date, [1 AD], 2 Transaction ID,
+ * 3 Counterparty, 4 Description, [5 Party ID], 6 Debit, 7 Credit, [8 Amount],
+ * 9 Payment Mode, 10 Bank Account, 11 Transaction Type.
+ */
+function importBankReconSheet(db, data, { log }) {
+    const bank = require('./operations/bank');
+    const rows = [];
+    let undated = 0;
+    for (let i = 3; i < data.length; i++) {
+        const r = data[i];
+        if (!r) continue;
+        const date = toBSDate(r[0]);
+        const counterparty = toStr(r[3]);
+        const desc = toStr(r[4]);
+        if (!date) { if (counterparty || desc) undated++; continue; }
+        rows.push({
+            date,
+            reference_no: toStr(r[2]),
+            counterparty_name: counterparty,
+            description: desc,
+            debit: toNum(r[6]),
+            credit: toNum(r[7]),
+            payment_mode: toStr(r[9]) || 'QR/Bank',
+            bank_account: toStr(r[10]) || 'Sushil QR',
+            txn_type: toStr(r[11])
+        });
+    }
+    const report = bank.importBankRows(db, rows);
+    if (undated) report.undated = undated;
+    log(`  🏦 Bank: ${report.inserted} transactions imported` +
+        (report.auto_posted ? `, ${report.auto_posted} auto-posted to ledgers` : '') +
+        (report.already_in_ledger ? `, ${report.already_in_ledger} already reflected` : '') +
+        (report.review_queue ? `, ⚠️ ${report.review_queue} need review` : '') +
+        (report.skipped_dup ? `, ${report.skipped_dup} duplicates skipped` : ''));
+    return report;
+}
+
+/**
+ * Cash_Demon sheet → denomination_counts (physical cash counts, with the
+ * app's own daily cash-in as expected value; every difference is kept, not hidden).
+ * Header at row index 2, data from 3. Cols: 0 Date, [1 AD], 2-10 = 1000/500/100/50/20/10/5/2/1,
+ * 11 IC (unvalued coinage → note_other), 12 Amount, 13 Collections, 14 Short/(Over),
+ * 15 Deposited, [16 blank], 17 Remarks (who counted).
+ */
+function importCashDemonSheet(db, data, { log }) {
+    const { getDailyCashCollection } = require('./operations/cash');
+    const existing = new Set(db.prepare('SELECT date FROM denomination_counts').all().map(r => r.date));
+    const insert = db.prepare(`
+        INSERT INTO denomination_counts
+            (date, note_1000, note_500, note_100, note_50, note_20, note_10, note_5,
+             note_other, note_other_value, coin_5, coin_2, coin_1, total_cash,
+             expected_cash, difference, remarks, counted_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const report = { imported: 0, skipped_dup: 0, discrepancies: 0, undated: 0 };
+
+    for (let i = 3; i < data.length; i++) {
+        const r = data[i];
+        if (!r) continue;
+        const date = toBSDate(r[0]);
+        if (!date) { if (r.some(x => toStr(x) !== '')) report.undated++; continue; }
+        if (existing.has(date)) { report.skipped_dup++; continue; }
+
+        const n1000 = parseInt(r[2]) || 0, n500 = parseInt(r[3]) || 0, n100 = parseInt(r[4]) || 0,
+            n50 = parseInt(r[5]) || 0, n20 = parseInt(r[6]) || 0, n10 = parseInt(r[7]) || 0,
+            n5 = parseInt(r[8]) || 0, n2 = parseInt(r[9]) || 0, n1 = parseInt(r[10]) || 0,
+            ic = parseInt(r[11]) || 0;
+        const total = n1000 * 1000 + n500 * 500 + n100 * 100 + n50 * 50 + n20 * 20 + n10 * 10 + n5 * 5 + n2 * 2 + n1 * 1;
+        const countedBy = toStr(r[17]) || toStr(r[14]);
+
+        // App's own calculated daily cash-in for this date
+        let expected = 0;
+        try {
+            const cash = getDailyCashCollection(db, { from_date: date, to_date: date });
+            const day = (cash.days || []).find(d => d.date === date);
+            expected = day ? (day.total_cash_in || 0) : 0;
+        } catch (e) { /* cash data may be empty */ }
+
+        const difference = Math.round((total - expected) * 100) / 100;
+        const sheetShort = toNum(r[14]);
+        const remarks = sheetShort !== 0 ? `Excel short/(over): ${sheetShort}` : '';
+
+        insert.run(date, n1000, n500, n100, n50, n20, n10, n5, ic, 0, 0, n2, n1,
+            total, expected, difference, remarks, countedBy);
+        existing.add(date);
+        report.imported++;
+        if (difference !== 0) report.discrepancies++;
+    }
+    log(`  🧾 Cash denominations: ${report.imported} daily counts imported` +
+        (report.discrepancies ? `, ${report.discrepancies} with short/(over) flagged for review` : ''));
+    return report;
+}
+
+// ════════════════════════════════════════════════════════════════
 // MAIN ENTRY
 // ════════════════════════════════════════════════════════════════
 
@@ -1183,12 +1368,40 @@ function runExcelImport(db, excelPath, opts = {}) {
         results.stockMovements = rebuildStockLedger(db, log);
     }
 
+    // 7. Petty cash register (payments + advances with ledger postings)
+    const pettySheetName = workbook.SheetNames.includes('PETTY CASH') ? 'PETTY CASH' : null;
+    if (pettySheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[pettySheetName], { header: 1, defval: '' });
+        if (data.length > 3) {
+            results.pettyCash = importPettyCashSheet(db, data, { mode, log });
+        }
+    }
+
+    // 8. Bank transactions (QR/bank statement rows with auto-match)
+    const bankSheetName = workbook.SheetNames.includes('BANK RECON') ? 'BANK RECON' : null;
+    if (bankSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[bankSheetName], { header: 1, defval: '' });
+        if (data.length > 4) {
+            results.bank = importBankReconSheet(db, data, { mode, log });
+        }
+    }
+
+    // 9. Physical cash denomination counts
+    const demonSheetName = workbook.SheetNames.includes('Cash_Demon') ? 'Cash_Demon' : null;
+    if (demonSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[demonSheetName], { header: 1, defval: '' });
+        if (data.length > 4) {
+            results.cashDemon = importCashDemonSheet(db, data, { mode, log });
+        }
+    }
+
     // Summary
     log('\n  ═══════════════════════════════════════════════════════');
     log('  📊 IMPORT SUMMARY');
     log('');
     const tables = ['parties', 'products', 'sales', 'sales_items', 'purchases',
-        'purchase_items', 'payments', 'ledger_entries', 'stock_movements'];
+        'purchase_items', 'payments', 'ledger_entries', 'stock_movements',
+        'petty_cash', 'bank_transactions', 'denomination_counts'];
     results.tableCounts = {};
     for (const t of tables) {
         try {

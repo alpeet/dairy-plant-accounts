@@ -377,6 +377,43 @@ if (ss) {
     console.log(`  ℹ️  Stock_Statement sheet comparison (period ${fromBS || '?'} → ${toBS || '?'}): ${matched}/${checked} products reconcile; the sheet includes in-house production (ghee/cream/nauni from FACTORY PRODUCTION rows) which the stock ledger does not track —${infoOnly.length ? ' details: ' + infoOnly.slice(0, 5).join(' | ') : ' all match'}; its period label is also older than the row sheets.`);
 }
 
+// ── 7. Petty cash / bank / denominations now imported from the workbook ──
+console.log('\n── Petty cash, bank & cash-denomination sheets ──');
+{
+    const pc = db.prepare('SELECT COUNT(*) n FROM petty_cash').get();
+    check('Petty cash register imported (payments + advances)', pc.n > 0,
+        'petty_cash is empty — PETTY CASH sheet missing?');
+
+    const bank = db.prepare('SELECT COUNT(*) n FROM bank_transactions').get();
+    check('Bank transactions imported', bank.n > 0,
+        'bank_transactions is empty — BANK RECON sheet missing?');
+
+    const den = db.prepare('SELECT COUNT(*) n FROM denomination_counts').get();
+    check('Cash denomination counts imported', den.n > 0,
+        'denomination_counts is empty — Cash_Demon sheet missing?');
+
+    // Sheet-level totals for the petty cash register (Paid column, excluding TOTAL row)
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(excelPath);
+    if (wb.SheetNames.includes('PETTY CASH')) {
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets['PETTY CASH'], { header: 1, defval: '' });
+        let sheetPaid = 0, sheetPaidCount = 0;
+        for (let i = 2; i < rows.length; i++) {
+            const r = rows[i];
+            if (!r) continue;
+            const d = toBSDate(r[0]);
+            const type = String(r[6] || '').trim();
+            if (!d || (type !== 'Payment' && type !== 'Advance')) continue;
+            sheetPaid += parseFloat(r[9]) || 0;
+            sheetPaidCount++;
+        }
+        const dbPaid = db.prepare('SELECT ROUND(COALESCE(SUM(amount), 0), 2) t, COUNT(*) n FROM petty_cash').get();
+        check(`Petty cash total matches sheet (${dbPaid.n} rows, Rs ${dbPaid.t})`,
+            Math.abs(dbPaid.t - sheetPaid) < 1,
+            `sheet total Rs ${Math.round(sheetPaid)} vs DB Rs ${dbPaid.t}`);
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 console.log('');
 if (failures === 0) {
