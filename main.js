@@ -721,6 +721,10 @@ authHandle('db:reports:profit-loss', async (event, params = {}) => {
     return safeRun(() => ops.getProfitLoss(db, params));
 });
 
+authHandle('db:reports:profit-loss-by-month', async (event, params = {}) => {
+    return safeRun(() => ops.getProfitLossByMonth(db, params));
+});
+
 authHandle('db:reports:stock-statement', async (event, params = {}) => {
     return safeRun(() => ops.getStockStatement(db, params));
 });

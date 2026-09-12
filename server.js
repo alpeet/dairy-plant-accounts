@@ -1001,6 +1001,10 @@ app.post('/api/reports/profit-loss', (req, res) => {
     res.json(safeRun(() => ops.getProfitLoss(db, req.body || {})));
 });
 
+app.post('/api/reports/profit-loss-by-month', (req, res) => {
+    res.json(safeRun(() => ops.getProfitLossByMonth(db, req.body || {})));
+});
+
 app.post('/api/reports/stock-statement', (req, res) => {
     res.json(safeRun(() => ops.getStockStatement(db, req.body || {})));
 });

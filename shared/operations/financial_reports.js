@@ -148,6 +148,122 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
 }
 
 /**
+ * Month-by-month comparative Profit & Loss for a BS date range.
+ * Same accrual basis as getProfitLoss: sales revenue (+ 'Income' category
+ * rows) vs COGS (purchases + milk collections) and operating costs.
+ * Collection receipts are reported per month for cash-flow reference only.
+ *
+ * @param {object} db - better-sqlite3 database instance
+ * @param {object} opts - { from_date, to_date } (BS dates; defaults to the
+ *                        current BS year start → today)
+ * @returns {object} { from_date, to_date, months: [...], totals: {...} }
+ */
+function getProfitLossByMonth(db, { from_date, to_date } = {}) {
+    const { adToBS } = require('../excel-import');
+    const todayBS = adToBS(new Date().toISOString().split('T')[0]) || new Date().toISOString().split('T')[0];
+    const from = from_date || `${String(todayBS).slice(0, 4)}-01-01`;
+    const to = to_date || todayBS;
+
+    // Every transaction table grouped by BS month prefix (YYYY-MM). Stored dates
+    // are zero-padded BS strings; substr gives the month key. strftime() is not
+    // usable here (BS dates like 2083-03-32 are not valid AD dates).
+    const groupSum = (table, dateCol, expr) => db.prepare(`
+        SELECT substr(${dateCol}, 1, 7) as ym, COALESCE(SUM(${expr}), 0) as total, COUNT(*) as count
+        FROM ${table}
+        WHERE ${dateCol} >= ? AND ${dateCol} <= ? AND ${dateCol} IS NOT NULL AND ${dateCol} != ''
+        GROUP BY ym
+    `);
+
+    const sales = groupSum('sales', 'date', 'grand_total').all(from, to);
+    const milk = groupSum('milk_collections', 'date', 'amount').all(from, to);
+    const purchases = groupSum('purchases', 'date', 'grand_total').all(from, to);
+    const petty = groupSum('petty_cash', 'date', 'amount').all(from, to);
+    const salary = groupSum('salary_records', 'payment_date', 'net_salary').all(from, to);
+    const vehicle = groupSum('vehicle_expenses', 'date', 'total_amount').all(from, to);
+    const receipts = db.prepare(`
+        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM payments WHERE date >= ? AND date <= ? AND type = 'receipt'
+        GROUP BY ym
+    `).all(from, to);
+    // 'Income' rows are revenue; the rest of other_expenses are operating costs
+    const otherIncome = db.prepare(`
+        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM other_expenses WHERE date >= ? AND date <= ? AND category = 'Income' GROUP BY ym
+    `).all(from, to);
+    const otherExpense = db.prepare(`
+        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM other_expenses WHERE date >= ? AND date <= ? AND category != 'Income' GROUP BY ym
+    `).all(from, to);
+
+    const byMonth = {};   // ym -> component map
+    const ensure = (ym) => {
+        if (!byMonth[ym]) byMonth[ym] = {
+            sales: 0, sales_count: 0, other_income: 0, receipts: 0, receipts_count: 0,
+            milk: 0, purchases: 0, other_expense: 0, petty: 0, salary: 0, vehicle: 0
+        };
+        return byMonth[ym];
+    };
+    const absorb = (rows, key, countKey) => rows.forEach(r => {
+        const m = ensure(r.ym);
+        m[key] = r.total;
+        if (countKey) m[countKey] = r.count;
+    });
+    absorb(sales, 'sales', 'sales_count');
+    absorb(otherIncome, 'other_income');
+    absorb(receipts, 'receipts', 'receipts_count');
+    absorb(milk, 'milk');
+    absorb(purchases, 'purchases');
+    absorb(otherExpense, 'other_expense');
+    absorb(petty, 'petty');
+    absorb(salary, 'salary');
+    absorb(vehicle, 'vehicle');
+
+    const BS_MONTHS = ['Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin',
+        'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'];
+
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const months = Object.keys(byMonth).sort().map(ym => {
+        const m = byMonth[ym];
+        const income = m.sales + m.other_income;
+        const cogs = m.milk + m.purchases;
+        const opex = m.other_expense + m.petty + m.salary + m.vehicle;
+        const totalExpenses = cogs + opex;
+        const ymNum = parseInt(ym.slice(5, 7), 10);
+        return {
+            ym,
+            label: `${ym} (${BS_MONTHS[ymNum - 1] || ''})`.trim(),
+            sales: round2(m.sales),
+            sales_count: m.sales_count,
+            other_income: round2(m.other_income),
+            total_income: round2(income),
+            cogs: round2(cogs),
+            gross_profit: round2(income - cogs),
+            operating_expenses: round2(opex),
+            total_expenses: round2(totalExpenses),
+            net_profit: round2(income - totalExpenses),
+            receipts: round2(m.receipts),
+            receipts_count: m.receipts_count
+        };
+    });
+
+    const sum = (key) => round2(months.reduce((s, m) => s + (m[key] || 0), 0));
+    const sumCount = (key) => months.reduce((s, m) => s + (m[key] || 0), 0);
+    const totals = {
+        sales: sum('sales'), sales_count: sumCount('sales_count'),
+        other_income: sum('other_income'),
+        total_income: sum('total_income'),
+        cogs: sum('cogs'),
+        gross_profit: sum('gross_profit'),
+        operating_expenses: sum('operating_expenses'),
+        total_expenses: sum('total_expenses'),
+        net_profit: sum('net_profit'),
+        receipts: sum('receipts'), receipts_count: sumCount('receipts_count')
+    };
+
+    return { from_date: from, to_date: to, months, totals };
+}
+
+/**
  * Stock Statement — current stock valuation with quantities, rates, and values.
  *
  * @param {object} db - better-sqlite3 database instance
@@ -250,6 +366,7 @@ function getEnhancedDaybook(db, { from_date, to_date } = {}) {
 
 module.exports = {
     getProfitLoss,
+    getProfitLossByMonth,
     getStockStatement,
     getEnhancedDaybook
 };

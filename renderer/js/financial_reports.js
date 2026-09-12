@@ -121,8 +121,10 @@ async function showProfitLoss(preloadedData = null) {
                 Period: ${data.from_date || preset.from} to ${data.to_date || preset.to}
             </span>
         </div>
+        <div id="pl-monthly-section" style="margin-top:20px"></div>
         `}
     `;
+    loadProfitLossMonthly();
 }
 
 async function applyProfitLoss() {
@@ -175,6 +177,161 @@ async function printProfitLoss() {
             </table>
         </div>
         <p style="margin-top:12px;font-size:11px;color:#666">Note: Cash collected in period ${formatCurrency(data.income.total_receipts)} — collections are against the same sales invoices, so they are not added to income (accrual basis).</p>
+        <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
+    `;
+    printHTML(html);
+}
+
+// ============================================================
+// Profit & Loss — Month-by-Month Comparison
+// ============================================================
+async function loadProfitLossMonthly() {
+    const section = document.getElementById('pl-monthly-section');
+    if (!section) return;
+    const saved = _finLastData.plMonthly;
+    const preset = saved
+        ? { from: saved.from_date, to: saved.to_date }
+        : (() => {
+            const t = getDatePreset('today');
+            return { from: `${String(t.from).slice(0, 4)}-01-01`, to: t.to };
+        })();
+    const result = await window.api.getProfitLossByMonth({ from_date: preset.from, to_date: preset.to });
+    if (!result.success) { showToast(result.error || 'Failed to load monthly comparison', 'error'); return; }
+    renderProfitLossMonthly(result.data);
+}
+
+function renderProfitLossMonthly(data) {
+    const section = document.getElementById('pl-monthly-section');
+    if (!section) return;
+    _finLastData.plMonthly = data;
+    const fmt = formatCurrency;
+
+    const headCells = ['BS Month', 'Sales', 'COGS', 'Gross Profit', 'Operating', 'Net Profit', 'Cash Collected']
+        .map((h, i) => `<th${i > 0 ? ' class="text-right"' : ''}>${h}</th>`).join('');
+
+    const rows = data.months.map(m => `
+        <tr>
+            <td><strong>${m.label}</strong><br><span style="font-size:11px;color:var(--text-light)">${m.sales_count} invoices</span></td>
+            <td class="text-right">${fmt(m.sales)}</td>
+            <td class="text-right">${fmt(m.cogs)}</td>
+            <td class="text-right" style="color:${m.gross_profit >= 0 ? 'var(--accent)' : 'var(--danger)'};font-weight:600">${fmt(m.gross_profit)}</td>
+            <td class="text-right">${fmt(m.operating_expenses)}</td>
+            <td class="text-right" style="color:${m.net_profit >= 0 ? 'var(--accent)' : 'var(--danger)'};font-weight:700">${m.net_profit >= 0 ? '' : '-'}${fmt(Math.abs(m.net_profit))}${m.net_profit >= 0 ? '' : ' (loss)'}</td>
+            <td class="text-right" style="color:var(--text-light)">${fmt(m.receipts)}</td>
+        </tr>
+    `).join('');
+
+    const t = data.totals;
+    const totalRow = `
+        <tr style="background:var(--bg);font-weight:700">
+            <td>TOTAL (${data.months.length} month${data.months.length === 1 ? '' : 's'})</td>
+            <td class="text-right">${fmt(t.sales)}</td>
+            <td class="text-right">${fmt(t.cogs)}</td>
+            <td class="text-right" style="color:${t.gross_profit >= 0 ? 'var(--accent)' : 'var(--danger)'}">${fmt(t.gross_profit)}</td>
+            <td class="text-right">${fmt(t.operating_expenses)}</td>
+            <td class="text-right" style="color:${t.net_profit >= 0 ? 'var(--accent)' : 'var(--danger)'}">${t.net_profit >= 0 ? '' : '-'}${fmt(Math.abs(t.net_profit))}${t.net_profit >= 0 ? '' : ' (loss)'}</td>
+            <td class="text-right">${fmt(t.receipts)}</td>
+        </tr>
+    `;
+
+    const best = data.months.reduce((b, m) => (m.net_profit > (b ? b.net_profit : -Infinity) ? m : b), null);
+    const worst = data.months.reduce((w, m) => (m.net_profit < (w ? w.net_profit : Infinity) ? m : w), null);
+
+    section.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <h3 style="margin:0">📅 Month-by-Month Comparison</h3>
+            <button class="btn btn-info btn-sm" onclick="printProfitLossMonthly()">🖨 Print Comparison</button>
+        </div>
+        <div class="filter-bar" style="margin-bottom:10px">
+            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plmFrom" placeholder="2083-01-01" value="${data.from_date}"></div>
+            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plmTo" placeholder="2083-12-32" value="${data.to_date}"></div>
+            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLossMonthly()">Show</button></div>
+            <div class="form-group"><label>&nbsp;</label>
+                <button class="btn btn-secondary btn-sm" onclick="setProfitLossMonthlyRange('this_year')">This BS Year</button>
+                <button class="btn btn-secondary btn-sm" onclick="setProfitLossMonthlyRange('last_6')">Last 6 Months</button>
+                <button class="btn btn-secondary btn-sm" onclick="setProfitLossMonthlyRange('all')">All Time</button>
+            </div>
+        </div>
+        ${data.months.length === 0 ? `
+            <div style="text-align:center;padding:24px;color:var(--text-light);background:var(--bg);border-radius:var(--radius-sm)">
+                No transactions found between ${data.from_date} and ${data.to_date}.
+            </div>
+        ` : `
+        <div class="card" style="overflow-x:auto">
+            <table>
+                <thead><tr>${headCells}</tr></thead>
+                <tbody>${rows}${totalRow}</tbody>
+            </table>
+        </div>
+        <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--text-light);flex-wrap:wrap">
+            ${best && best !== worst ? `<span>📈 Best month: <strong>${best.label}</strong> (net ${fmt(best.net_profit)})</span>
+            <span>📉 Weakest month: <strong>${worst.label}</strong> (net ${fmt(worst.net_profit)})</span>` : ''}
+            <span>ℹ️ Cash Collected is cash-flow reference only — collections are against the same sales, not extra income.</span>
+        </div>
+        `}
+    `;
+}
+
+function profitLossMonthlyPreset(kind) {
+    const today = getDatePreset('today');
+    if (kind === 'this_year') return { from: `${String(today.from).slice(0, 4)}-01-01`, to: today.to };
+    if (kind === 'last_6') {
+        // Go back 5 months from the current BS month, clamped to day 01
+        const [y, m] = String(today.from).slice(0, 7).split('-').map(Number);
+        let yy = y, mm = m - 5;
+        while (mm < 1) { mm += 12; yy -= 1; }
+        return { from: `${yy}-${String(mm).padStart(2, '0')}-01`, to: today.to };
+    }
+    return { from: '0001-01-01', to: '9999-12-32' };
+}
+
+function setProfitLossMonthlyRange(kind) {
+    const p = profitLossMonthlyPreset(kind);
+    const fromEl = document.getElementById('plmFrom');
+    const toEl = document.getElementById('plmTo');
+    if (fromEl) fromEl.value = p.from;
+    if (toEl) toEl.value = p.to;
+    applyProfitLossMonthly();
+}
+
+async function applyProfitLossMonthly() {
+    const from = (document.getElementById('plmFrom')?.value || '').trim();
+    const to = (document.getElementById('plmTo')?.value || '').trim();
+    const bsDateRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (!bsDateRe.test(from) || !bsDateRe.test(to)) { showToast('Enter both dates as BS dates (YYYY-MM-DD)', 'warning'); return; }
+    if (from > to) { showToast('From date must be on or before To date', 'warning'); return; }
+    const result = await window.api.getProfitLossByMonth({ from_date: from, to_date: to });
+    if (result.success) renderProfitLossMonthly(result.data);
+    else showToast(result.error || 'Failed to load', 'error');
+}
+
+async function printProfitLossMonthly() {
+    const data = _finLastData.plMonthly;
+    if (!data || !data.months.length) { showToast('Show the monthly comparison first', 'warning'); return; }
+    const settings = await getSettingsCached();
+    const fmt = formatCurrency;
+    const head = ['BS Month', 'Sales', 'Other Income', 'COGS', 'Gross Profit', 'Operating', 'Net Profit', 'Cash Collected']
+        .map((h, i) => `<th${i > 0 ? ' class="text-right"' : ''}>${h}</th>`).join('');
+    const rowHtml = (cells, style = '') => `<tr style="${style}">` +
+        cells.map((c, i) => (i === 0 ? `<td>${c}</td>` : `<td class="text-right">${c}</td>`)).join('') + '</tr>';
+    const body = data.months.map(m => rowHtml([
+        m.label, fmt(m.sales), fmt(m.other_income), fmt(m.cogs),
+        fmt(m.gross_profit), fmt(m.operating_expenses),
+        fmt(m.net_profit), fmt(m.receipts)
+    ])).join('');
+    const t = data.totals;
+    const total = rowHtml([
+        'TOTAL', fmt(t.sales), fmt(t.other_income), fmt(t.cogs),
+        fmt(t.gross_profit), fmt(t.operating_expenses),
+        fmt(t.net_profit), fmt(t.receipts)
+    ], 'font-weight:700;background:#f5f5f5');
+    const html = `
+        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Profit & Loss — Month-by-Month Comparison</h2><p>Period: ${data.from_date} to ${data.to_date} (Bikram Sambat)</p></div>
+        <table>
+            <thead><tr>${head}</tr></thead>
+            <tbody>${body}${total}</tbody>
+        </table>
+        <p style="margin-top:12px;font-size:11px;color:#666">Accrual basis: income = sales (+ other income); COGS = purchases + milk collections; operating = salary + other expenses + petty cash + vehicle. Cash Collected shown for cash-flow reference only.</p>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
     printHTML(html);
@@ -1062,6 +1219,10 @@ window.renderFinancialReports = renderFinancialReports;
 window.showProfitLoss = showProfitLoss;
 window.applyProfitLoss = applyProfitLoss;
 window.printProfitLoss = printProfitLoss;
+window.loadProfitLossMonthly = loadProfitLossMonthly;
+window.applyProfitLossMonthly = applyProfitLossMonthly;
+window.setProfitLossMonthlyRange = setProfitLossMonthlyRange;
+window.printProfitLossMonthly = printProfitLossMonthly;
 window.showReceivablePayable = showReceivablePayable;
 window.printReceivablePayable = printReceivablePayable;
 window.showStockStatement = showStockStatement;

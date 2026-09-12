@@ -136,6 +136,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getSalesRegister: (opts) => apiPost('/reports/sales-register', opts || {}),
         getPurchaseRegister: (opts) => apiPost('/reports/purchase-register', opts || {}),
         getProfitLoss: (opts) => apiPost('/reports/profit-loss', opts || {}),
+        getProfitLossByMonth: (opts) => apiPost('/reports/profit-loss-by-month', opts || {}),
         getStockStatement: (opts) => apiPost('/reports/stock-statement', opts || {}),
         getEnhancedDaybook: (opts) => apiPost('/reports/enhanced-daybook', opts || {}),
         getTodaySummary: () => apiPost('/reports/today-summary'),

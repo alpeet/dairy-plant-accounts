@@ -34,6 +34,28 @@ window.api = {
     if (opts.from_date === '2083-05-01') return { success: true, data: thisMonth };
     return { success: true, data: lastMonth };
   },
+  getProfitLossByMonth: async (opts) => {
+    window.__lastMonthlyQuery = opts;
+    const allMonths = [
+        { ym: '2083-03', label: '2083-03 (Ashadh)', sales: 1173723, sales_count: 339, other_income: 0, total_income: 1173723, cogs: 1246319, gross_profit: -72596, operating_expenses: 28415, total_expenses: 1274734, net_profit: -101010, receipts: 475140, receipts_count: 206 },
+        { ym: '2083-04', label: '2083-04 (Shrawan)', sales: 1219802, sales_count: 551, other_income: 0, total_income: 1219802, cogs: 1672897, gross_profit: -453094, operating_expenses: 97345, total_expenses: 1770242, net_profit: -550439, receipts: 1072160, receipts_count: 369 },
+        { ym: '2083-05', label: '2083-05 (Bhadra)', sales: 1028099, sales_count: 464, other_income: 0, total_income: 1028099, cogs: 0, gross_profit: 1028099, operating_expenses: 350185, total_expenses: 350185, net_profit: 677914, receipts: 1004580, receipts_count: 309 }
+    ];
+    const months = allMonths.filter(m => m.ym >= String(opts.from_date || '').slice(0, 7) && m.ym <= String(opts.to_date || '').slice(0, 7));
+    const sum = (k) => Math.round(months.reduce((s, m) => s + m[k], 0) * 100) / 100;
+    return { success: true, data: {
+      from_date: opts.from_date, to_date: opts.to_date,
+      months,
+      totals: {
+        sales: sum('sales'), sales_count: months.reduce((s, m) => s + m.sales_count, 0),
+        other_income: sum('other_income'), total_income: sum('total_income'),
+        cogs: sum('cogs'), gross_profit: sum('gross_profit'),
+        operating_expenses: sum('operating_expenses'), total_expenses: sum('total_expenses'),
+        net_profit: sum('net_profit'), receipts: sum('receipts'),
+        receipts_count: months.reduce((s, m) => s + m.receipts_count, 0)
+      }
+    } };
+  },
   getReceivables: async () => ({ success: true, data: [] }),
   getPayables: async () => ({ success: true, data: [] }),
   getDayBook: async () => ({ success: true, data: { entries: [], from_date: '', to_date: '' } }),

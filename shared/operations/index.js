@@ -83,7 +83,7 @@ const { getTableInfo } = require('./table_info');
 const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
 
 // ── Financial Reports ──
-const { getProfitLoss, getStockStatement, getEnhancedDaybook } = require('./financial_reports');
+const { getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook } = require('./financial_reports');
 
 // ── Cash Deposits ──
 const {
@@ -175,7 +175,7 @@ module.exports = {
     deleteOtherExpense, getExpenseCategories, getExpensesSummary,
 
     // Financial Reports
-    getProfitLoss, getStockStatement, getEnhancedDaybook,
+    getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook,
 
     // Cash Deposits
     listCashDeposits, getCashDeposit, saveCashDeposit,
