@@ -70,7 +70,16 @@ function getDashboard(db) {
     ).get();
 
     // ── Quick Profit Snapshot (Today) ──
-    const todayTotalExpenses = (todayPurchases.total || 0) + (todayPettyCash.total || 0) + (todayExpenses.total || 0) + (todayVehicle.total || 0);
+    // Same accrual basis as the P&L report: sales revenue minus COGS
+    // (purchases + milk collections) and operating costs. Cash receipts
+    // are excluded (they collect against the same sales).
+    const todayMilk = db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM milk_collections WHERE date = ?"
+    ).get(today);
+    const todaySalary = db.prepare(
+        "SELECT COALESCE(SUM(net_salary), 0) as total FROM salary_records WHERE payment_date = ?"
+    ).get(today);
+    const todayTotalExpenses = (todayPurchases.total || 0) + (todayMilk.total || 0) + (todayPettyCash.total || 0) + (todayExpenses.total || 0) + (todayVehicle.total || 0) + (todaySalary.total || 0);
     const todayProfit = (todaySales.total || 0) - todayTotalExpenses;
 
     // ── Stock Summary ──
@@ -135,7 +144,8 @@ function getDashboard(db) {
         profitSnapshot: {
             total_income: todaySales.total || 0,
             total_expenses: todayTotalExpenses,
-            net_profit: todayProfit
+            net_profit: todayProfit,
+            total_receipts: todayCashReceipts.total || 0
         },
         // Stock
         stockSummary: {

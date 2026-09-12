@@ -10,16 +10,23 @@ let _finLastData = {};
 // ============================================================
 // Profit & Loss Statement
 // ============================================================
-async function showProfitLoss() {
+async function showProfitLoss(preloadedData = null) {
     const container = document.getElementById('page-profit-loss');
-    const preset = getDatePreset('this_month');
-    const result = await window.api.getProfitLoss({ from_date: preset.from, to_date: preset.to });
-    const data = result.success ? result.data : { 
-        income: { total_sales: 0, total_receipts: 0, total_income: 0 },
-        expenses: { milk_collection: { total: 0 }, purchases: { total: 0 }, other_expenses: { total: 0 }, petty_cash: { total: 0 }, salary: { total: 0 }, vehicle_expenses: { total: 0 }, total_expenses: 0 },
-        gross_profit: 0, net_profit: 0 
-    };
-    _finLastData.profitLoss = data;
+    // Store preloaded data first so the filter bar reflects the range just applied
+    if (preloadedData) _finLastData.profitLoss = preloadedData;
+    const preset = _finLastData.profitLoss
+        ? { from: _finLastData.profitLoss.from_date, to: _finLastData.profitLoss.to_date }
+        : getDatePreset('this_month');
+    let data = preloadedData;
+    if (!data) {
+        const result = await window.api.getProfitLoss({ from_date: preset.from, to_date: preset.to });
+        data = result.success ? result.data : { 
+            income: { total_sales: 0, total_receipts: 0, total_other_income: 0, total_income: 0 },
+            expenses: { milk_collection: { total: 0 }, purchases: { total: 0 }, other_expenses: { total: 0 }, petty_cash: { total: 0 }, salary: { total: 0 }, vehicle_expenses: { total: 0 }, total_expenses: 0 },
+            gross_profit: 0, net_profit: 0 
+        };
+        _finLastData.profitLoss = data;
+    }
 
     const isEmpty = data.income.total_income === 0 && data.expenses.total_expenses === 0 && data.sales_count === 0 && data.milk_collection_count === 0;
 
@@ -31,8 +38,8 @@ async function showProfitLoss() {
             </div>
         </div>
         <div class="filter-bar">
-            <div class="form-group"><label>From</label><input type="date" class="form-control" id="plFrom" value="${preset.from}"></div>
-            <div class="form-group"><label>To</label><input type="date" class="form-control" id="plTo" value="${preset.to}"></div>
+            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plFrom" placeholder="2083-05-01" value="${preset.from}"></div>
+            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plTo" placeholder="2083-05-32" value="${preset.to}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLoss()">Generate</button></div>
             <div class="form-group"><label>&nbsp;</label>
                 <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('today');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">Today</button>
@@ -57,12 +64,12 @@ async function showProfitLoss() {
             <div class="summary-card card-success" style="margin:0;padding:12px">
                 <span class="label">💰 Total Income</span>
                 <span class="value" style="font-size:20px">${formatCurrency(data.income.total_income)}</span>
-                <span class="sub">Sales (${formatCurrency(data.income.total_sales)}) + Receipts (${formatCurrency(data.income.total_receipts)})</span>
+                <span class="sub">Sales ${formatCurrency(data.income.total_sales)}${data.income.total_other_income ? ' + Other Income ' + formatCurrency(data.income.total_other_income) : ''}</span>
             </div>
             <div class="summary-card card-danger" style="margin:0;padding:12px">
                 <span class="label">📉 Total Expenses</span>
                 <span class="value" style="font-size:20px">${formatCurrency(data.expenses.total_expenses)}</span>
-                <span class="sub">All operational costs</span>
+                <span class="sub">COGS ${formatCurrency(data.cogs || 0)} + Operating ${formatCurrency(data.operating_expenses || 0)}</span>
             </div>
             <div class="summary-card ${data.net_profit >= 0 ? 'card-primary' : 'card-danger'}" style="margin:0;padding:12px">
                 <span class="label">${data.net_profit >= 0 ? '📈 Net Profit' : '📉 Net Loss'}</span>
@@ -77,7 +84,7 @@ async function showProfitLoss() {
                     <thead><tr><th>Source</th><th class="text-right">Amount</th></tr></thead>
                     <tbody>
                         <tr><td>Sales (${data.sales_count || 0} invoices)</td><td class="text-right" style="color:var(--accent);font-weight:600">${formatCurrency(data.income.total_sales)}</td></tr>
-                        <tr><td>Cash Receipts</td><td class="text-right" style="color:var(--accent)">${formatCurrency(data.income.total_receipts)}</td></tr>
+                        ${data.income.total_other_income ? `<tr><td>Other Income</td><td class="text-right" style="color:var(--accent)">${formatCurrency(data.income.total_other_income)}</td></tr>` : ''}
                         <tr style="background:var(--bg);font-weight:700"><td>Total Income</td><td class="text-right">${formatCurrency(data.income.total_income)}</td></tr>
                     </tbody>
                 </table>
@@ -89,10 +96,12 @@ async function showProfitLoss() {
                     <tbody>
                         <tr><td>🥛 Milk Collection (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(data.expenses.milk_collection.total)}</td></tr>
                         <tr><td>📦 Purchases</td><td class="text-right">${formatCurrency(data.expenses.purchases.total)}</td></tr>
+                        <tr style="background:var(--bg);font-weight:600"><td>Cost of Goods Sold</td><td class="text-right">${formatCurrency(data.cogs || 0)}</td></tr>
+                        <tr><td>👷 Salary</td><td class="text-right">${formatCurrency(data.expenses.salary.total)}</td></tr>
                         <tr><td>📋 Other Expenses</td><td class="text-right">${formatCurrency(data.expenses.other_expenses.total)}</td></tr>
                         <tr><td>💰 Petty Cash</td><td class="text-right">${formatCurrency(data.expenses.petty_cash.total)}</td></tr>
-                        <tr><td>👷 Salary</td><td class="text-right">${formatCurrency(data.expenses.salary.total)}</td></tr>
                         <tr><td>🚛 Vehicle Expenses</td><td class="text-right">${formatCurrency(data.expenses.vehicle_expenses.total)}</td></tr>
+                        <tr style="background:var(--bg);font-weight:600"><td>Operating Expenses</td><td class="text-right">${formatCurrency(data.operating_expenses || 0)}</td></tr>
                         <tr style="background:var(--bg);font-weight:700"><td>Total Expenses</td><td class="text-right">${formatCurrency(data.expenses.total_expenses)}</td></tr>
                     </tbody>
                 </table>
@@ -103,6 +112,12 @@ async function showProfitLoss() {
                 ${data.net_profit >= 0 ? '✅ NET PROFIT: ' : '❌ NET LOSS: '} ${formatCurrency(Math.abs(data.net_profit))}
             </span>
             <span style="display:block;font-size:13px;margin-top:4px;opacity:0.8">
+                Sales ${formatCurrency(data.income.total_sales)} − COGS ${formatCurrency(data.cogs || 0)} = Gross ${formatCurrency(data.gross_profit)} − Operating ${formatCurrency(data.operating_expenses || 0)} = Net ${formatCurrency(data.net_profit)}
+            </span>
+            <span style="display:block;font-size:12px;margin-top:6px;opacity:0.7">
+                Cash collected in period: ${formatCurrency(data.income.total_receipts)} (shown for cash-flow reference; collections are against the same sales, not extra income)
+            </span>
+            <span style="display:block;font-size:13px;margin-top:4px;opacity:0.8">
                 Period: ${data.from_date || preset.from} to ${data.to_date || preset.to}
             </span>
         </div>
@@ -111,25 +126,55 @@ async function showProfitLoss() {
 }
 
 async function applyProfitLoss() {
-    const from = document.getElementById('plFrom')?.value || '';
-    const to = document.getElementById('plTo')?.value || '';
+    const from = (document.getElementById('plFrom')?.value || '').trim();
+    const to = (document.getElementById('plTo')?.value || '').trim();
+    const bsDateRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (!bsDateRe.test(from) || !bsDateRe.test(to)) { showToast('Enter both dates as BS dates (YYYY-MM-DD)', 'warning'); return; }
+    if (from > to) { showToast('From date must be on or before To date', 'warning'); return; }
     const result = await window.api.getProfitLoss({ from_date: from, to_date: to });
-    if (result.success) _finLastData.profitLoss = result.data;
-    else showToast(result.error || 'Failed to load', 'error');
-    showProfitLoss();
+    if (result.success) {
+        await showProfitLoss(result.data);
+    } else {
+        showToast(result.error || 'Failed to load', 'error');
+    }
 }
 
 async function printProfitLoss() {
     const data = _finLastData.profitLoss;
     if (!data) { showToast('Generate report first', 'warning'); return; }
     const settings = await getSettingsCached();
+    const exp = data.expenses;
     const html = `
         <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Profit & Loss Statement</h2><p>Period: ${data.from_date} to ${data.to_date}</p></div>
         <div class="value-cards">
             <div class="value-card"><div class="value-label">Total Income</div><div class="value-number">${formatCurrency(data.income.total_income)}</div></div>
             <div class="value-card" style="border-color:var(--danger)"><div class="value-label">Total Expenses</div><div class="value-number">${formatCurrency(data.expenses.total_expenses)}</div></div>
+            <div class="value-card" style="border-color:var(--accent)"><div class="value-label">Gross Profit</div><div class="value-number">${formatCurrency(data.gross_profit)}</div></div>
             <div class="value-card" style="border-color:${data.net_profit >= 0 ? 'var(--accent)' : 'var(--danger)'}"><div class="value-label">${data.net_profit >= 0 ? 'Net Profit' : 'Net Loss'}</div><div class="value-number">${formatCurrency(Math.abs(data.net_profit))}</div></div>
         </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
+            <table>
+                <thead><tr><th>Income</th><th class="text-right">Amount</th></tr></thead>
+                <tbody>
+                    <tr><td>Sales (${data.sales_count || 0} invoices)</td><td class="text-right">${formatCurrency(data.income.total_sales)}</td></tr>
+                    ${data.income.total_other_income ? `<tr><td>Other Income</td><td class="text-right">${formatCurrency(data.income.total_other_income)}</td></tr>` : ''}
+                    <tr style="font-weight:700"><td>Total Income</td><td class="text-right">${formatCurrency(data.income.total_income)}</td></tr>
+                </tbody>
+            </table>
+            <table>
+                <thead><tr><th>Expenses</th><th class="text-right">Amount</th></tr></thead>
+                <tbody>
+                    <tr><td>Milk Collection (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(exp.milk_collection.total)}</td></tr>
+                    <tr><td>Purchases</td><td class="text-right">${formatCurrency(exp.purchases.total)}</td></tr>
+                    <tr><td>Salary</td><td class="text-right">${formatCurrency(exp.salary.total)}</td></tr>
+                    <tr><td>Other Expenses</td><td class="text-right">${formatCurrency(exp.other_expenses.total)}</td></tr>
+                    <tr><td>Petty Cash</td><td class="text-right">${formatCurrency(exp.petty_cash.total)}</td></tr>
+                    <tr><td>Vehicle Expenses</td><td class="text-right">${formatCurrency(exp.vehicle_expenses.total)}</td></tr>
+                    <tr style="font-weight:700"><td>Total Expenses</td><td class="text-right">${formatCurrency(exp.total_expenses)}</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p style="margin-top:12px;font-size:11px;color:#666">Note: Cash collected in period ${formatCurrency(data.income.total_receipts)} — collections are against the same sales invoices, so they are not added to income (accrual basis).</p>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
     printHTML(html);

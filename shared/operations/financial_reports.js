@@ -6,13 +6,24 @@
  */
 
 /**
- * Profit & Loss Statement for a given date range.
- * Calculates total income (sales + receipts) vs total expenses
- * (purchases + other expenses + petty cash + salary + vehicle expenses).
+ * Profit & Loss Statement for a given date range (accrual basis).
+ *
+ * Income  = sales revenue for the period (+ Other Income rows in the
+ *           Expenses register whose category is 'Income').
+ *           Collection receipts are NOT income: they are cash movements
+ *           against the same sales invoices — counting both double-counts.
+ *
+ * Expenses = purchases + milk collections (COGS), plus operating costs
+ *           (salary, other expenses, petty cash, vehicle). Cash payments to
+ *           suppliers are NOT expenses: they settle purchase liabilities
+ *           already counted when the purchase was booked.
+ *
+ * Gross profit  = sales − COGS (purchases + milk collections)
+ * Net profit    = total income − total expenses
  *
  * @param {object} db - better-sqlite3 database instance
  * @param {object} opts - { from_date, to_date }
- * @returns {object} { income, expenses, income_breakdown, expense_breakdown, gross_profit, net_profit }
+ * @returns {object} { income, expenses, gross_profit, net_profit, ... }
  */
 function getProfitLoss(db, { from_date, to_date } = {}) {
     const from = from_date || new Date().toISOString().split('T')[0];
@@ -28,7 +39,8 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         FROM sales WHERE date >= ? AND date <= ?
     `).get(from, to);
 
-    // Cash receipts from payments (receipts not tied to sales)
+    // Cash receipts from payments — reference only (cash flow), NOT income:
+    // these collect against the same sales invoices counted below.
     const totalReceipts = db.prepare(`
         SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
         FROM payments
@@ -76,34 +88,49 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         FROM vehicle_expenses WHERE date >= ? AND date <= ?
     `).get(from, to);
 
-    // Cash payments made (to suppliers/farmers)
+    // Cash payments made (to suppliers/farmers) — reference only (cash flow),
+    // NOT P&L expense: purchases are already expensed at invoice value.
     const totalCashPayments = db.prepare(`
         SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
         FROM payments
         WHERE date >= ? AND date <= ? AND type = 'payment'
     `).get(from, to);
 
+    // Other income rows (category 'Income' in the Expenses register)
+    const totalOtherIncome = db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM other_expenses
+        WHERE date >= ? AND date <= ? AND category = 'Income'
+    `).get(from, to);
+
     // ── Build income breakdown ──
+    // Receipts are shown for reference (cash flow) but excluded from income —
+    // they collect against the sales already counted above.
     const income = {
         total_sales: totalSales.total,
         total_receipts: totalReceipts.total,
-        total_income: totalSales.total + totalReceipts.total
+        total_other_income: totalOtherIncome.total,
+        total_income: totalSales.total + totalOtherIncome.total
     };
 
-    // Build expense breakdown
+    // Build expense breakdown (cash payments to suppliers are cash flow,
+    // not P&L expense — purchases are already counted at invoice value)
     const expenses = {
         milk_collection: { total: totalMilkCost.total, count: totalMilkCost.count },
         purchases: { total: totalPurchases.total, count: totalPurchases.count },
-        other_expenses: { total: totalOtherExpenses.total, count: totalOtherExpenses.count },
+        other_expenses: { total: totalOtherExpenses.total - totalOtherIncome.total, count: totalOtherExpenses.count - totalOtherIncome.count },
         petty_cash: { total: totalPettyCash.total, count: totalPettyCash.count },
         salary: { total: totalSalary.total, count: totalSalary.count },
         vehicle_expenses: { total: totalVehicle.total, count: totalVehicle.count },
         cash_payments: { total: totalCashPayments.total, count: totalCashPayments.count },
-        total_expenses: totalMilkCost.total + totalPurchases.total + totalOtherExpenses.total +
+        total_expenses: totalMilkCost.total + totalPurchases.total +
+                       (totalOtherExpenses.total - totalOtherIncome.total) +
                        totalPettyCash.total + totalSalary.total + totalVehicle.total
     };
 
-    const grossProfit = income.total_sales - (expenses.milk_collection.total || 0) - (expenses.purchases.total || 0);
+    const cogs = (expenses.milk_collection.total || 0) + (expenses.purchases.total || 0);
+    const operatingExpenses = expenses.total_expenses - cogs;
+    const grossProfit = income.total_sales - cogs;
     const netProfit = income.total_income - expenses.total_expenses;
 
     return {
@@ -111,6 +138,8 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         to_date: to,
         income,
         expenses,
+        cogs,
+        operating_expenses: operatingExpenses,
         gross_profit: grossProfit,
         net_profit: netProfit,
         sales_count: totalSales.count,
