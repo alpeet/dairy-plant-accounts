@@ -127,6 +127,10 @@ async function renderSettings() {
                             <input type="text" class="form-control" name="smtp_from_name" value="${escapeHtml(settings.smtp_from_name || settings.business_name || '')}" placeholder="${escapeHtml(settings.business_name || 'Your Business')}">
                         </div>
                     </div>
+                    <div style="margin:4px 0 8px">
+                        <button type="button" class="btn btn-info btn-sm" onclick="showTestEmailDialog()">📮 Send Test Email</button>
+                        <span style="font-size:12px;color:var(--text-light)"> — saves the settings above, then sends a test message to confirm the credentials work</span>
+                    </div>
 
                     <div style="border-top:1px solid var(--border);margin:18px 0 12px;padding-top:14px">
                         <h3 style="font-size:14px;margin:0 0 4px">✍️ Authorized Signature — printed on tax invoices</h3>
@@ -561,6 +565,82 @@ function toggleSignatureRemove(checkbox) {
     window._pendingSignature = null;
 }
 
+// ============================================================
+// SMTP Test Email (Settings → Email (SMTP))
+// ============================================================
+
+function showTestEmailDialog() {
+    const form = document.getElementById('settingsForm');
+    if (!form) return;
+    const fd = new FormData(form);
+    const host = (fd.get('smtp_host') || '').trim();
+    if (!host) {
+        showToast('Enter your SMTP Host (and credentials) first, then send a test email', 'warning');
+        return;
+    }
+    const suggested = (fd.get('smtp_from') || fd.get('smtp_user') || '').trim();
+
+    showModal(`
+        <div class="modal-header">
+            <h2>📮 Send Test Email</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="emailTestForm">
+                <div class="form-group">
+                    <label>Send the test email to</label>
+                    <input type="email" class="form-control" name="to" value="${escapeHtml(suggested)}" placeholder="you@gmail.com">
+                </div>
+                <p style="font-size:12px;color:var(--text-light)">Your current SMTP settings are saved first, then a test message is sent. If it arrives, statements and invoice emails will work too.</p>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="sendTestEmail()">📤 Send Test</button>
+        </div>
+    `);
+}
+
+async function sendTestEmail() {
+    const form = document.getElementById('emailTestForm');
+    if (!form) return;
+    const to = (new FormData(form).get('to') || '').trim();
+    if (!to) { showToast('Enter the recipient email address', 'error'); return; }
+
+    // Save the on-screen settings first so the send uses exactly what's configured
+    const saveResult = await saveSettings();
+    if (!saveResult || !saveResult.success) {
+        showToast('Fix the settings save error above before sending a test email', 'error');
+        return;
+    }
+    const settings = await getSettingsCached();
+    const business = settings.business_name || 'Prarambha Account & Stock Management';
+    const fd = new FormData(document.getElementById('settingsForm'));
+    const host = (fd.get('smtp_host') || '').trim();
+    const port = (fd.get('smtp_port') || '587').trim();
+
+    const html = `
+        <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;border:1px solid #ccc;border-radius:8px;padding:20px;color:#111">
+            <h2 style="margin:0 0 6px">✅ SMTP Test Email</h2>
+            <p>This is a test email from <strong>${escapeHtml(business)}</strong>.</p>
+            <p>If you received this, your SMTP settings (host <code>${escapeHtml(host)}</code>, port <code>${escapeHtml(port)}</code>) are working — party statements and invoice emails will be sent successfully.</p>
+            <p style="color:#666;font-size:12px">Sent ${new Date().toLocaleString()}</p>
+        </div>
+    `;
+
+    const sendBtn = document.querySelector('#modalContent button.btn-primary');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '⏳ Sending...'; }
+
+    const result = await window.api.sendEmail({ to, subject: `SMTP Test — ${business}`, html });
+    if (result && result.success) {
+        showToast(`✅ Test email sent to ${to} — check the inbox (and spam folder)`, 'success');
+        closeModal();
+    } else {
+        showToast(`Test failed: ${result?.error || 'Unknown error'} — check host, port, user and App Password`, 'error');
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '📤 Send Test'; }
+    }
+}
+
 async function saveSettings() {
     const form = document.getElementById('settingsForm');
     if (!form) return;
@@ -588,6 +668,7 @@ async function saveSettings() {
     } else {
         showToast(`Error saving settings: ${result.error}`, 'error');
     }
+    return result;
 }
 
 // ============================================================
@@ -1277,6 +1358,8 @@ function showImportSummary(data, el) {
 window.saveSettings = saveSettings;
 window.handleSignatureFileSelect = handleSignatureFileSelect;
 window.toggleSignatureRemove = toggleSignatureRemove;
+window.showTestEmailDialog = showTestEmailDialog;
+window.sendTestEmail = sendTestEmail;
 window.backupDatabase = backupDatabase;
 window.showDbPath = showDbPath;
 window.loadUsersList = loadUsersList;
