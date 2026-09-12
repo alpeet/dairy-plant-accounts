@@ -127,6 +127,38 @@ async function renderSettings() {
                             <input type="text" class="form-control" name="smtp_from_name" value="${escapeHtml(settings.smtp_from_name || settings.business_name || '')}" placeholder="${escapeHtml(settings.business_name || 'Your Business')}">
                         </div>
                     </div>
+
+                    <div style="border-top:1px solid var(--border);margin:18px 0 12px;padding-top:14px">
+                        <h3 style="font-size:14px;margin:0 0 4px">✍️ Authorized Signature — printed on tax invoices</h3>
+                        <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                            Upload a signature image (PNG/JPG, scanned signature works best). It is automatically resized and appears above the "Authorized Signature" line on invoices. Leave the image empty to print the line only.
+                        </p>
+                        <div id="sigPreviewWrap" style="margin-bottom:10px">
+                            ${settings.signature_image ? `
+                                <img id="sigPreview" src="${settings.signature_image}" alt="Signature" style="max-height:70px;max-width:240px;border:1px dashed var(--border);border-radius:4px;padding:4px;background:#fff">
+                            ` : `
+                                <div id="sigPreview" style="height:46px;width:240px;border:1px dashed var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-light);font-size:12px;background:#fff">No signature image uploaded</div>
+                            `}
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex:1">
+                                <label>Signature Image (PNG / JPG)</label>
+                                <input type="file" class="form-control" id="signatureFile" accept="image/png,image/jpeg" onchange="handleSignatureFileSelect(this)">
+                                <div style="margin-top:4px">
+                                    <label style="font-weight:400;font-size:12px">
+                                        <input type="checkbox" id="sigRemove" onchange="toggleSignatureRemove(this)">
+                                        Remove saved signature image
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:1">
+                                <label>Signatory Name (printed below the signature)</label>
+                                <input type="text" class="form-control" name="signature_name" value="${escapeHtml(settings.signature_name || '')}" placeholder="e.g. Ram Bahadur Shrestha">
+                                <label style="margin-top:8px">Signatory Title (optional)</label>
+                                <input type="text" class="form-control" name="signature_title" value="${escapeHtml(settings.signature_title || '')}" placeholder="e.g. Proprietor / Manager">
+                            </div>
+                        </div>
+                    </div>
                 </form>
                 <div class="btn-group" style="margin-top:16px">
                     <button class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
@@ -465,6 +497,70 @@ async function changePassword(event) {
 // Business Settings Functions
 // ============================================================
 
+// ============================================================
+// Authorized Signature (Settings → printed on invoices)
+// ============================================================
+
+// Called from the file input: resize the chosen image to a small data URL
+// (max ~300×110 px, JPEG/PNG) so it fits comfortably in the settings store.
+function handleSignatureFileSelect(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg)$/.test(file.type)) {
+        showToast('Please choose a PNG or JPG image', 'error');
+        input.value = '';
+        return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+        showToast('Image too large (max 5 MB)', 'error');
+        input.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        const img = new Image();
+        img.onload = function () {
+            const MAX_W = 300, MAX_H = 110;
+            let w = img.width, h = img.height;
+            if (w > MAX_W || h > MAX_H) {
+                const scale = Math.min(MAX_W / w, MAX_H / h);
+                w = Math.round(w * scale);
+                h = Math.round(h * scale);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            // Prefer JPEG on white (smaller); keep PNG transparency if the source has any
+            const hasAlpha = file.type === 'image/png';
+            if (!hasAlpha) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
+            ctx.drawImage(img, 0, 0, w, h);
+            const dataUrl = hasAlpha
+                ? canvas.toDataURL('image/png')
+                : canvas.toDataURL('image/jpeg', 0.85);
+            window._pendingSignature = dataUrl;
+            document.getElementById('sigRemove').checked = false;
+            const preview = document.getElementById('sigPreview');
+            preview.outerHTML = `<img id="sigPreview" src="${dataUrl}" alt="Signature" style="max-height:70px;max-width:240px;border:1px dashed var(--border);border-radius:4px;padding:4px;background:#fff">`;
+            showToast('Signature image ready — click Save Settings to apply');
+        };
+        img.onerror = function () {
+            showToast('Could not read that image file', 'error');
+            input.value = '';
+        };
+        img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+function toggleSignatureRemove(checkbox) {
+    if (!checkbox.checked) return;
+    const preview = document.getElementById('sigPreview');
+    if (preview) {
+        preview.outerHTML = `<div id="sigPreview" style="height:46px;width:240px;border:1px dashed var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-light);font-size:12px;background:#fff">Signature will be removed on save</div>`;
+    }
+    window._pendingSignature = null;
+}
+
 async function saveSettings() {
     const form = document.getElementById('settingsForm');
     if (!form) return;
@@ -476,6 +572,14 @@ async function saveSettings() {
     }
     if (!settings.allow_negative_stock) settings.allow_negative_stock = '0';
     if (!settings.smtp_secure) settings.smtp_secure = '0';
+
+    // Signature image: picked file wins; otherwise honour the remove checkbox
+    if (window._pendingSignature) {
+        settings.signature_image = window._pendingSignature;
+    } else if (document.getElementById('sigRemove')?.checked) {
+        settings.signature_image = '';
+    }
+    window._pendingSignature = null;
 
     const result = await window.api.saveSettings(settings);
     if (result.success) {
@@ -1171,6 +1275,8 @@ function showImportSummary(data, el) {
 
 // Globals
 window.saveSettings = saveSettings;
+window.handleSignatureFileSelect = handleSignatureFileSelect;
+window.toggleSignatureRemove = toggleSignatureRemove;
 window.backupDatabase = backupDatabase;
 window.showDbPath = showDbPath;
 window.loadUsersList = loadUsersList;

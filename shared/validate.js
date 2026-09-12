@@ -379,8 +379,11 @@ function validateSettings(data) {
         if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
             return `Setting '${key}' has an invalid value type`;
         }
-        if (typeof value === 'string' && value.length > 1000) {
-            return `Setting '${key}' value is too long (max 1000 characters)`;
+        // Signature images are stored as base64 data URLs — allow a larger cap for those
+        const isSignatureImage = key.startsWith('signature_') && typeof value === 'string' && value.startsWith('data:image/');
+        const maxLen = isSignatureImage ? 300000 : 1000;
+        if (typeof value === 'string' && value.length > maxLen) {
+            return `Setting '${key}' value is too long (max ${maxLen} characters)`;
         }
     }
     return null;

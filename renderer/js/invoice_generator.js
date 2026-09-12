@@ -16,6 +16,31 @@ let invoiceBuilderState = {
     lastSavedInvoiceNo: null
 };
 
+// Shared signature block: image (if configured) above the "Authorized Signature" line,
+// with signatory name/title beneath. Used by preview, print and email.
+// opts.cid: when set, the image is referenced as <img src="cid:..."> (for emails —
+// Gmail strips data: URIs, so the image travels as an inline attachment instead).
+function buildSignatureBlockHtml(settings, opts = {}) {
+    const imgSrc = opts.cid ? `cid:${opts.cid}` : (settings.signature_image || '');
+    const img = settings.signature_image
+        ? `<img src="${imgSrc}" alt="Authorized Signature" style="max-height:56px;max-width:180px;display:block;margin:0 auto 2px;object-fit:contain">`
+        : '<div style="height:40px"></div>';
+    const name = settings.signature_name
+        ? `<div style="font-weight:600;font-size:12px">${escapeHtml(settings.signature_name)}</div>`
+        : '';
+    const title = settings.signature_title
+        ? `<div style="font-size:11px;color:#444">${escapeHtml(settings.signature_title)}</div>`
+        : '';
+    return `
+        <div style="min-width:160px;text-align:center;${opts.extra || ''}">
+            ${img}
+            <div style="border-top:1px solid #111;padding-top:2px">Authorized Signature</div>
+            ${name}
+            ${title}
+        </div>
+    `;
+}
+
 async function renderInvoiceGenerator() {
     const container = document.getElementById('page-invoice-generator');
     document.getElementById('topActions').innerHTML = '';
@@ -124,8 +149,10 @@ async function renderInvoiceGenerator() {
                 <div class="btn-group" style="margin-top:12px">
                     <button class="btn btn-primary" onclick="saveGeneratedInvoice(false)">💾 Save Invoice</button>
                     <button class="btn btn-success" onclick="saveGeneratedInvoice(true)">💾 Save & Print</button>
+                    <button class="btn btn-info" onclick="showEmailInvoiceDialog()">✉️ Email Invoice</button>
                     <button class="btn btn-secondary" onclick="resetInvoiceBuilder()">Clear</button>
                 </div>
+                <p style="font-size:11px;color:var(--text-light);margin-top:6px">✉️ Email Invoice sends the current invoice (with the authorized signature) as a formatted email. The invoice is not saved automatically — save it first for your records.</p>
             </div>
 
             <!-- RIGHT: live preview -->
@@ -306,9 +333,9 @@ function updateInvoicePreview() {
             <div style="font-size:12px;margin-top:10px">
                 <strong>Amount in Words:</strong> ${typeof numberToWords === 'function' ? escapeHtml(numberToWords(Math.round(grand))) : ''} rupees only
             </div>
-            <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:12px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:26px;font-size:12px">
                 <div>Terms: Goods once sold not returnable. Payment due within 15 days.</div>
-                <div style="border-top:1px solid #111;padding-top:2px;min-width:140px;text-align:center">Authorized Signature</div>
+                ${buildSignatureBlockHtml(settings)}
             </div>
         </div>
     `;
@@ -366,7 +393,7 @@ function buildInvoicePrintHtml() {
         <p><strong>Amount in Words:</strong> ${typeof numberToWords === 'function' ? escapeHtml(numberToWords(Math.round(grand))) : ''} rupees only</p>
         <div class="footer">
             <div>Terms: Goods once sold not returnable. Payment due within 15 days.</div>
-            <div class="signature">Authorized Signature</div>
+            ${buildSignatureBlockHtml(settings)}
         </div>
     `;
 }
@@ -436,6 +463,175 @@ function resetInvoiceBuilder() {
 
 function printInvoiceBuilder() { printHTML(buildInvoicePrintHtml()); }
 
+// ============================================================
+// Email Invoice — sends the current invoice (with signature) via /api/email/send
+// ============================================================
+async function showEmailInvoiceDialog() {
+    const partySel = document.getElementById('invParty');
+    const partyId = parseInt(partySel?.value || 0);
+    if (!partyId) { showToast('Select a customer first', 'warning'); return; }
+
+    // Pull the party record so we can prefill the recipient email
+    const res = await window.api.getParties({});
+    const parties = res.success ? res.data : [];
+    const party = parties.find(p => p.id === partyId);
+    if (!party) { showToast('Customer not found', 'error'); return; }
+
+    const invNo = document.getElementById('invNo')?.value || '';
+    const settings = await getSettingsCached();
+    const to = (party.email || '').trim();
+    if (!to) {
+        showToast(`No email address on file for ${party.name}. Add one in Parties → Edit.`, 'warning');
+        return;
+    }
+
+    showModal(`
+        <div class="modal-header">
+            <h2>✉️ Email Invoice ${escapeHtml(invNo)} — ${escapeHtml(party.name)}</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="emailInvoiceForm">
+                <div class="form-group">
+                    <label>To (recipient)</label>
+                    <input type="email" class="form-control" name="to" value="${escapeHtml(to)}">
+                </div>
+                <div class="form-group">
+                    <label>Subject</label>
+                    <input type="text" class="form-control" name="subject" value="Tax Invoice ${escapeHtml(invNo)} — ${escapeHtml(settings.business_name || '')}">
+                </div>
+                <div class="form-group">
+                    <label>Message</label>
+                    <textarea class="form-control" name="message" rows="5">Dear ${escapeHtml(party.name)},\n\nPlease find below Tax Invoice ${escapeHtml(invNo)} dated ${document.getElementById('invDate')?.value || ''}.\n\nGrand Total: ${formatCurrency(parseFloat(document.getElementById('invGrandTotal')?.value || 0))}\n\nPlease arrange the payment at your earliest convenience.\n\nRegards,\n${escapeHtml(settings.business_name || '')}</textarea>
+                </div>
+                <p style="font-size:12px;color:var(--text-light)">The full invoice (including the authorized signature) will be included in the email body automatically. Requires SMTP settings under Settings → Email (SMTP).</p>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="sendInvoiceEmail()">📤 Send Email</button>
+        </div>
+    `);
+}
+
+async function sendInvoiceEmail() {
+    const form = document.getElementById('emailInvoiceForm');
+    if (!form) return;
+    const formData = new FormData(form);
+    const to = (formData.get('to') || '').trim();
+    const subject = (formData.get('subject') || '').trim();
+    const message = (formData.get('message') || '').trim();
+
+    if (!to) { showToast('Recipient email is required', 'error'); return; }
+    if (!subject) { showToast('Subject is required', 'error'); return; }
+
+    const settings = await getSettingsCached();
+    const bodyHtml = `<p>${escapeHtml(message).replace(/\n/g, '<br>')}</p><hr>${buildInvoiceEmailHtml(settings, { signatureCid: 'invoice-signature' })}`;
+
+    // Inline signature attachment (cid) so the image renders in Gmail/Outlook
+    const attachments = [];
+    if (settings.signature_image && settings.signature_image.startsWith('data:image/')) {
+        const m = settings.signature_image.match(/^data:image\/(\w+);base64,(.+)$/);
+        if (m) {
+            attachments.push({
+                filename: `signature.${m[1] === 'jpeg' ? 'jpg' : m[1]}`,
+                content: m[2],
+                encoding: 'base64',
+                cid: 'invoice-signature',
+                contentDisposition: 'inline'
+            });
+        }
+    }
+
+    const sendBtn = document.querySelector('#modalContent button.btn-primary');
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '⏳ Sending...'; }
+
+    const result = await window.api.sendEmail({ to, subject, html: bodyHtml, attachments });
+    if (result && result.success) {
+        showToast(`✅ Invoice emailed to ${to}`, 'success');
+        closeModal();
+    } else {
+        showToast(`Email failed: ${result?.error || 'Unknown error'}`, 'error');
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '📤 Send Email'; }
+    }
+}
+
+// Self-contained invoice HTML for email (inline styles only — no print CSS dependency)
+function buildInvoiceEmailHtml(settings, opts = {}) {
+    const sigOpts = opts.signatureCid ? { cid: opts.signatureCid } : {};
+    const partySel = document.getElementById('invParty');
+    const partyName = partySel && partySel.value ? partySel.options[partySel.selectedIndex]?.text.replace(/\s*\(PAN.*\)$/, '') : '';
+    const opt = partySel && partySel.value ? partySel.options[partySel.selectedIndex] : null;
+    const addr = (document.getElementById('invAddr')?.value || '').trim() ||
+        (opt ? (opt.dataset.addr || '') + (opt.dataset.phone ? ' | ' + opt.dataset.phone : '') : '');
+    const invNo = document.getElementById('invNo')?.value || '';
+    const date = document.getElementById('invDate')?.value || '';
+    const items = [];
+    document.querySelectorAll('#saleItemsBody tr').forEach(row => {
+        const sel = row.querySelector('.sale-product-select');
+        const name = sel && sel.value ? sel.options[sel.selectedIndex]?.text : '';
+        const qty = parseFloat(row.querySelector('.sale-qty')?.value || 0);
+        const unit = row.querySelector('.sale-unit')?.value || 'kg';
+        const rate = parseFloat(row.querySelector('.sale-rate')?.value || 0);
+        if (name) items.push({ name, qty, unit, rate, amount: qty * rate });
+    });
+    const { subtotal, grand } = calcInvoiceTotals();
+    const paid = parseFloat(document.getElementById('invPaid')?.value || 0);
+
+    return `
+        <div style="border:1px solid #ccc;border-radius:6px;padding:18px;font-family:'Segoe UI',Helvetica,Arial,sans-serif;color:#111;max-width:640px">
+            <div style="text-align:center;border-bottom:2px solid #111;padding-bottom:10px">
+                <h1 style="margin:0;font-size:20px">${escapeHtml(settings.business_name || 'PRARAMBHA DAIRY SUPPLIERS')}</h1>
+                <div style="font-size:12px">${escapeHtml(settings.business_address || '')}</div>
+                <div style="font-size:12px">Phone: ${escapeHtml(settings.business_phone || '')} | PAN/VAT: ${escapeHtml(settings.business_pan_vat || settings.pan_vat || '152747352')}</div>
+            </div>
+            <div style="text-align:center;margin:10px 0;font-weight:700;letter-spacing:2px">TAX INVOICE</div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px">
+                <div>
+                    <div><strong>Invoice No:</strong> ${escapeHtml(invNo)}</div>
+                    <div><strong>Date:</strong> ${date ? (typeof formatDateNP === 'function' ? formatDateNP(date) : date) : ''}</div>
+                </div>
+                <div style="text-align:right">
+                    <div><strong>Customer:</strong> ${escapeHtml(partyName)}</div>
+                    <div>${escapeHtml(addr)}</div>
+                </div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead><tr style="background:#f0f0f0">
+                    <th style="border:1px solid #ccc;padding:6px;text-align:left">#</th>
+                    <th style="border:1px solid #ccc;padding:6px;text-align:left">Product Name</th>
+                    <th style="border:1px solid #ccc;padding:6px;text-align:right">Quantity</th>
+                    <th style="border:1px solid #ccc;padding:6px;text-align:left">Unit</th>
+                    <th style="border:1px solid #ccc;padding:6px;text-align:right">Rate</th>
+                    <th style="border:1px solid #ccc;padding:6px;text-align:right">Amount</th>
+                </tr></thead>
+                <tbody>
+                    ${items.map((it, i) => `<tr>
+                        <td style="border:1px solid #ccc;padding:6px">${i + 1}</td>
+                        <td style="border:1px solid #ccc;padding:6px">${escapeHtml(it.name)}</td>
+                        <td style="border:1px solid #ccc;padding:6px;text-align:right">${it.qty}</td>
+                        <td style="border:1px solid #ccc;padding:6px">${escapeHtml(it.unit)}</td>
+                        <td style="border:1px solid #ccc;padding:6px;text-align:right">${formatCurrency(it.rate)}</td>
+                        <td style="border:1px solid #ccc;padding:6px;text-align:right">${formatCurrency(it.amount)}</td>
+                    </tr>`).join('')}
+                </tbody>
+                <tfoot>
+                    <tr><td colspan="5" style="border:1px solid #ccc;padding:6px;text-align:right"><strong>Subtotal</strong></td><td style="border:1px solid #ccc;padding:6px;text-align:right">${formatCurrency(subtotal)}</td></tr>
+                    <tr><td colspan="5" style="border:1px solid #ccc;padding:6px;text-align:right"><strong>Grand Total</strong></td><td style="border:1px solid #ccc;padding:6px;text-align:right"><strong>${formatCurrency(grand)}</strong></td></tr>
+                    ${paid > 0 ? `<tr><td colspan="5" style="border:1px solid #ccc;padding:6px;text-align:right">Paid</td><td style="border:1px solid #ccc;padding:6px;text-align:right">${formatCurrency(paid)}</td></tr>` : ''}
+                </tfoot>
+            </table>
+            <div style="font-size:12px;margin-top:10px">
+                <strong>Amount in Words:</strong> ${typeof numberToWords === 'function' ? escapeHtml(numberToWords(Math.round(grand))) : ''} rupees only
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:26px;font-size:12px">
+                <div>Terms: Goods once sold not returnable. Payment due within 15 days.</div>
+                ${buildSignatureBlockHtml(settings, sigOpts)}
+            </div>
+        </div>
+    `;
+}
+
 // Globals
 window.renderInvoiceGenerator = renderInvoiceGenerator;
 window.saveGeneratedInvoice = saveGeneratedInvoice;
@@ -443,3 +639,5 @@ window.resetInvoiceBuilder = resetInvoiceBuilder;
 window.printInvoiceBuilder = printInvoiceBuilder;
 window.calcInvoiceTotals = calcInvoiceTotals;
 window.updateInvoicePreview = updateInvoicePreview;
+window.showEmailInvoiceDialog = showEmailInvoiceDialog;
+window.sendInvoiceEmail = sendInvoiceEmail;
