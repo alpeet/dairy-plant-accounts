@@ -38,8 +38,8 @@ async function showProfitLoss(preloadedData = null) {
             </div>
         </div>
         <div class="filter-bar">
-            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plFrom" placeholder="2083-05-01" value="${preset.from}"></div>
-            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plTo" placeholder="2083-05-32" value="${preset.to}"></div>
+            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plFrom" placeholder="2083-05-01" value="${preset.from}" data-bs-date></div>
+            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plTo" placeholder="2083-05-32" value="${preset.to}" data-bs-date></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLoss()">Generate</button></div>
             <div class="form-group"><label>&nbsp;</label>
                 <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('today');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">Today</button>
@@ -124,7 +124,21 @@ async function showProfitLoss(preloadedData = null) {
         <div id="pl-monthly-section" style="margin-top:20px"></div>
         `}
     `;
+    enhanceProfitLossDateInputs(container);
     loadProfitLossMonthly();
+}
+
+/**
+ * Convert the P&L filter inputs (plFrom/plTo and the monthly comparison's
+ * plmFrom/plmTo) to the same BS date picker used on the Statements page.
+ *
+ * These must remain type="text" (not type="date") because BS month-end values
+ * like 2083-04-32 are invalid AD dates that a native date input would silently
+ * blank — so they are tagged data-bs-date and initialized explicitly.
+ */
+function enhanceProfitLossDateInputs(scope) {
+    if (typeof initBSDateInput !== 'function') return; // nepali-date.js not loaded
+    (scope || document).querySelectorAll('input[data-bs-date]:not([data-bs-initialized="true"])').forEach(initBSDateInput);
 }
 
 async function applyProfitLoss() {
@@ -243,8 +257,8 @@ function renderProfitLossMonthly(data) {
             <button class="btn btn-info btn-sm" onclick="printProfitLossMonthly()">🖨 Print Comparison</button>
         </div>
         <div class="filter-bar" style="margin-bottom:10px">
-            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plmFrom" placeholder="2083-01-01" value="${data.from_date}"></div>
-            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plmTo" placeholder="2083-12-32" value="${data.to_date}"></div>
+            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plmFrom" placeholder="2083-01-01" value="${data.from_date}" data-bs-date></div>
+            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plmTo" placeholder="2083-12-32" value="${data.to_date}" data-bs-date></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLossMonthly()">Show</button></div>
             <div class="form-group"><label>&nbsp;</label>
                 <button class="btn btn-secondary btn-sm" onclick="setProfitLossMonthlyRange('this_year')">This BS Year</button>
@@ -270,6 +284,7 @@ function renderProfitLossMonthly(data) {
         </div>
         `}
     `;
+    enhanceProfitLossDateInputs(section);
 }
 
 function profitLossMonthlyPreset(kind) {
@@ -289,8 +304,9 @@ function setProfitLossMonthlyRange(kind) {
     const p = profitLossMonthlyPreset(kind);
     const fromEl = document.getElementById('plmFrom');
     const toEl = document.getElementById('plmTo');
-    if (fromEl) fromEl.value = p.from;
-    if (toEl) toEl.value = p.to;
+    // setBSDateValue keeps the picker dropdowns in sync with the new value
+    if (fromEl) (typeof setBSDateValue === 'function') ? setBSDateValue(fromEl, p.from) : (fromEl.value = p.from);
+    if (toEl) (typeof setBSDateValue === 'function') ? setBSDateValue(toEl, p.to) : (toEl.value = p.to);
     applyProfitLossMonthly();
 }
 

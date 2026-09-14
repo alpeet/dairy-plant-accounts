@@ -79,12 +79,14 @@ function printHTML(html) { window.__printHTML = html; }
 `;
 
 const fr = fs.readFileSync('renderer/js/financial_reports.js', 'utf8');
+const nd = fs.readFileSync('renderer/js/nepali-date.js', 'utf8');
 
 const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>P&L Harness</title></head>
 <body>
   <div id="page-profit-loss"></div>
   <div id="topActions"></div>
+  <script>${nd}\n</script>
   <script>${apiStub}\n${stubs}\n${fr}\n
   window.__ready = 'ok';\n</script>
 </body></html>`;
