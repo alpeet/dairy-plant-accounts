@@ -17,6 +17,14 @@
 # TO CHANGE ADMIN PASSWORD (more secure):
 #   Go to Render Dashboard → Environment → Set AUTH_PASSWORD to your own value
 #   Then redeploy or restart the service
+#
+# FORGOT YOUR PASSWORD? (recovery hatch)
+#   Set env var ADMIN_RESET_PASSWORD to a new password (6+ chars) in the
+#   Render Dashboard → Environment, then restart the service. On the next boot
+#   the admin password is reset to that value. Log in with it immediately,
+#   then DELETE the env var and restart again to close the hatch.
+#   (The hatch only acts when the env var is explicitly set — there is no
+#   permanent backdoor.)
 
 services:
   - type: web

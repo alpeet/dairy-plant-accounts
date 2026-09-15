@@ -193,6 +193,45 @@ function ensureAdminUser() {
 
 ensureAdminUser();
 
+/**
+ * Guarded admin password recovery hatch.
+ * ─────────────────────────────────────────────
+ * If the ADMIN_RESET_PASSWORD env var is set (e.g. from the Render Dashboard →
+ * Environment), the NEXT server boot resets the admin user's password hash to
+ * that value — a recovery path when the password set at first login is lost.
+ *
+ * Guards:
+ *   • Minimum length 6 (won't act on a placeholder or empty value).
+ *   • Never applies to the local desktop app's setup flow — web server only.
+ *   • The value is consumed once: the app keeps no copy of it anywhere after
+ *     the reset, and the hash stored is scrypt (never plaintext).
+ *   • Afterwards the login behaves like a normal password change: the default
+ *     admin123/env fallback stays disabled and the new password is authoritative.
+ *
+ * To use: set ADMIN_RESET_PASSWORD in the dashboard, restart the service, log
+ * in with it, then DELETE the env var and restart again so the hatch is closed.
+ */
+(function applyAdminPasswordResetHatch() {
+    const resetPassword = process.env.ADMIN_RESET_PASSWORD;
+    if (!resetPassword) return;
+    if (resetPassword.length < 6) {
+        console.warn('  ⚠️ ADMIN_RESET_PASSWORD is set but shorter than 6 chars — ignored.');
+        return;
+    }
+    try {
+        const admin = db.prepare("SELECT id FROM users WHERE username = ?").get(AUTH_USERNAME);
+        if (!admin) {
+            console.warn('  ⚠️ ADMIN_RESET_PASSWORD set but no admin user exists — nothing to reset.');
+            return;
+        }
+        const hashed = auth.hashPassword(resetPassword);
+        db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(hashed, admin.id);
+        console.log(`  🔑 ADMIN_RESET_PASSWORD applied: password for '${AUTH_USERNAME}' has been reset. Log in with the new password now, then remove the env var and restart to close the hatch.`);
+    } catch (err) {
+        console.error('  ⚠️ ADMIN_RESET_PASSWORD reset failed:', err.message);
+    }
+})();
+
 // ──────────────────────────────────────────────────────────────
 // Auto-Import Excel Data on First Run
 // ──────────────────────────────────────────────────────────────
