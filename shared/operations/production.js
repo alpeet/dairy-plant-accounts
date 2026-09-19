@@ -41,8 +41,9 @@ function getProductionBatch(db, id) {
  */
 function saveProductionBatch(db, data) {
     const trx = db.transaction(() => {
-        const { id, batch_no, date, shift, process_type, inputs, outputs,
+        const { batch_no, date, shift, process_type, inputs, outputs,
                 operator_name, wastage_quantity, wastage_reason, remarks } = data;
+        let id = data.id || null;
 
         if (id) {
             // Capture old state for audit
