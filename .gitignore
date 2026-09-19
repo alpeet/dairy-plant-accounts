@@ -42,6 +42,12 @@ data/*.bak-*
 data/Daily_Account_Professional_Export.xlsx
 Prarambha-Handover-*.zip
 
+# NEVER commit live data, database copies or credential material
+# (data/backups/ holds full customer DB copies plus admin password-hash backups)
+data/backups/
+data/dairy-plant.db.*
+*.password-hash-backup*.txt
+
 # Local-only working copies & snapshots
 audit-backup/
 backup/
