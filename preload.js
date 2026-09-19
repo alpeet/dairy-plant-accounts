@@ -165,6 +165,9 @@ contextBridge.exposeInMainWorld('api', {
     saveSettings: (settings) => ipcRenderer.invoke('db:settings:save', settings),
     getTableInfo: () => ipcRenderer.invoke('db:table-info'),
 
+    // Data Integrity Doctor (read-only)
+    runIntegrityCheck: (opts) => ipcRenderer.invoke('db:integrity:run', opts),
+
     // Email
     sendEmail: (opts) => ipcRenderer.invoke('email:send', opts),
 

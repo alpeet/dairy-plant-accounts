@@ -1054,6 +1054,11 @@ authHandle('db:table-info', async () => {
     return safeRun(() => ops.getTableInfo(db));
 });
 
+// --- Data Integrity Doctor (read-only diagnostics) ---
+authHandle('db:integrity:run', async (event, opts) => {
+    return safeRun(() => ops.runIntegrityChecks(db, opts || {}));
+});
+
 // --- CSV data exchange (mirrors the web /api/data-csv/* routes) ---
 authHandle('data-csv:tables', async () => {
     return { success: true, data: dataCSV.getAllTableDefs() };

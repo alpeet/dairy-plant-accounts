@@ -79,6 +79,7 @@ const {
     deleteOtherExpense, getExpenseCategories, getExpensesSummary
 } = require('./expenses');
 const { logAudit, getAuditLogs } = require('./audit');
+const { runIntegrityChecks } = require('./integrity');
 const { getTableInfo } = require('./table_info');
 const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
 
@@ -189,6 +190,9 @@ module.exports = {
 
     // Audit
     logAudit, getAuditLogs,
+
+    // Data Integrity Doctor (read-only)
+    runIntegrityChecks,
 
     // Routes
     listRoutes, getRoute, saveRoute, deleteRoute, getRouteSummary,

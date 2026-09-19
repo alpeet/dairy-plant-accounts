@@ -229,6 +229,9 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         // Audit
         getAuditLogs: (opts) => apiPost('/audit/logs', opts || {}),
 
+        // Data Integrity Doctor (read-only)
+        runIntegrityCheck: (opts) => apiPost('/integrity/run', opts || {}),
+
         // Payments
         // Cash Deposits
         getCashDeposits: (opts) => apiPost('/cash-deposits/list', opts || {}),

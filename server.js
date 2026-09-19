@@ -1420,6 +1420,13 @@ app.post('/api/audit/logs', requireRole('accountant'), (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Data Integrity Doctor (accountant+ only — READ-ONLY diagnostics)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/integrity/run', requireRole('accountant'), (req, res) => {
+    res.json(safeRun(() => ops.runIntegrityChecks(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Today Summary (for dashboard)
 // ──────────────────────────────────────────────────────────────
 app.post('/api/reports/farmer-statement', (req, res) => {
