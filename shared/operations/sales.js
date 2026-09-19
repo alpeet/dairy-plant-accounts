@@ -59,8 +59,9 @@ function saveSale(db, saleData) {
             const oldSale = db.prepare("SELECT * FROM sales WHERE id = ?").get(id);
             const oldItems = db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id);
 
-            // Reverse stock for old items
+            // Reverse stock for old items (manual items without stock tracking are skipped)
             for (const item of oldItems) {
+                if (!item.product_id) continue;
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
@@ -80,11 +81,13 @@ function saveSale(db, saleData) {
                 "UPDATE sales SET invoice_no=?, date=?, party_id=?, subtotal=?, discount=?, discount_percent=?, tax=?, grand_total=?, paid_amount=?, payment_mode=?, status=?, notes=?, updated_at=datetime('now','localtime') WHERE id=?"
             ).run(invoice_no, date, party_id, subtotal, discount, discount_percent, tax, grand_total, paid_amount, payment_mode, status, notes, id);
 
-            // Re-insert items with stock deduction
+            // Re-insert items with stock deduction (manual items without product_id skip stock)
             for (const item of items) {
                 db.prepare(
                     "INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ).run(id, item.product_id, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+                ).run(id, item.product_id || null, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+
+                if (!item.product_id) continue;
 
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
@@ -117,7 +120,10 @@ function saveSale(db, saleData) {
             for (const item of items) {
                 db.prepare(
                     "INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ).run(saleId, item.product_id, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+                ).run(saleId, item.product_id || null, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+
+                // Manual (custom-typed) items without a product skip stock tracking
+                if (!item.product_id) continue;
 
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
@@ -152,8 +158,9 @@ function deleteSale(db, id, changedBy = null) {
         const sale = db.prepare("SELECT * FROM sales WHERE id = ?").get(id);
         const items = db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id);
 
-        // Reverse stock
+        // Reverse stock (manual items without stock tracking are skipped)
         for (const item of items) {
+            if (!item.product_id) continue;
             const lastBalance = db.prepare(
                 "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
             ).get(item.product_id);

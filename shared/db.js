@@ -455,6 +455,39 @@ function runMigrations(db) {
         CREATE INDEX IF NOT EXISTS idx_bank_transactions_party ON bank_transactions(party_id);
     `);
 
+    // Migration 18: Allow NULL product_id in sales_items (manual / free-typed invoice items)
+    try {
+        const cols = db.prepare("PRAGMA table_info(sales_items)").all();
+        const pidCol = cols.find(c => c.name === 'product_id');
+        if (pidCol && pidCol.notnull === 1) {
+            db.pragma('foreign_keys = OFF');
+            db.exec(`
+                CREATE TABLE sales_items_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sale_id INTEGER NOT NULL,
+                    product_id INTEGER,
+                    product_name TEXT NOT NULL,
+                    quantity REAL NOT NULL DEFAULT 1.0,
+                    unit TEXT DEFAULT 'kg',
+                    rate REAL NOT NULL DEFAULT 0.0,
+                    amount REAL NOT NULL DEFAULT 0.0,
+                    FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
+                    FOREIGN KEY (product_id) REFERENCES products(id)
+                );
+                INSERT INTO sales_items_new (id, sale_id, product_id, product_name, quantity, unit, rate, amount)
+                    SELECT id, sale_id, product_id, product_name, quantity, unit, rate, amount FROM sales_items;
+                DROP TABLE sales_items;
+                ALTER TABLE sales_items_new RENAME TO sales_items;
+                CREATE INDEX IF NOT EXISTS idx_sales_items_sale ON sales_items(sale_id);
+            `);
+            db.pragma('foreign_keys = ON');
+            console.log('Migrated sales_items to allow manual (product-less) invoice items');
+        }
+    } catch (e) {
+        db.pragma('foreign_keys = ON');
+        console.log('Migration 18 (sales_items manual items) skipped:', e.message);
+    }
+
     // Migration 13: Ensure SMTP settings exist (for in-app email sending)
     const smtpDefaults = [
         ['smtp_host', ''], ['smtp_port', '587'], ['smtp_secure', '0'],

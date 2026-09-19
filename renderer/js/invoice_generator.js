@@ -190,6 +190,7 @@ function setupInvoiceItemListeners(row) {
     const qty = row.querySelector('.sale-qty');
     const rate = row.querySelector('.sale-rate');
     const select = row.querySelector('.sale-product-select');
+    const nameInput = row.querySelector('.sale-product-name');
 
     const calc = () => {
         const amt = row.querySelector('.sale-amount');
@@ -205,12 +206,17 @@ function setupInvoiceItemListeners(row) {
             const option = this.options[this.selectedIndex];
             if (option.dataset.rate) rate.value = option.dataset.rate;
             if (option.dataset.unit) row.querySelector('.sale-unit').value = option.dataset.unit;
+            // Show the name field only when "-- Manual item (type name) --" is chosen
+            if (nameInput) nameInput.style.display = this.value === 'manual' ? '' : 'none';
+            if (nameInput && this.value === 'manual') nameInput.focus();
             calc();
         });
     }
+    nameInput?.addEventListener('input', calc);
 }
 
 // Local row-adder for the invoice builder (works without the sales modal present).
+// Each row offers a product dropdown OR free-text manual typing (no stock tracking).
 function addInvoiceItemRow() {
     const tbody = document.getElementById('saleItemsBody');
     if (!tbody) return;
@@ -219,8 +225,11 @@ function addInvoiceItemRow() {
     row.innerHTML = `
         <td>
             <select class="form-control sale-product-select" style="font-size:13px">
-                ${firstSelect ? firstSelect.innerHTML : (window._invProducts || []).map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
+                <option value="">-- Select Product --</option>
+                ${(window._invProducts || []).map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
+                <option value="manual">✍️ Manual item — type any name</option>
             </select>
+            <input type="text" class="form-control sale-product-name" placeholder="Type item name..." style="font-size:13px;margin-top:4px;display:none" maxlength="100">
         </td>
         <td><input type="number" class="form-control sale-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
         <td><input type="text" class="form-control sale-unit" value="kg" style="font-size:13px"></td>
@@ -232,6 +241,21 @@ function addInvoiceItemRow() {
     setupInvoiceItemListeners(row);
 }
 window.addInvoiceItemRow = addInvoiceItemRow;
+
+/**
+ * Resolve the display name + product id for an item row.
+ * Returns { product_id, name } — product_id is null for manual rows.
+ */
+function _resolveInvoiceItemProduct(row) {
+    const select = row.querySelector('.sale-product-select');
+    const nameInput = row.querySelector('.sale-product-name');
+    if (select && select.value && select.value !== 'manual') {
+        return { product_id: parseInt(select.value), name: select.options[select.selectedIndex]?.text || '' };
+    }
+    const typed = (nameInput?.value || '').trim();
+    if (typed) return { product_id: null, name: typed };
+    return { product_id: null, name: '' };
+}
 
 function _invProductOptionsHtml(selectedId) {
     // Rebuild the product options exactly like sales.js rows
@@ -277,12 +301,11 @@ function updateInvoicePreview() {
 
     const items = [];
     document.querySelectorAll('#saleItemsBody tr').forEach(row => {
-        const sel = row.querySelector('.sale-product-select');
-        const name = sel && sel.value ? sel.options[sel.selectedIndex]?.text : '';
+        const resolved = _resolveInvoiceItemProduct(row);
         const qty = parseFloat(row.querySelector('.sale-qty')?.value || 0);
         const unit = row.querySelector('.sale-unit')?.value || 'kg';
         const rate = parseFloat(row.querySelector('.sale-rate')?.value || 0);
-        if (name) items.push({ name, qty, unit, rate, amount: qty * rate });
+        if (resolved.name) items.push({ name: resolved.name, qty, unit, rate, amount: qty * rate, manual: !resolved.product_id });
     });
 
     const { subtotal, grand } = calcInvoiceTotals();
@@ -318,7 +341,7 @@ function updateInvoicePreview() {
                     ${items.length === 0 ? '<tr><td colspan="6" style="border:1px solid #ccc;padding:8px;text-align:center;color:#888">Add items to see them here</td></tr>' :
                     items.map((it, i) => `<tr>
                         <td style="border:1px solid #ccc;padding:6px">${i + 1}</td>
-                        <td style="border:1px solid #ccc;padding:6px">${escapeHtml(it.name)}</td>
+                        <td style="border:1px solid #ccc;padding:6px">${escapeHtml(it.name)}${it.manual ? ' <span style="font-size:10px;color:#888">(custom)</span>' : ''}</td>
                         <td style="border:1px solid #ccc;padding:6px;text-align:right">${it.qty}</td>
                         <td style="border:1px solid #ccc;padding:6px">${escapeHtml(it.unit)}</td>
                         <td style="border:1px solid #ccc;padding:6px;text-align:right">${formatCurrency(it.rate)}</td>
@@ -352,12 +375,11 @@ function buildInvoicePrintHtml() {
     const date = document.getElementById('invDate')?.value || '';
     const items = [];
     document.querySelectorAll('#saleItemsBody tr').forEach(row => {
-        const sel = row.querySelector('.sale-product-select');
-        const name = sel && sel.value ? sel.options[sel.selectedIndex]?.text : '';
+        const resolved = _resolveInvoiceItemProduct(row);
         const qty = parseFloat(row.querySelector('.sale-qty')?.value || 0);
         const unit = row.querySelector('.sale-unit')?.value || 'kg';
         const rate = parseFloat(row.querySelector('.sale-rate')?.value || 0);
-        if (name) items.push({ name, qty, unit, rate, amount: qty * rate });
+        if (resolved.name) items.push({ name: resolved.name, qty, unit, rate, amount: qty * rate });
     });
     const { subtotal, grand } = calcInvoiceTotals();
     const paid = parseFloat(document.getElementById('invPaid')?.value || 0);
@@ -404,20 +426,22 @@ async function saveGeneratedInvoice(printAfter) {
 
     const items = [];
     document.querySelectorAll('#saleItemsBody tr').forEach(row => {
-        const select = row.querySelector('.sale-product-select');
-        const productId = parseInt(select?.value);
-        if (!productId) return;
+        const resolved = _resolveInvoiceItemProduct(row);
+        if (!resolved.name) return;
+        const qty = parseFloat(row.querySelector('.sale-qty')?.value || 0);
+        const rate = parseFloat(row.querySelector('.sale-rate')?.value || 0);
         items.push({
-            product_id: productId,
-            product_name: select?.options[select.selectedIndex]?.text || '',
-            name: select?.options[select.selectedIndex]?.text || '',
-            quantity: parseFloat(row.querySelector('.sale-qty')?.value || 0),
+            product_id: resolved.product_id,
+            product_name: resolved.name,
+            name: resolved.name,
+            quantity: qty,
             unit: row.querySelector('.sale-unit')?.value || 'kg',
-            rate: parseFloat(row.querySelector('.sale-rate')?.value || 0),
-            amount: parseFloat(row.querySelector('.sale-amount')?.value || 0)
+            rate,
+            amount: qty * rate,
+            is_manual_item: !resolved.product_id
         });
     });
-    if (items.length === 0) { showToast('Please add at least one item', 'error'); return; }
+    if (items.length === 0) { showToast('Please add at least one item — select a product or type a manual item name', 'error'); return; }
 
     const subtotal = parseFloat(document.getElementById('invSubtotal')?.value || 0);
     const grand = parseFloat(document.getElementById('invGrandTotal')?.value || 0);
@@ -568,12 +592,11 @@ function buildInvoiceEmailHtml(settings, opts = {}) {
     const date = document.getElementById('invDate')?.value || '';
     const items = [];
     document.querySelectorAll('#saleItemsBody tr').forEach(row => {
-        const sel = row.querySelector('.sale-product-select');
-        const name = sel && sel.value ? sel.options[sel.selectedIndex]?.text : '';
+        const resolved = _resolveInvoiceItemProduct(row);
         const qty = parseFloat(row.querySelector('.sale-qty')?.value || 0);
         const unit = row.querySelector('.sale-unit')?.value || 'kg';
         const rate = parseFloat(row.querySelector('.sale-rate')?.value || 0);
-        if (name) items.push({ name, qty, unit, rate, amount: qty * rate });
+        if (resolved.name) items.push({ name: resolved.name, qty, unit, rate, amount: qty * rate });
     });
     const { subtotal, grand } = calcInvoiceTotals();
     const paid = parseFloat(document.getElementById('invPaid')?.value || 0);

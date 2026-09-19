@@ -155,9 +155,16 @@ function validateProduct(data) {
 
 /**
  * Validate a single sales/purchase item row.
+ * Manual (free-typed) items without a product_id are allowed on sales as long
+ * as they carry a product name — they are saved without stock tracking.
  */
 function isValidSaleItem(item) {
     if (!item || typeof item !== 'object') return false;
+    const manual = item.product_id === 0 || item.product_id === null || item.product_id === undefined || item.product_id === '';
+    if (manual) {
+        // Manual item: needs a typed name
+        return !!(item.product_name && String(item.product_name).trim()) || !!(item.name && String(item.name).trim());
+    }
     if (!isValidId(item.product_id)) return false;
     if (!isPositiveNumber(item.quantity)) return false;
     if (!isNonNegativeNumber(item.rate)) return false;

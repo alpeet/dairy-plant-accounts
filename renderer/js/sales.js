@@ -193,7 +193,9 @@ async function showSaleForm(saleId = null) {
                                         <select class="form-control sale-product-select" style="font-size:13px">
                                             <option value="">-- Select Product --</option>
                                             ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
+                                            <option value="manual">✍️ Manual item — type any name</option>
                                         </select>
+                                        <input type="text" class="form-control sale-product-name" placeholder="Type item name..." style="font-size:13px;margin-top:4px;display:none" maxlength="100">
                                     </td>
                                     <td><input type="number" class="form-control sale-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
                                     <td><input type="text" class="form-control sale-unit" value="kg" style="font-size:13px"></td>
@@ -273,13 +275,16 @@ async function showSaleForm(saleId = null) {
 }
 
 function renderSaleItemRow(item, idx, products) {
+    const isManual = !item.product_id;
     return `
         <tr>
             <td>
                 <select class="form-control sale-product-select" style="font-size:13px" data-index="${idx}">
                     <option value="">-- Select Product --</option>
                     ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}" ${item.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+                    <option value="manual" ${isManual ? 'selected' : ''}>✍️ Manual item — type any name</option>
                 </select>
+                <input type="text" class="form-control sale-product-name" placeholder="Type item name..." value="${isManual ? escapeHtml(item.product_name || '') : ''}" style="font-size:13px;margin-top:4px;${isManual ? '' : 'display:none'}" maxlength="100">
             </td>
             <td><input type="number" class="form-control sale-qty" value="${item.quantity}" min="0" step="0.01" style="font-size:13px"></td>
             <td><input type="text" class="form-control sale-unit" value="${escapeHtml(item.unit)}" style="font-size:13px"></td>
@@ -302,7 +307,9 @@ function addSaleItemRow() {
         <td>
             <select class="form-control sale-product-select" style="font-size:13px">
                 ${firstSelect ? firstSelect.innerHTML : '<option value="">-- Select Product --</option>'}
+                <option value="manual">✍️ Manual item — type any name</option>
             </select>
+            <input type="text" class="form-control sale-product-name" placeholder="Type item name..." style="font-size:13px;margin-top:4px;display:none" maxlength="100">
         </td>
         <td><input type="number" class="form-control sale-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
         <td><input type="text" class="form-control sale-unit" value="kg" style="font-size:13px"></td>
@@ -323,6 +330,12 @@ function setupSaleAutoCalc() {
         sel.addEventListener('change', function() {
             const option = this.options[this.selectedIndex];
             const row = this.closest('tr');
+            const nameInput = row.querySelector('.sale-product-name');
+            // Show/hide the manual name field when "Manual item" is chosen
+            if (nameInput) {
+                nameInput.style.display = this.value === 'manual' ? '' : 'none';
+                if (this.value === 'manual') nameInput.focus();
+            }
             if (option.dataset.rate) {
                 row.querySelector('.sale-rate').value = option.dataset.rate;
             }
@@ -339,6 +352,7 @@ function setupItemListeners(row) {
     const qty = row.querySelector('.sale-qty');
     const rate = row.querySelector('.sale-rate');
     const select = row.querySelector('.sale-product-select');
+    const nameInput = row.querySelector('.sale-product-name');
 
     const calc = () => {
         const amt = row.querySelector('.sale-amount');
@@ -348,11 +362,15 @@ function setupItemListeners(row) {
 
     qty?.addEventListener('input', calc);
     rate?.addEventListener('input', calc);
+    if (nameInput) nameInput.addEventListener('input', calc);
     if (select) {
         select.addEventListener('change', function() {
             const option = this.options[this.selectedIndex];
             if (option.dataset.rate) rate.value = option.dataset.rate;
             if (option.dataset.unit) row.querySelector('.sale-unit').value = option.dataset.unit;
+            // Show the name field only when "Manual item" is chosen
+            if (nameInput) nameInput.style.display = this.value === 'manual' ? '' : 'none';
+            if (nameInput && this.value === 'manual') nameInput.focus();
             calc();
         });
     }
@@ -389,21 +407,26 @@ async function saveSale(saleId) {
     const rows = document.querySelectorAll('#saleItemsBody tr');
     rows.forEach(row => {
         const select = row.querySelector('.sale-product-select');
-        const productId = parseInt(select?.value);
-        if (!productId) return;
+        const nameInput = row.querySelector('.sale-product-name');
+        const productId = select?.value === 'manual' ? null : parseInt(select?.value);
+        // Manual rows keep the typed name; product rows keep the selected product
+        const typedName = (nameInput?.value || '').trim();
+        const productName = productId ? (select?.options[select.selectedIndex]?.text || '') : typedName;
+        if (!productId && !typedName) return;
         items.push({
             product_id: productId,
-            product_name: select?.options[select.selectedIndex]?.text || '',
-            name: select?.options[select.selectedIndex]?.text || '',
+            product_name: productName,
+            name: productName,
             quantity: parseFloat(row.querySelector('.sale-qty')?.value || 0),
             unit: row.querySelector('.sale-unit')?.value || 'kg',
             rate: parseFloat(row.querySelector('.sale-rate')?.value || 0),
-            amount: parseFloat(row.querySelector('.sale-amount')?.value || 0)
+            amount: parseFloat(row.querySelector('.sale-amount')?.value || 0),
+            is_manual_item: !productId
         });
     });
 
     if (items.length === 0) {
-        showToast('Please add at least one item', 'error');
+        showToast('Please add at least one item — select a product or type a manual item name', 'error');
         return;
     }
 

@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE TABLE IF NOT EXISTS sales_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sale_id INTEGER NOT NULL,
-    product_id INTEGER NOT NULL,
+    product_id INTEGER,
     product_name TEXT NOT NULL,
     quantity REAL NOT NULL DEFAULT 1.0,
     unit TEXT DEFAULT 'kg',
