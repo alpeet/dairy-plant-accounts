@@ -13,6 +13,7 @@
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
+const { ensurePlantHelperProducts } = require('./operations/products');
 
 // ──────────────────────────────────────────────────────────────
 // Database Initialization
@@ -51,6 +52,13 @@ function initDatabase(dbDir, dbName = 'dairy-plant.db') {
 
     // ── Migrations ──
     runMigrations(db);
+
+    // ── Plant helper products (Mixed Milk, Cream, SMP, Water) ──
+    try {
+        ensurePlantHelperProducts(db);
+    } catch (e) {
+        console.warn('Plant helper product setup skipped:', e.message);
+    }
 
     console.log('Database initialized at:', dbPath);
     return db;

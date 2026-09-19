@@ -8,17 +8,51 @@
 const { logAudit } = require('./audit');
 
 /**
- * Find or auto-create the Raw Milk product used for stock tracking.
+ * Find or auto-create the raw milk product used for stock tracking
+ * for a given milk type (cow / buffalo / mixed).
+ * Each type gets its own product so purchased milk stock is tracked separately.
+ * Existing products are reused first — e.g. a user-created "Cow Milk" product
+ * with stock history is used for cow collections instead of creating a duplicate.
  */
-function getOrCreateRawMilkProduct(db) {
-    const existing = db.prepare(
-        "SELECT id, rate FROM products WHERE LOWER(name) LIKE '%raw milk%' OR LOWER(name) = 'milk (raw)' LIMIT 1"
-    ).get();
-    if (existing) return existing;
+function getOrCreateRawMilkProduct(db, milkType) {
+    const type = String(milkType || '').toLowerCase();
+    const isTyped = type === 'cow' || type === 'buffalo';
+    const productName = isTyped ? `Raw Milk (${type === 'cow' ? 'Cow' : 'Buffalo'})` : 'Raw Milk';
 
+    // 1. Exact name match (case-insensitive), most stock history first
+    const exact = db.prepare(
+        `SELECT id, rate FROM products
+         WHERE LOWER(name) = LOWER(?)
+         ORDER BY (SELECT COUNT(*) FROM stock_movements sm WHERE sm.product_id = products.id) DESC
+         LIMIT 1`
+    ).get(productName);
+    if (exact) return exact;
+
+    // 2. Reuse an existing product that clearly represents this milk type
+    //    (picks the one with the most stock movements — history wins over dups)
+    const typePattern = isTyped
+        ? (type === 'cow' ? /\bcow\b/ : /\bbuffal(o)?\b/)
+        : /\bmilk\b(?!\s*powder)/; // mixed: any milk product except powder
+    const all = db.prepare(
+        `SELECT id, name, rate FROM products
+         ORDER BY (SELECT COUNT(*) FROM stock_movements sm WHERE sm.product_id = products.id) DESC`
+    ).all();
+    const candidate = all.find(p => typePattern.test(String(p.name || '').toLowerCase()));
+    if (candidate) return { id: candidate.id, rate: candidate.rate };
+
+    // 3. Legacy fuzzy match for old generic raw-milk rows (untyped only)
+    if (!isTyped) {
+        const legacy = all.find(p => /raw\s*milk|milk\s*\(raw\)/.test(String(p.name || '').toLowerCase()));
+        if (legacy) return { id: legacy.id, rate: legacy.rate };
+    }
+
+    // 4. Create the typed product
+    const notes = isTyped
+        ? `Auto-created for ${type} milk collection tracking`
+        : 'Auto-created for milk collection tracking (mixed/untyped)';
     const result = db.prepare(
-        "INSERT INTO products (name, unit, category, opening_stock, reorder_level, rate, notes) VALUES (?, 'liter', 'Milk', 0, 0, ?, 'Auto-created for milk collection tracking')"
-    ).run('Raw Milk', 60);
+        "INSERT INTO products (name, unit, category, opening_stock, reorder_level, rate, notes) VALUES (?, 'liter', 'Milk', 0, 0, 60, ?)"
+    ).run(productName, notes);
 
     return { id: result.lastInsertRowid, rate: 60 };
 }
@@ -68,7 +102,7 @@ function saveMilkCollection(db, data) {
                 route_id, clr_percent, adulteration_test, rate_type,
                 extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, calculated_rate } = data;
 
-        const rawMilkProduct = getOrCreateRawMilkProduct(db);
+        const rawMilkProduct = getOrCreateRawMilkProduct(db, milk_type);
 
         if (id) {
             // ── Revert old collection ──
@@ -77,16 +111,18 @@ function saveMilkCollection(db, data) {
             // Capture old values for audit
             const oldCollection = db.prepare("SELECT * FROM milk_collections WHERE id = ?").get(id);
 
-            // Reverse old stock movement
+            // Reverse old stock movement — use the OLD collection's product so
+            // stock is taken back from the correct raw milk type even if milk_type changed
             if (oldCollection && oldCollection.quantity_liters > 0) {
+                const oldRawMilkProduct = getOrCreateRawMilkProduct(db, oldCollection.milk_type);
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
-                ).get(rawMilkProduct.id);
+                ).get(oldRawMilkProduct.id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
                 const newBalance = currentBal - oldCollection.quantity_liters;
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'milk_collection', 0, ?, ?, ?, 'Reversal of milk collection #' || ?, 'milk_collection', ?)"
-                ).run(rawMilkProduct.id, date, oldCollection.quantity_liters, newBalance, rawMilkProduct.rate, collection_no, id);
+                ).run(oldRawMilkProduct.id, date, oldCollection.quantity_liters, newBalance, oldRawMilkProduct.rate, collection_no, id);
             }
 
             // Update record with all fields
@@ -177,7 +213,7 @@ function deleteMilkCollection(db, id, changedBy = null) {
 
         // Reverse stock
         if (collection && collection.quantity_liters > 0) {
-            const rawMilkProduct = getOrCreateRawMilkProduct(db);
+            const rawMilkProduct = getOrCreateRawMilkProduct(db, collection.milk_type);
             const lastBalance = db.prepare(
                 "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
             ).get(rawMilkProduct.id);

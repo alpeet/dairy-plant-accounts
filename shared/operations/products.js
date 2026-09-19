@@ -8,6 +8,41 @@
 const { logAudit } = require('./audit');
 
 /**
+ * System "Plant Helper" products used to track internal plant operations
+ * (mixing, cream separation, SMP/water standardization) in production batches.
+ * They are created automatically when no matching product exists yet and
+ * cannot be deleted while categorized as helpers.
+ */
+const PLANT_HELPER_CATEGORY = 'Plant Helpers';
+const PLANT_HELPER_PRODUCTS = [
+    { name: 'Mixed Milk', unit: 'liter', notes: 'Plant helper — mixed/standardized milk used in production batches', match: /mix(ed)?\s*milk/ },
+    { name: 'Cream', unit: 'kg', notes: 'Plant helper — cream separated from milk (production output)', match: /cream/ },
+    { name: 'SMP (Skimmed Milk Powder)', unit: 'kg', notes: 'Plant helper — powder added to standardize milk (production input)', match: /\bsmp\b|skimmed\s*milk\s*powder|milk\s*powder/ },
+    { name: 'Water', unit: 'liter', notes: 'Plant helper — water added for standardization (production input)', match: /\bwater\b/ }
+];
+
+/**
+ * Ensure plant helper products exist (idempotent).
+ * If a product with a matching name already exists (e.g. the user's own
+ * "Mix Milk" or "Cream"), that existing product is reused and nothing is
+ * created — a helper product is only inserted when no match is found.
+ * Called on every database initialization.
+ */
+function ensurePlantHelperProducts(db) {
+    const all = db.prepare(
+        `SELECT id, name FROM products
+         ORDER BY (SELECT COUNT(*) FROM stock_movements sm WHERE sm.product_id = products.id) DESC`
+    ).all();
+    for (const helper of PLANT_HELPER_PRODUCTS) {
+        const candidate = all.find(p => helper.match.test(String(p.name || '').toLowerCase()));
+        if (candidate) continue; // existing product covers this helper
+        db.prepare(
+            "INSERT INTO products (name, unit, category, opening_stock, reorder_level, rate, notes) VALUES (?, ?, ?, 0, 0, 0, ?)"
+        ).run(helper.name, helper.unit, PLANT_HELPER_CATEGORY, helper.notes);
+    }
+}
+
+/**
  * List products with optional search.
  */
 function listProducts(db, { search } = {}) {
@@ -87,4 +122,4 @@ function deleteProduct(db, id, changedBy = null) {
     return { deleted: true };
 }
 
-module.exports = { listProducts, getProduct, saveProduct, deleteProduct };
+module.exports = { listProducts, getProduct, saveProduct, deleteProduct, ensurePlantHelperProducts, PLANT_HELPER_CATEGORY };
