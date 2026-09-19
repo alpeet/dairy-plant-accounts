@@ -236,6 +236,8 @@ function detectCategory(name) {
 let partyIndex = null;
 let productIndex = null;
 let autoCreatedParties = 0;
+// Names that must never be fuzzy-matched onto a different party (see resolveParty).
+const exactOnlyPartyNames = new Set();
 
 function buildPartyIndex(db) {
     const parties = db.prepare('SELECT id, name, type FROM parties').all();
@@ -260,9 +262,13 @@ function resolveParty(name, db, autoCreate) {
     const b = baseName(name);
     if (b && b !== n && partyIndex.base[b]) return partyIndex.base[b];
 
-    for (const k of partyIndex.keys) {
-        if (k.length >= 4 && (k.includes(n) || n.includes(k))) {
-            return partyIndex.exact[k];
+    // Some names must resolve to their own account and never be fuzzy-matched onto
+    // another party ("LOCAL DAMAGE" must not become the counter-sales party "LOCAL").
+    if (!exactOnlyPartyNames.has(n)) {
+        for (const k of partyIndex.keys) {
+            if (k.length >= 4 && (k.includes(n) || n.includes(k))) {
+                return partyIndex.exact[k];
+            }
         }
     }
 
@@ -309,6 +315,18 @@ function resolveProduct(name, db, autoCreate) {
 
     // Never auto-create totals rows or opening-balance pseudo-products
     if (n.includes('total') || n === 'opening') return null;
+
+    // Unambiguous base-name match before creating a duplicate: an Excel line named
+    // "SMP" must reuse the existing "SMP (Skimmed Milk Powder)", not create a second
+    // item. Only applied when exactly one existing product reduces to the same base.
+    const base = baseName(name);
+    if (base) {
+        const hits = Object.keys(productIndex).filter((k) => k !== n && baseName(k) === base);
+        if (hits.length === 1) {
+            productIndex[n] = productIndex[hits[0]];
+            return productIndex[n];
+        }
+    }
 
     if (autoCreate) {
         const result = db.prepare(`
@@ -613,6 +631,39 @@ function importSales(db, sheetData, opts) {
         if (!invNo) continue;
         if (!invoiceGroups[invNo]) invoiceGroups[invNo] = [];
         invoiceGroups[invNo].push(row);
+    }
+
+    // Rows WITHOUT an invoice number are the workbook's internal issues: milk written
+    // off as "LOCAL DAMAGE" (valued 0) and cream drawn by "FACTORY PRODUCTION"
+    // (valued at the rate). Dropping them silently loses 379 L of milk and 128 kg of
+    // cream, so each date+party gets a deterministic internal document number.
+    let internalSeq = 0;
+    const orphanGroups = {};
+    for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
+        const row = sheetData[i];
+        if (!row) continue;
+        if (toStr(row[invIdx])) continue;
+        const party = toStr(row[partyIdx]);
+        const product = toStr(row[prodIdx]);
+        const qty = toNum(row[qtyIdx]);
+        const amount = toNum(row[amtIdx]) || toNum(row[netIdx]);
+        if (!party || !product || (!qty && !amount)) continue;  // blank template rows
+        const bsDate = toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01';
+        const key = `${bsDate}|${normalize(party)}`;
+        exactOnlyPartyNames.add(normalize(party));
+        if (!orphanGroups[key]) orphanGroups[key] = { bsDate, party, rows: [] };
+        orphanGroups[key].rows.push(row);
+    }
+    for (const g of Object.values(orphanGroups)) {
+        const invNo = `INT-${g.bsDate.replace(/-/g, '')}-${String(++internalSeq).padStart(2, '0')}`;
+        // The workbook leaves the remarks cell empty (a numeric 0) on these rows;
+        // stamp the internal-issue marker so the register shows where it came from.
+        const marker = /damage|wastage/i.test(g.party)
+            ? `Internal issue from Excel (no invoice) — ${g.party} / wastage`
+            : `Internal issue from Excel (no invoice) — ${g.party}`;
+        g.rows[0] = [...g.rows[0]];
+        g.rows[0][remarkIdx] = marker;
+        invoiceGroups[invNo] = g.rows;
     }
 
     let inserted = 0, updated = 0, skipped = 0;
@@ -989,16 +1040,21 @@ function rebuildStockLedger(db, log) {
         SELECT pi.product_id, p.date, pi.quantity, pi.rate, p.bill_no, p.id AS purchase_id
         FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
     `).all();
+    // A negative quantity is a return entered on the entry sheet (the customer records
+    // a sales return as a negative sale, a purchase return as a negative purchase).
+    // Skipping those lines silently breaks stock, so the sign decides the direction:
+    // it must never be dropped.
     for (const it of purchases) {
-        if (toNum(it.quantity) <= 0) continue;
+        const qty = toNum(it.quantity);
+        if (qty === 0) continue;
         movements.push({
             product_id: it.product_id,
             date: it.date,
             type: 'purchase',
-            inward: toNum(it.quantity),
-            outward: 0,
+            inward: qty > 0 ? qty : 0,
+            outward: qty < 0 ? -qty : 0,
             rate: toNum(it.rate),
-            notes: 'Purchase ' + it.bill_no,
+            notes: (qty < 0 ? 'Purchase return ' : 'Purchase ') + it.bill_no,
             ref_type: 'purchase',
             ref_id: it.purchase_id
         });
@@ -1010,15 +1066,16 @@ function rebuildStockLedger(db, log) {
         WHERE si.product_id IS NOT NULL
     `).all();
     for (const it of sales) {
-        if (toNum(it.quantity) <= 0) continue;
+        const qty = toNum(it.quantity);
+        if (qty === 0) continue;
         movements.push({
             product_id: it.product_id,
             date: it.date,
             type: 'sale',
-            inward: 0,
-            outward: toNum(it.quantity),
+            inward: qty < 0 ? -qty : 0,
+            outward: qty > 0 ? qty : 0,
             rate: toNum(it.rate),
-            notes: 'Sale ' + it.invoice_no,
+            notes: (qty < 0 ? 'Sales return ' : 'Sale ') + it.invoice_no,
             ref_type: 'sale',
             ref_id: it.sale_id
         });
@@ -1200,21 +1257,30 @@ function importCashDemonSheet(db, data, { log }) {
              expected_cash, difference, remarks, counted_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const report = { imported: 0, skipped_dup: 0, discrepancies: 0, undated: 0 };
+    const report = { imported: 0, skipped_dup: 0, skipped_empty: 0, discrepancies: 0, undated: 0 };
 
     for (let i = 3; i < data.length; i++) {
         const r = data[i];
         if (!r) continue;
         const date = toBSDate(r[0]);
         if (!date) { if (r.some(x => toStr(x) !== '')) report.undated++; continue; }
-        if (existing.has(date)) { report.skipped_dup++; continue; }
 
         const n1000 = parseInt(r[2]) || 0, n500 = parseInt(r[3]) || 0, n100 = parseInt(r[4]) || 0,
             n50 = parseInt(r[5]) || 0, n20 = parseInt(r[6]) || 0, n10 = parseInt(r[7]) || 0,
             n5 = parseInt(r[8]) || 0, n2 = parseInt(r[9]) || 0, n1 = parseInt(r[10]) || 0,
             ic = parseInt(r[11]) || 0;
         const total = n1000 * 1000 + n500 * 500 + n100 * 100 + n50 * 50 + n20 * 20 + n10 * 10 + n5 * 5 + n2 * 2 + n1 * 1;
-        const countedBy = toStr(r[17]) || toStr(r[14]);
+        const countedBy = toStr(r[17]);
+
+        // The sheet pre-fills one row per day to the end of the fiscal year. A day
+        // whose cash was never counted has no denominations at all — importing it
+        // would create a phantom day-close record showing a huge short/(over)
+        // (its 'Collections (auto)' cell still holds a formula result).
+        if (!(n1000 || n500 || n100 || n50 || n20 || n10 || n5 || n2 || n1 || ic)) {
+            report.skipped_empty = (report.skipped_empty || 0) + 1;
+            continue;
+        }
+        if (existing.has(date)) { report.skipped_dup++; continue; }
 
         // App's own calculated daily cash-in for this date
         let expected = 0;
@@ -1234,7 +1300,8 @@ function importCashDemonSheet(db, data, { log }) {
         report.imported++;
         if (difference !== 0) report.discrepancies++;
     }
-    log(`  🧾 Cash denominations: ${report.imported} daily counts imported` +
+    log(`  🧾 Cash denominations: ${report.imported} daily counts imported, `
+        + `${report.skipped_empty} empty template rows skipped` +
         (report.discrepancies ? `, ${report.discrepancies} with short/(over) flagged for review` : ''));
     return report;
 }
@@ -1439,6 +1506,7 @@ function importExcelFile({ excelPath, dbPath, mode, log }) {
 module.exports = {
     runExcelImport,
     importExcelFile,
+    rebuildStockLedger,
     adToBS,
     toBSDate,
     TRANSACTIONAL_TABLES

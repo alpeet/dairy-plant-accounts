@@ -727,6 +727,7 @@ const CHECK_DEFS = [
         run: ({ db }) => {
             const issues = [];
             let scanned = 0;
+            let uncorroborated = 0;
             for (const src of DOC_SOURCES) {
                 scanned += (one(db, `SELECT COUNT(*) AS n FROM ${src.table} d WHERE ${src.amount} > 0`) || { n: 0 }).n;
                 const rows = run(db, `${docSelect(src, ', le.id AS ledger_id, le.party_id AS ledger_party_id, le.debit AS ledger_debit, le.credit AS ledger_credit, le.date AS ledger_date')}
@@ -735,6 +736,15 @@ const CHECK_DEFS = [
                 for (const r of rows) {
                     const posted = r.side === 'debit' ? num(r.ledger_debit) : num(r.ledger_credit);
                     const amountDiff = posted - num(r.amount);
+                    // reference_id holds a document row id (rows written by the app) or the
+                    // document's own number (rows written by the Excel importer), so the two
+                    // namespaces can collide — e.g. an Excel receipt number equal to a
+                    // different payment's row id. Judge only a pairing corroborated as this
+                    // document's own posting; an uncorroborated one is left to the
+                    // "documents with no ledger entry" check instead of being called wrong.
+                    const corroborated = String(r.ledger_date || '') === String(r.doc_date || '')
+                        || (num(r.ledger_party_id) === num(r.party_id) && Math.abs(amountDiff) <= EPS);
+                    if (!corroborated) { uncorroborated++; continue; }
                     if (Math.abs(amountDiff) > EPS) {
                         issues.push(issue(
                             `${src.label(r)} · ledger row #${r.ledger_id}`,
@@ -755,7 +765,14 @@ const CHECK_DEFS = [
                     }
                 }
             }
-            return { scanned, scannedLabel: 'documents', issues };
+            return {
+                scanned,
+                scannedLabel: 'documents',
+                issues,
+                note: uncorroborated === 0
+                    ? 'Every document link resolved to its own posting.'
+                    : `${uncorroborated} link(s) skipped as ambiguous: the reference number equals another document's row id, so the pairing cannot be judged here.`
+            };
         }
     },
     {

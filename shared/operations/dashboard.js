@@ -83,8 +83,15 @@ function getDashboard(db) {
     const todayProfit = (todaySales.total || 0) - todayTotalExpenses;
 
     // ── Stock Summary ──
+    // Closing balance is replayed from the movements. Taking "inward - outward of the
+    // latest movement" reported that single movement's quantity as the stock on hand
+    // (16,753 L of buffalo milk showed as 19.5 L and the stock value as a fraction of
+    // the real one).
+    const closingBalanceSql = 'COALESCE((SELECT SUM(inward_qty - outward_qty) FROM stock_movements sm WHERE sm.product_id = p.id), p.opening_stock)';
     const stockSummary = db.prepare(
-        "SELECT COUNT(*) as product_count, COALESCE(SUM(balance_after * rate), 0) as stock_value FROM (SELECT product_id, rate, (SELECT inward_qty - outward_qty FROM stock_movements sm2 WHERE sm2.product_id = sm.product_id ORDER BY id DESC LIMIT 1) as balance_after FROM stock_movements sm GROUP BY product_id) WHERE balance_after > 0"
+        `SELECT COUNT(*) as product_count, COALESCE(SUM(bal * rate), 0) as stock_value
+           FROM (SELECT p.id, p.rate, ${closingBalanceSql} AS bal FROM products p)
+          WHERE bal > 0`
     ).get();
 
     const productCount = db.prepare("SELECT COUNT(*) as count FROM products").get();
@@ -109,7 +116,10 @@ function getDashboard(db) {
     ).all().slice(-6);
 
     const lowStock = db.prepare(
-        "SELECT p.name, p.unit, p.reorder_level, COALESCE((SELECT inward_qty - outward_qty FROM stock_movements WHERE product_id = p.id ORDER BY id DESC LIMIT 1), p.opening_stock) as current_stock FROM products p WHERE COALESCE((SELECT inward_qty - outward_qty FROM stock_movements WHERE product_id = p.id ORDER BY id DESC LIMIT 1), p.opening_stock) <= p.reorder_level AND p.reorder_level > 0"
+        `SELECT p.name, p.unit, p.reorder_level, ${closingBalanceSql} as current_stock
+           FROM products p
+          WHERE ${closingBalanceSql} <= p.reorder_level AND p.reorder_level > 0
+          ORDER BY ${closingBalanceSql}`
     ).all();
 
     const topCustomer = db.prepare(

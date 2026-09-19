@@ -9,16 +9,15 @@
  * Get current stock levels for all products with optional search.
  */
 function getCurrentStock(db, { search } = {}) {
+    // Both fields are the closing balance replayed from the movements, not the last
+    // row's own delta or a stored balance_after. "inward - outward of the latest
+    // movement" is only that one movement's quantity — it made the dashboard low-stock
+    // list and the balance-sheet stock value read e.g. 19.5 L instead of 16,753 L.
+    const closingBalance = `COALESCE((SELECT SUM(inward_qty - outward_qty) FROM stock_movements WHERE product_id = p.id), p.opening_stock)`;
     let query = `
         SELECT p.*,
-            COALESCE((
-                SELECT inward_qty - outward_qty FROM stock_movements
-                WHERE product_id = p.id ORDER BY id DESC LIMIT 1
-            ), p.opening_stock) as current_stock,
-            COALESCE((
-                SELECT balance_after FROM stock_movements
-                WHERE product_id = p.id ORDER BY id DESC LIMIT 1
-            ), p.opening_stock) as current_balance
+            ${closingBalance} as current_stock,
+            ${closingBalance} as current_balance
         FROM products p WHERE 1=1
     `;
     const params = [];
