@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
     // Dashboard
     getDashboard: () => ipcRenderer.invoke('db:dashboard'),
+    globalSearch: (opts) => ipcRenderer.invoke('db:search', opts),
 
     // Parties
     getParties: (opts) => ipcRenderer.invoke('db:parties:list', opts),

@@ -11,6 +11,7 @@
  */
 
 const { getDashboard } = require('./dashboard');
+const { globalSearch } = require('./search');
 
 const {
     listParties, getParty, saveParty, deleteParty, getPartyLedger
@@ -108,6 +109,9 @@ const {
 module.exports = {
     // Dashboard
     getDashboard,
+
+    // Global search
+    globalSearch,
 
     // Parties
     listParties, getParty, saveParty, deleteParty, getPartyLedger,

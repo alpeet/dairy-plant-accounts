@@ -867,6 +867,11 @@ app.post('/api/dashboard', (req, res) => {
     res.json(safeRun(() => ops.getDashboard(db)));
 });
 
+// Global search across all modules (read-only)
+app.post('/api/search', (req, res) => {
+    res.json(safeRun(() => ops.globalSearch(db, req.body || {})));
+});
+
 // ──────────────────────────────────────────────────────────────
 // Parties
 // ──────────────────────────────────────────────────────────────

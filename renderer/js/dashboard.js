@@ -30,6 +30,19 @@ async function renderDashboard() {
     const totalPayable = d.payables?.total || 0;
 
     container.innerHTML = `
+        <!-- Global Search -->
+        <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;gap:8px;align-items:center">
+                <span style="font-size:20px">🔍</span>
+                <input id="global-search-input" class="form-control" type="text"
+                    placeholder="Search anything — invoice no, bill no, party, phone, product, milk collection, voucher, amount…"
+                    style="flex:1;font-size:15px;padding:10px 14px" autocomplete="off">
+                <button class="btn btn-primary" id="global-search-btn" onclick="runGlobalSearch()">Search</button>
+                <button class="btn btn-sm" id="global-search-clear" style="display:none" onclick="clearGlobalSearch()">✕ Clear</button>
+            </div>
+            <div id="global-search-results" style="margin-top:12px"></div>
+        </div>
+
         <!-- Financial Summary Cards (New) -->
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px">
             <div class="summary-card ${cp.net_cash >= 0 ? 'card-success' : 'card-danger'}" style="margin:0;cursor:pointer" onclick="navigateTo('cash-collection')" title="Click for details">
@@ -165,6 +178,111 @@ async function renderDashboard() {
             </div>
         </div>
     `;
+
+    attachGlobalSearch();
+}
+
+// ──────────────────────────────────────────────────────────────
+// Global Search
+// Searches every module at once and shows grouped results.
+// ──────────────────────────────────────────────────────────────
+let _globalSearchTimer = null;
+
+function attachGlobalSearch() {
+    const input = document.getElementById('global-search-input');
+    if (!input) return;
+    input.addEventListener('input', () => {
+        clearTimeout(_globalSearchTimer);
+        const q = input.value.trim();
+        if (q.length === 0) { clearGlobalSearch(false); return; }
+        _globalSearchTimer = setTimeout(() => runGlobalSearch(q), 350);
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { clearTimeout(_globalSearchTimer); runGlobalSearch(); }
+        if (e.key === 'Escape') { clearGlobalSearch(); }
+    });
+}
+
+async function runGlobalSearch(q) {
+    const input = document.getElementById('global-search-input');
+    const box = document.getElementById('global-search-results');
+    const clearBtn = document.getElementById('global-search-clear');
+    if (!box) return;
+    const query = (q !== undefined ? q : (input ? input.value : '')).trim();
+    if (query.length < 2) {
+        box.innerHTML = '';
+        if (clearBtn) clearBtn.style.display = 'none';
+        return;
+    }
+    if (clearBtn) clearBtn.style.display = '';
+    box.innerHTML = '<div class="loading" style="text-align:center;padding:16px">Searching…</div>';
+    const result = await window.api.globalSearch({ query });
+    if (!result.success) {
+        box.innerHTML = `<div class="error" style="padding:12px">Search failed: ${escapeHtml(result.error || 'unknown error')}</div>`;
+        return;
+    }
+    renderGlobalSearchResults(result.data);
+}
+
+function renderGlobalSearchResults(data) {
+    const box = document.getElementById('global-search-results');
+    if (!box) return;
+    if (!data || !data.groups || data.groups.length === 0) {
+        box.innerHTML = `<div style="padding:16px;text-align:center;color:var(--text-light)">
+            No matches found for "<strong>${escapeHtml(data.query)}</strong>" in any module.</div>`;
+        return;
+    }
+    const head = `<div style="margin-bottom:8px;font-size:13px;color:var(--text-light)">
+        Found <strong>${data.total}</strong> match${data.total === 1 ? '' : 'es'} for "<strong>${escapeHtml(data.query)}</strong>" across ${data.groups.length} module${data.groups.length === 1 ? '' : 's'} — click a row to open it:</div>`;
+    const sections = data.groups.map(g => {
+        const rows = g.rows.map(r => `
+            <tr style="cursor:pointer" onclick="openSearchResult('${g.type}', ${r.id}, this)" title="Click to open">
+                <td style="font-weight:600">${escapeHtml(String(r.title || ''))}</td>
+                <td style="color:var(--text-light);font-size:12px">${escapeHtml(String(r.subtitle || ''))}</td>
+                <td style="text-align:right;white-space:nowrap">${r.amount !== null && r.amount !== undefined ? formatCurrency(r.amount) : ''}</td>
+                <td>${r.status ? statusBadge(r.status) : ''}</td>
+            </tr>`).join('');
+        const more = g.total > g.rows.length
+            ? `<tr style="cursor:pointer;background:var(--bg)" onclick="navigateTo('${g.page}')">
+                   <td colspan="4" style="text-align:center;color:var(--primary);font-size:13px">
+                       + ${g.total - g.rows.length} more — open ${escapeHtml(g.label)} →</td></tr>`
+            : '';
+        return `
+            <div style="margin-bottom:12px">
+                <div style="font-size:13px;font-weight:700;margin-bottom:4px">${escapeHtml(g.label)}
+                    <span style="color:var(--text-light);font-weight:400">(${g.total})</span></div>
+                <table style="font-size:13px">
+                    <thead><tr><th style="width:22%">Reference / Name</th><th>Details</th>
+                        <th style="text-align:right;width:15%">Amount</th><th style="width:10%">Status</th></tr></thead>
+                    <tbody>${rows}${more}</tbody>
+                </table>
+            </div>`;
+    }).join('');
+    box.innerHTML = head + sections;
+}
+
+async function openSearchResult(type, id, el) {
+    if (type === 'sale') return viewSaleDetail(id);
+    if (type === 'purchase') return viewPurchaseDetail(id);
+    if (type === 'party' || type === 'ledger') return viewLedger(id);
+    // Everything else: jump to the module page that owns the record.
+    const pageMap = {
+        payment: 'cash-collection', milk: 'milk', product: 'stock',
+        petty_cash: 'petty-cash', bank: 'bank', batch: 'production',
+        salary: 'salary', vehicle: 'vehicle', expense: 'expenses', deposit: 'cash-deposit'
+    };
+    if (pageMap[type]) navigateTo(pageMap[type]);
+}
+
+function clearGlobalSearch(refocus = true) {
+    const input = document.getElementById('global-search-input');
+    const box = document.getElementById('global-search-results');
+    const clearBtn = document.getElementById('global-search-clear');
+    clearTimeout(_globalSearchTimer);
+    if (input && refocus) input.value = '';
+    if (box) box.innerHTML = '';
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (input && refocus) input.focus();
 }
 
 function renderMonthlyChart(salesData, purchaseData) {

@@ -563,6 +563,11 @@ authHandle('db:dashboard', async () => {
     return safeRun(() => ops.getDashboard(db));
 });
 
+// --- Global search (read-only) ---
+authHandle('db:search', async (event, opts = {}) => {
+    return safeRun(() => ops.globalSearch(db, opts));
+});
+
 // --- Parties ---
 authHandle('db:parties:list', async (event, params = {}) => {
     return safeRun(() => ops.listParties(db, params));

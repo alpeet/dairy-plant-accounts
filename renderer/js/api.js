@@ -83,6 +83,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
     window.api = {
         // Dashboard
         getDashboard: () => apiPost('/dashboard'),
+        globalSearch: (opts) => apiPost('/search', opts),
 
         // Parties
         getParties: (opts) => apiPost('/parties/list', opts || {}),
