@@ -5,7 +5,24 @@
 A professional dairy plant accounting and stock management application that runs as both a **desktop app** (Electron) and a **web app** (Express.js browser-based). Both modes share the same frontend code, database schema, and business logic.
 
 ---
+## ⬇️ Download the App (no installation steps needed)
 
+Ready-to-run installers are published on the GitHub **Releases** page:
+
+**👉 https://github.com/alpeet/dairy-plant-accounts/releases/latest**
+
+| System | Download |
+|---|---|
+| 🍎 macOS (Apple Silicon M1/M2/M3/M4) | `Prarambha Account & Stock Management-x.y.z-arm64.dmg` |
+| 🪟 Windows 10/11 (Installer) | `Prarambha Account & Stock Management-Setup-x.y.z-x64.exe` |
+| 🪟 Windows (Portable, runs from USB) | `Prarambha-Accounts-Portable-x.y.z.exe` |
+
+**macOS:** open the DMG → drag to Applications → first launch: right-click the app → **Open** → **Open** (unsigned app warning appears only once).
+**Windows:** run the Setup exe and pick an install folder; or copy the Portable exe anywhere (even a USB stick) and run it — it keeps its own data next to itself.
+
+The installers ship **no database** — the app creates its own data folder on first run, so you start clean.
+
+---
 ## Quick Start
 
 ### Web Mode (Recommended for most users)
