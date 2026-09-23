@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self' file: data: blob:; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'self' file: blob: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'">
+    <title>Milk Standardization Calculator</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/print.css" media="print">
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-mark" aria-hidden="true">🥛</div>
+            <div class="brand-text">
+                <h1>Milk Standardization Calculator</h1>
+                <p id="brandSub">Fat / SNF mass-balance standardization — offline</p>
+            </div>
+        </div>
+        <nav class="tabs" id="tabs" role="tablist">
+            <button class="tab is-active" data-view="standardize" role="tab">Standardize</button>
+            <button class="tab" data-view="history" role="tab">Batch History</button>
+            <button class="tab" data-view="tools" role="tab">Tools</button>
+            <button class="tab" data-view="settings" role="tab">Settings</button>
+        </nav>
+        <div class="topbar-right">
+            <span class="chip chip-soft" id="dataChip" title="Where batches are stored">…</span>
+            <span class="chip" id="modeChip">…</span>
+        </div>
+    </header>
+
+    <main class="content">
+
+        <!-- ============================ STANDARDIZE ============================ -->
+        <section class="view is-active" id="view-standardize">
+            <div class="split">
+                <form class="panel form-panel" id="calcForm" autocomplete="off" novalidate>
+
+                    <fieldset class="group">
+                        <legend>1 · Milk type &amp; quantity</legend>
+                        <div class="grid grid-2">
+                            <label class="field">
+                                <span>Milk type</span>
+                                <select id="milkType"></select>
+                            </label>
+                            <label class="field">
+                                <span>Raw milk quantity <em id="qtyUnitHint">(L)</em></span>
+                                <div class="input-row">
+                                    <input type="number" id="quantity" step="0.01" min="0" placeholder="480" inputmode="decimal">
+                                    <select id="unit" class="unit-select">
+                                        <option value="L">L</option>
+                                        <option value="kg">kg</option>
+                                    </select>
+                                </div>
+                            </label>
+                        </div>
+                        <p class="hint">Minimum fat / SNF for this milk type are taken from <b>Settings</b>. All formulas are ratios, so keep one unit throughout.</p>
+                    </fieldset>
+
+                    <fieldset class="group">
+                        <legend>2 · Current milk analysis</legend>
+                        <div class="grid grid-2">
+                            <label class="field">
+                                <span>Initial fat % (F1)</span>
+                                <input type="number" id="fatInitial" step="0.01" min="0" placeholder="5.5" inputmode="decimal">
+                            </label>
+                            <label class="field">
+                                <span>SNF source</span>
+                                <select id="snfSource">
+                                    <option value="direct">Direct SNF meter / lab reading</option>
+                                    <option value="clr">From lactometer CLR (Richmond)</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="grid grid-2" id="directSnfBlock">
+                            <label class="field">
+                                <span>Initial SNF % (S1)</span>
+                                <input type="number" id="snfInitial" step="0.01" min="0" placeholder="8.6" inputmode="decimal">
+                            </label>
+                            <div class="field field-note">
+                                <span>&nbsp;</span>
+                                <p class="hint" id="snfHint">Enter the lab / meter SNF reading.</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-2 hidden" id="clrBlock">
+                            <label class="field">
+                                <span>Lactometer corrected reading (CLR at 27 °C)</span>
+                                <input type="number" id="clr" step="0.1" min="0" placeholder="28" inputmode="decimal">
+                            </label>
+                            <label class="field">
+                                <span>…or lactometer reading (e.g. 1.028)</span>
+                                <input type="number" id="lactometer" step="0.001" min="1" max="1.1" placeholder="1.028" inputmode="decimal">
+                            </label>
+                            <p class="hint span-2">Richmond's formula: <b>SNF% = (CLR ÷ 4) + (0.2 × Fat%) + 0.14</b>. Computed SNF:
+                                <b id="clrSnfOut">—</b></p>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="group">
+                        <legend>3 · Target</legend>
+                        <div class="grid grid-2">
+                            <label class="field">
+                                <span>Target fat % (F2)</span>
+                                <input type="number" id="fatTarget" step="0.01" min="0" placeholder="3.5" inputmode="decimal">
+                            </label>
+                            <label class="field">
+                                <span>Target SNF % (optional)</span>
+                                <input type="number" id="snfTarget" step="0.01" min="0" placeholder="leave blank to skip" inputmode="decimal">
+                            </label>
+                        </div>
+                        <div class="field">
+                            <span>Quick targets</span>
+                            <div class="chips" id="quickFatTargets"></div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="group">
+                        <legend>4 · Mode</legend>
+                        <div class="mode-grid" id="modeGrid"></div>
+                    </fieldset>
+
+                    <fieldset class="group" id="modeParamsGroup">
+                        <legend>5 · Mode parameters</legend>
+                        <div class="grid grid-2" id="creamParams">
+                            <label class="field">
+                                <span>Cream fat % (Fc)</span>
+                                <input type="number" id="creamFat" step="0.1" min="0" inputmode="decimal">
+                            </label>
+                            <label class="field">
+                                <span>Cream SNF %</span>
+                                <input type="number" id="creamSnf" step="0.1" min="0" inputmode="decimal">
+                            </label>
+                        </div>
+                        <div class="grid grid-2 hidden" id="skimParams">
+                            <label class="field">
+                                <span>Skim milk fat % (Fs)</span>
+                                <input type="number" id="skimFat" step="0.01" min="0" inputmode="decimal">
+                            </label>
+                            <label class="field">
+                                <span>Skim milk SNF %</span>
+                                <input type="number" id="skimSnf" step="0.1" min="0" inputmode="decimal">
+                            </label>
+                        </div>
+                        <p class="hint" id="waterParamHint" style="display:none">Water addition has no extra parameters — water is assumed to carry 0% fat and 0% SNF.</p>
+                        <div class="grid grid-2" id="smpParams">
+                            <label class="field">
+                                <span>SMP (skim milk powder) SNF content %</span>
+                                <input type="number" id="smpSnf" step="0.1" min="0" inputmode="decimal">
+                            </label>
+                            <label class="field">
+                                <span>SMP fat content %</span>
+                                <input type="number" id="smpFat" step="0.1" min="0" inputmode="decimal">
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="group">
+                        <legend>6 · Batch details (for the record)</legend>
+                        <div class="grid grid-2">
+                            <label class="field">
+                                <span>Batch / lot reference</span>
+                                <input type="text" id="batchRef" placeholder="e.g. 2083-06-07 AM">
+                            </label>
+                            <label class="field">
+                                <span>Supplier / collection centre</span>
+                                <input type="text" id="supplier" placeholder="e.g. Chitwan Dairy Co-op">
+                            </label>
+                            <label class="field">
+                                <span>Operator</span>
+                                <input type="text" id="operator" placeholder="name on shift">
+                            </label>
+                            <label class="field">
+                                <span>Notes</span>
+                                <input type="text" id="notes" placeholder="optional remark">
+                            </label>
+                        </div>
+                        <p class="hint">The plant name, address and signature block printed on reports come from <b>Settings</b>.</p>
+                    </fieldset>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-primary" id="btnSave">Save to batch history</button>
+                        <button type="button" class="btn" id="btnPrint">Print report</button>
+                        <button type="button" class="btn" id="btnPdf">Export PDF</button>
+                        <span class="spacer"></span>
+                        <button type="button" class="btn btn-ghost" id="btnExample">Load example</button>
+                        <button type="button" class="btn btn-ghost" id="btnClear">Reset form</button>
+                    </div>
+                </form>
+
+                <div class="panel result-panel" id="resultPanel">
+                    <div class="result-head">
+                        <div>
+                            <p class="eyebrow" id="resultMode">—</p>
+                            <h2 id="resultTitle">Enter milk details to calculate</h2>
+                        </div>
+                        <div class="result-badges" id="resultBadges"></div>
+                    </div>
+                    <div id="resultBody"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================== HISTORY ============================== -->
+        <section class="view" id="view-history">
+            <div class="panel">
+                <div class="toolbar">
+                    <input type="search" id="histSearch" placeholder="Search batch ref, supplier, notes…">
+                    <select id="histMilkType">
+                        <option value="">All milk types</option>
+                    </select>
+                    <select id="histMode">
+                        <option value="">All modes</option>
+                    </select>
+                    <select id="histResult">
+                        <option value="">All results</option>
+                        <option value="pass">Compliant only</option>
+                        <option value="fail">Below minimum only</option>
+                    </select>
+                    <span class="spacer"></span>
+                    <button class="btn" id="btnExportCsv">Export CSV</button>
+                    <button class="btn" id="btnBackup">Backup JSON</button>
+                    <button class="btn" id="btnRestore">Restore</button>
+                    <button class="btn btn-danger-ghost" id="btnClearHistory">Clear history</button>
+                </div>
+                <div class="stats" id="histStats"></div>
+                <div class="table-wrap">
+                    <table class="data-table" id="histTable">
+                        <thead>
+                        <tr>
+                            <th>Date &amp; time</th>
+                            <th>Batch / supplier</th>
+                            <th>Milk</th>
+                            <th>Mode</th>
+                            <th class="num">Input</th>
+                            <th class="num">Action</th>
+                            <th class="num">Final</th>
+                            <th class="num">Fat / SNF</th>
+                            <th>Status</th>
+                            <th class="actions-col">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody id="histBody"></tbody>
+                    </table>
+                </div>
+                <p class="empty" id="histEmpty">No batches saved yet. Every calculation you save appears here with a printable report.</p>
+            </div>
+        </section>
+
+        <!-- =============================== TOOLS =============================== -->
+        <section class="view" id="view-tools">
+            <div class="split even">
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>Lactometer / CLR → SNF</h2>
+                        <p class="hint">Richmond's formula, for when a direct SNF meter reading is not available. CLR must be corrected to 27 °C.</p>
+                    </div>
+                    <div class="grid grid-2">
+                        <label class="field">
+                            <span>Fat %</span>
+                            <input type="number" id="toolFat" step="0.01" min="0" placeholder="5.5" inputmode="decimal">
+                        </label>
+                        <label class="field">
+                            <span>CLR at 27 °C</span>
+                            <input type="number" id="toolClr" step="0.1" min="0" placeholder="28" inputmode="decimal">
+                        </label>
+                        <label class="field">
+                            <span>…or lactometer reading</span>
+                            <input type="number" id="toolLacto" step="0.001" min="1" max="1.1" placeholder="1.028" inputmode="decimal">
+                        </label>
+                        <div class="field">
+                            <span>Estimated SNF %</span>
+                            <div class="readout" id="toolSnfOut">—</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>SNF → CLR (reverse)</h2>
+                        <p class="hint">Use this to cross-check a lactometer reading against a lab SNF result.</p>
+                    </div>
+                    <div class="grid grid-2">
+                        <label class="field">
+                            <span>Fat %</span>
+                            <input type="number" id="toolFat2" step="0.01" min="0" placeholder="5.5" inputmode="decimal">
+                        </label>
+                        <label class="field">
+                            <span>SNF %</span>
+                            <input type="number" id="toolSnfIn" step="0.01" min="0" placeholder="8.6" inputmode="decimal">
+                        </label>
+                        <div class="field">
+                            <span>Required CLR</span>
+                            <div class="readout" id="toolClrOut">—</div>
+                        </div>
+                        <div class="field">
+                            <span>Implied lactometer reading</span>
+                            <div class="readout" id="toolLactoOut">—</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel span-full">
+                    <div class="panel-head">
+                        <h2>Formula reference</h2>
+                        <p class="hint">Mass balance is applied on the same unit throughout; percentages are by mass.</p>
+                    </div>
+                    <table class="data-table compact">
+                        <thead>
+                        <tr><th>Step</th><th>Formula</th><th>Notes</th></tr>
+                        </thead>
+                        <tbody>
+                        <tr><td>Cream separation</td><td><code>Wc = W × (F1 − F2) ÷ (Fc − F2)</code></td><td>Cream removed at Fc% fat; remaining milk = W − Wc</td></tr>
+                        <tr><td>Cream addition</td><td><code>Wc = W × (F2 − F1) ÷ (Fc − F2)</code></td><td>Final quantity = W + Wc</td></tr>
+                        <tr><td>Skim milk addition</td><td><code>Ws = W × (F1 − F2) ÷ (F2 − Fs)</code></td><td>Final quantity = W + Ws</td></tr>
+                        <tr><td>Water addition</td><td><code>Ww = W × (F1 − F2) ÷ F2</code></td><td>Dilutes SNF — normally not permitted</td></tr>
+                        <tr><td>SNF after operation</td><td><code>SNF = (W × SNF1 ± Wx × SNFx) ÷ (W ± Wx)</code></td><td>Cream ≈ 2%, skim ≈ 9%, water 0% (editable)</td></tr>
+                        <tr><td>SMP reconstitution</td><td><code>SMP = Wt × (SNFt − SNFc) ÷ (SMP_SNF − SNFt)</code></td><td>SMP SNF ≈ 96% (editable)</td></tr>
+                        <tr><td>Richmond (SNF from CLR)</td><td><code>SNF% = CLR ÷ 4 + 0.2 × Fat% + 0.14</code></td><td>CLR corrected at 27 °C</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================= SETTINGS ============================= -->
+        <section class="view" id="view-settings">
+            <div class="split even">
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>Plant / report identity</h2>
+                        <p class="hint">Printed on every standardization report.</p>
+                    </div>
+                    <div class="grid grid-2">
+                        <label class="field"><span>Plant name</span><input type="text" id="setPlantName" placeholder="Prarambha Dairy Plant"></label>
+                        <label class="field"><span>Licence / registration no.</span><input type="text" id="setPlantLicense" placeholder="optional"></label>
+                        <label class="field span-2"><span>Address</span><input type="text" id="setPlantAddress" placeholder="Street, city, district"></label>
+                        <label class="field"><span>Phone / contact</span><input type="text" id="setPlantPhone" placeholder="optional"></label>
+                        <label class="field"><span>Default operator</span><input type="text" id="setOperator" placeholder="name"></label>
+                        <label class="field span-2"><span>Report footer note</span><input type="text" id="setReportNote" placeholder="e.g. Tested as per plant quality manual QM-04"></label>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>Defaults &amp; working preferences</h2>
+                        <p class="hint">Pre-filled into every new calculation — you can always override them per batch.</p>
+                    </div>
+                    <div class="grid grid-3">
+                        <label class="field"><span>Default unit</span>
+                            <select id="setDefaultUnit"><option value="L">Litres (L)</option><option value="kg">Kilograms (kg)</option></select>
+                        </label>
+                        <label class="field"><span>Default milk type</span><select id="setDefaultMilkType"></select></label>
+                        <label class="field"><span>Decimals shown</span>
+                            <select id="setDecimals"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+                        </label>
+                        <label class="field"><span>Cream fat % (Fc)</span><input type="number" id="setCreamFat" step="0.1" min="0"></label>
+                        <label class="field"><span>Cream SNF %</span><input type="number" id="setCreamSnf" step="0.1" min="0"></label>
+                        <label class="field"><span>Skim milk fat % (Fs)</span><input type="number" id="setSkimFat" step="0.01" min="0"></label>
+                        <label class="field"><span>Skim milk SNF %</span><input type="number" id="setSkimSnf" step="0.1" min="0"></label>
+                        <label class="field"><span>SMP SNF content %</span><input type="number" id="setSmpSnf" step="0.1" min="0"></label>
+                        <label class="field"><span>SMP fat content %</span><input type="number" id="setSmpFat" step="0.1" min="0"></label>
+                        <label class="field"><span>History kept (records)</span><input type="number" id="setHistoryLimit" step="10" min="10"></label>
+                    </div>
+                </div>
+
+                <div class="panel span-full">
+                    <div class="panel-head">
+                        <h2>Regulatory minimums</h2>
+                        <p class="hint">These are <b>placeholders</b> shipped with the app, not a legal standard. Fat and SNF
+                            minimums differ by country, state and milk class — replace them with the values that apply to you.</p>
+                    </div>
+                    <label class="check">
+                        <input type="checkbox" id="setEnforceMinimums">
+                        <span>Flag results that fall below these minimums (pass / fail on screen and on reports)</span>
+                    </label>
+                    <table class="data-table compact min-table">
+                        <thead><tr><th>Milk type</th><th>Minimum fat %</th><th>Minimum SNF %</th></tr></thead>
+                        <tbody>
+                        <tr><td>Cow milk</td>
+                            <td><input type="number" id="minFatCow" step="0.01" min="0"></td>
+                            <td><input type="number" id="minSnfCow" step="0.01" min="0"></td></tr>
+                        <tr><td>Buffalo milk</td>
+                            <td><input type="number" id="minFatBuffalo" step="0.01" min="0"></td>
+                            <td><input type="number" id="minSnfBuffalo" step="0.01" min="0"></td></tr>
+                        <tr><td>Mixed milk</td>
+                            <td><input type="number" id="minFatMixed" step="0.01" min="0"></td>
+                            <td><input type="number" id="minSnfMixed" step="0.01" min="0"></td></tr>
+                        </tbody>
+                    </table>
+                    <p class="hint">Leave a minimum at 0 to disable that check for the milk type.</p>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>Data</h2>
+                        <p class="hint" id="dataLocation">—</p>
+                    </div>
+                    <div class="form-actions wrap">
+                        <button class="btn" id="btnOpenFolder">Open data folder</button>
+                        <button class="btn btn-danger-ghost" id="btnClearHistory2">Clear all history</button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <h2>About</h2>
+                    </div>
+                    <ul class="about-list" id="aboutList"></ul>
+                </div>
+
+                <div class="form-actions sticky-actions">
+                    <button class="btn btn-primary" id="btnSaveSettings">Save settings</button>
+                    <button class="btn btn-ghost" id="btnResetSettings">Restore app defaults</button>
+                    <span class="hint" id="settingsDirty">No unsaved changes</span>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div id="printArea" class="print-area"></div>
+
+<div class="modal hidden" id="reportModal">
+    <div class="modal-card wide">
+        <div class="modal-bar">
+            <h3 id="reportModalTitle">Standardization Report</h3>
+            <div class="modal-actions">
+                <button class="btn btn-sm" id="reportPrint">Print</button>
+                <button class="btn btn-sm" id="reportPdf">Export PDF</button>
+                <button class="btn btn-sm btn-primary" id="reportClose">Close</button>
+            </div>
+        </div>
+        <div class="report-scroll" id="reportBody"></div>
+    </div>
+</div>
+
+<div class="modal hidden" id="modal">
+    <div class="modal-card">
+        <h3 id="modalTitle">Confirm</h3>
+        <p id="modalText"></p>
+        <div class="modal-actions">
+            <button class="btn" id="modalCancel">Cancel</button>
+            <button class="btn btn-primary" id="modalOk">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<script src="../shared/defaults.js"></script>
+<script src="../shared/calc.js"></script>
+<script src="../shared/store.js"></script>
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/report.js"></script>
+<script src="js/calculator.js"></script>
+<script src="js/history.js"></script>
+<script src="js/tools.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
