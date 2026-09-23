@@ -419,7 +419,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Default settings
-INSERT OR IGNORE INTO settings (key, value) VALUES ('business_name', 'Prarambha Account & Stock Management');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('business_name', '');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('business_address', '');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('business_phone', '');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('business_email', '');

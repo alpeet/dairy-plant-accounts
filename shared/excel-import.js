@@ -1329,6 +1329,54 @@ const TRANSACTIONAL_TABLES = [
  *   @param {function} [opts.log]  log callback (defaults to console.log)
  * @returns {object} summary of inserted/updated counts
  */
+/**
+ * Seed business settings from the workbook's Settings sheet — fill-blank only.
+ * A fresh install starts with an empty settings table; the company details
+ * (name, PAN, contact, email) should come across with the business data so the
+ * app is usable immediately. Anything already set in the app is never touched,
+ * and [bracketed] placeholder values in the sheet are skipped.
+ */
+function importSettingsFromWorkbook(db, workbook, log) {
+    const sheetName = workbook.SheetNames.find(n => n.toLowerCase() === 'settings');
+    if (!sheetName) return;
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+    const get = (label) => {
+        for (const r of rows) {
+            if (String(r[0] ?? '').trim().startsWith(label)) {
+                const v = String(r[1] ?? '').trim();
+                return /^\[.*\]$/.test(v) ? '' : v; // skip [placeholder] cells
+            }
+        }
+        return '';
+    };
+    const pan = get('PAN / VAT No:');
+    const map = {
+        business_name: get('Business Name:'),
+        business_address: [get('Address Line 1:'), get('Address Line 2:')].filter(Boolean).join(', '),
+        business_phone: get('Phone:'),
+        business_email: get('Email:'),
+        business_pan: pan,
+        business_pan_vat: pan,
+    };
+    const setStmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    const lookup = db.prepare('SELECT value FROM settings WHERE key = ?');
+    // The schema pre-seeds a generic placeholder name; treat it as "not set"
+    // so the real company name from the workbook can take its place.
+    const GENERIC_DEFAULTS = new Set(['Prarambha Account & Stock Management']);
+    let seeded = 0;
+    db.transaction(() => {
+        for (const [key, value] of Object.entries(map)) {
+            if (!value) continue;
+            const existing = lookup.get(key);
+            const cur = existing ? String(existing.value ?? '').trim() : '';
+            if (cur !== '' && !GENERIC_DEFAULTS.has(cur)) continue;
+            setStmt.run(key, value);
+            seeded++;
+        }
+    })();
+    if (seeded) log(`  ⚙️  Seeded ${seeded} company setting(s) from the Settings sheet (filled blanks only).`);
+}
+
 function runExcelImport(db, excelPath, opts = {}) {
     const mode = opts.mode || 'fresh';
     const log = opts.log || ((msg) => console.log(msg));
@@ -1350,6 +1398,10 @@ function runExcelImport(db, excelPath, opts = {}) {
 
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+
+    // Seed company settings (name, PAN, contact…) from the Settings sheet —
+    // fill-blank only, so values already set in the app always win.
+    importSettingsFromWorkbook(db, workbook, log);
 
     if (mode === 'fresh') {
         log('\n  🗑️  Clearing existing transactional data...');
