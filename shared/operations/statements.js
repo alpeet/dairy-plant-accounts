@@ -138,11 +138,13 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
         runningBalance = runningBalance + (entry.debit || 0) - (entry.credit || 0);
 
         let description = entry.description || '';
+        if (String(description).trim() === '0') description = ''; // filler from Excel import
         if (entry.reference_type === 'purchase') {
             const milkLines = milkByPurchase[entry.reference_id] || milkByPurchase[textRefToId[String(entry.reference_id)]] || [];
             if (milkLines.length) {
+                const n2 = v => { const s = Number(v).toFixed(2); return s.endsWith('.00') ? s.slice(0, -3) : s; };
                 const lines = milkLines.map(m =>
-                    `${String(m.milk_type || 'mixed').toUpperCase()} Milk ${Number(m.quantity_liters)}L @${Number(m.rate)} = ${Number(m.amount)}`
+                    `${String(m.milk_type || 'mixed').toUpperCase()} Milk ${n2(m.quantity_liters)}L @${n2(m.rate)} = ${n2(m.amount)}`
                 ).join(' | ');
                 if (lines) description = (description ? description + ' — ' : '') + lines;
             }
