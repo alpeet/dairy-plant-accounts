@@ -16,6 +16,9 @@ async function renderSettings() {
 
     const settings = result.data;
 
+    const securityCodeCard = buildSecurityCodeCard(settings);
+    const dataCleanupCard = buildDataCleanupCard();
+
     const userManagementCard = hasUserManagement() ? `
         <div class="card" style="max-width:600px;margin-top:20px">
             <div class="card-header">
@@ -172,6 +175,10 @@ async function renderSettings() {
 
         ${userManagementCard}
 
+        ${securityCodeCard}
+
+        ${dataCleanupCard}
+
         <div class="card" style="max-width:600px;margin-top:20px">
             <div class="card-header">
                 <h2>Data Management</h2>
@@ -294,6 +301,187 @@ async function renderSettings() {
 // ============================================================
 
 // Check if user management features are available (web-only, not in Electron)
+// ── Security code + Data cleanup (factory reset) ──
+
+function buildSecurityCodeCard(settings) {
+    const hasCode = !!(settings && settings.security_code_hash);
+    return `
+        <div class="card" style="max-width:600px;margin-top:20px">
+            <div class="card-header">
+                <h2>🔐 Security Code</h2>
+            </div>
+            <div class="settings-section">
+                <p style="font-size:13px;color:var(--text-light);margin:0 0 12px">
+                    A second secret, separate from your login password. It is required together with the admin
+                    password before <strong>Data Cleanup</strong> (below) can run.
+                    ${hasCode ? 'A security code is currently set.' : '<strong style="color:#b91c1c">No security code is set yet — set one to enable Data Cleanup.</strong>'}
+                </p>
+                <form id="securityCodeForm" onsubmit="return false">
+                    ${hasCode ? `
+                    <div class="form-group">
+                        <label>Current security code</label>
+                        <input type="password" class="form-control" id="secCodeCurrent" autocomplete="off">
+                    </div>` : ''}
+                    <div class="form-group">
+                        <label>${hasCode ? 'New security code' : 'Security code'} (min 4 characters)</label>
+                        <input type="password" class="form-control" id="secCodeNew" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label>Repeat ${hasCode ? 'new ' : ''}security code</label>
+                        <input type="password" class="form-control" id="secCodeNew2" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label>Your admin password (authorises this change)</label>
+                        <input type="password" class="form-control" id="secCodeAdminPw" autocomplete="off">
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="submitSecurityCode(${hasCode ? 'true' : 'false'})">
+                        ${hasCode ? '🔑 Change Security Code' : '🔐 Set Security Code'}
+                    </button>
+                </form>
+            </div>
+        </div>`;
+}
+
+async function submitSecurityCode(hasCode) {
+    const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const currentCode = hasCode ? val('secCodeCurrent') : undefined;
+    const newCode = val('secCodeNew');
+    const newCode2 = val('secCodeNew2');
+    const adminPassword = val('secCodeAdminPw');
+    if (newCode.length < 4) { showToast('The security code must be at least 4 characters long.', 'error'); return; }
+    if (newCode !== newCode2) { showToast('The two new security codes do not match.', 'error'); return; }
+    if (!adminPassword) { showToast('Enter your admin password to authorise this change.', 'error'); return; }
+    const result = await window.api.setSecurityCode({ currentCode, newCode, adminPassword });
+    if (result && result.success) {
+        showToast((result.data && result.data.message) || 'Security code saved.', 'success');
+        renderSettings();
+    } else {
+        showToast((result && result.error) || 'Could not save the security code.', 'error');
+    }
+}
+
+const CLEANUP_LABELS = {
+    sales_items: 'Sales line items', purchase_items: 'Purchase line items',
+    production_inputs: 'Production inputs', production_outputs: 'Production outputs',
+    sales: 'Sales invoices', purchases: 'Purchase bills', milk_collections: 'Milk collections',
+    payments: 'Payments', bank_transactions: 'Bank transactions',
+    production_batches: 'Production batches', partner_capital: 'Partner capital entries',
+    denomination_counts: 'Cash denomination counts', petty_cash: 'Petty cash vouchers',
+    cash_deposits: 'Cash deposits', salary_records: 'Salary records',
+    vehicle_expenses: 'Vehicle expenses', other_expenses: 'Other expenses',
+    ledger_entries: 'Ledger entries', stock_movements: 'Stock movements',
+    routes: 'Routes', milk_rate_chart: 'Milk rate charts',
+    parties: 'Parties (customers, suppliers, farmers)', products: 'Products (items)'
+};
+
+function buildDataCleanupCard() {
+    return `
+        <div class="card" style="max-width:600px;margin-top:20px;border:2px solid #fecaca">
+            <div class="card-header">
+                <h2>🧹 Data Cleanup (Handover Reset)</h2>
+            </div>
+            <div class="settings-section">
+                <p style="font-size:13px;color:var(--text-light);margin:0 0 12px">
+                    Permanently clears business data so the app can be handed to a new user, then re-filled
+                    by importing an Excel workbook. A verified safety backup is created first, everything runs
+                    in one transaction, and the action is written to the audit log.
+                    <strong style="color:#b91c1c">This cannot be undone inside the app</strong> — restore the
+                    backup file if you change your mind.
+                </p>
+                <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                    Always kept: user logins, app &amp; company settings, audit log.
+                </p>
+                <button class="btn btn-secondary btn-sm" onclick="loadCleanupCounts()">📊 Show What Would Be Cleared</button>
+                <div id="cleanupCounts" style="margin-top:12px"></div>
+            </div>
+        </div>`;
+}
+
+async function loadCleanupCounts() {
+    const box = document.getElementById('cleanupCounts');
+    if (!box) return;
+    box.innerHTML = '<p style="font-size:12px;color:var(--text-light)">Counting rows...</p>';
+    const result = await window.api.getCleanupStatus();
+    if (!result || !result.success) {
+        box.innerHTML = '<p style="font-size:12px;color:#b91c1c">Could not load row counts.</p>';
+        return;
+    }
+    const d = result.data;
+    const rows = Object.entries(d.counts).map(([t, c]) =>
+        `<tr><td style="padding:3px 8px">${CLEANUP_LABELS[t] || t}</td><td style="padding:3px 8px;text-align:right;font-weight:600">${c === null ? '—' : c.toLocaleString()}</td></tr>`
+    ).join('');
+    const fmt = n => n.toLocaleString();
+    box.innerHTML = `
+        <div style="font-size:13px;margin-bottom:8px">Rows that will be deleted: <strong>${fmt(d.transactional_rows)}</strong>
+            ${d.has_security_code ? '' : ' · <span style="color:#b91c1c">set a Security Code first (above)</span>'}
+            ${d.locked_out ? ' · <span style="color:#b91c1c">temporarily locked after wrong code attempts</span>' : ''}
+        </div>
+        <div style="max-height:220px;overflow:auto;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:12px">
+            <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${rows}</tbody></table>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div style="padding:12px;background:var(--bg);border-radius:6px;text-align:center">
+                <h3 style="font-size:13px;margin:0 0 6px">Clear transactions only</h3>
+                <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Keeps parties, products, routes and rate charts — start fresh with the same names.</p>
+                <button class="btn btn-secondary btn-sm" onclick="performDataCleanup('keep-masters')" ${d.has_security_code && !d.locked_out ? '' : 'disabled'}>🧹 Clear Transactions</button>
+            </div>
+            <div style="padding:12px;background:#fef2f2;border-radius:6px;text-align:center">
+                <h3 style="font-size:13px;margin:0 0 6px;color:#b91c1c">Full factory reset</h3>
+                <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Also clears parties and products. The app becomes an empty book — import Excel next.</p>
+                <button class="btn btn-danger btn-sm" onclick="performDataCleanup('wipe-all')" ${d.has_security_code && !d.locked_out ? '' : 'disabled'}>🗑️ Wipe All Data</button>
+            </div>
+        </div>`;
+}
+
+async function performDataCleanup(mode) {
+    const what = mode === 'keep-masters'
+        ? 'ALL transactions (sales, purchases, collections, payments, ledger, stock, expenses…), keeping parties, products, users and settings.'
+        : 'ALL business data INCLUDING parties and products. Only user logins, settings and the audit log remain.';
+    if (!confirm('This permanently deletes ' + what + '\n\nA safety backup is created first. Continue?')) return;
+
+    showModal(`
+        <div class="modal-header"><h2>🔒 Confirm Data Cleanup</h2></div>
+        <div class="modal-body">
+            <p style="font-size:13px;margin:0 0 12px">Enter <strong>both</strong> secrets to start. A verified backup is created before anything is deleted.</p>
+            <div class="form-group">
+                <label>Admin password</label>
+                <input type="password" class="form-control" id="cleanupAdminPw" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label>Security code</label>
+                <input type="password" class="form-control" id="cleanupSecCode" autocomplete="off">
+            </div>
+            <p style="font-size:11px;color:var(--text-light);margin:0">5 wrong security codes lock cleanup for 15 minutes.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-danger" onclick="confirmDataCleanup('${mode}')">Delete Everything Selected</button>
+        </div>`);
+}
+
+async function confirmDataCleanup(mode) {
+    const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const adminPassword = val('cleanupAdminPw');
+    const securityCode = val('cleanupSecCode');
+    if (!adminPassword || !securityCode) { showToast('Enter both the admin password and the security code.', 'error'); return; }
+    const result = await window.api.performDataCleanup({ adminPassword, securityCode, mode });
+    if (result && result.success) {
+        const b = result.data && result.data.backup;
+        showModal(`
+            <div class="modal-header"><h2>✅ Data cleared</h2></div>
+            <div class="modal-body">
+                <p style="font-size:13px;margin:0 0 10px">${result.data.message}</p>
+                ${b ? `<p style="font-size:12px;margin:0 0 6px">💾 Safety backup: <strong>${b.filename}</strong> (${(b.size / 1048576).toFixed(1)} MB)</p>
+                       <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Keep this file until the new user's data is in. To undo, restore it from Settings → Backup History.</p>` : ''}
+                <p style="font-size:12px;margin:0">Next step: import the new user's Excel in Settings → “Update Data from Excel”.</p>
+            </div>
+            <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal(); renderSettings()">Done</button></div>`);
+    } else {
+        showToast((result && result.error) || 'The cleanup did not run.', 'error');
+        if (result && /locked/i.test(result.error || '')) renderSettings();
+    }
+}
+
 function hasUserManagement() {
     return typeof window.api !== 'undefined' && typeof window.api.listUsers === 'function';
 }
@@ -1373,6 +1561,10 @@ window.downloadBackup = downloadBackup;
 window.deleteBackupFile = deleteBackupFile;
 window.restoreBackupFile = restoreBackupFile;
 window.loadTableInfo = loadTableInfo;
+window.loadCleanupCounts = loadCleanupCounts;
+window.performDataCleanup = performDataCleanup;
+window.confirmDataCleanup = confirmDataCleanup;
+window.submitSecurityCode = submitSecurityCode;
 window.toggleTableGroup = toggleTableGroup;
 window.renderDBTables = renderDBTables;
 window.filterDBTables = filterDBTables;

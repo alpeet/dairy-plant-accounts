@@ -80,6 +80,7 @@ const {
     deleteOtherExpense, getExpenseCategories, getExpensesSummary
 } = require('./expenses');
 const { logAudit, getAuditLogs } = require('./audit');
+const { getCleanupStatus, setSecurityCode, performCleanup } = require('./data_cleanup');
 const { runIntegrityChecks } = require('./integrity');
 const { getTableInfo } = require('./table_info');
 const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
@@ -145,6 +146,9 @@ module.exports = {
 
     // Settings
     getSettings, saveSettings,
+
+    // Data cleanup (factory reset) — admin password + security code gated
+    getCleanupStatus, setSecurityCode, performCleanup,
 
     // Backup
     backupDatabase,

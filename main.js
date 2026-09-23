@@ -1049,6 +1049,27 @@ authHandle('db:settings:save', async (event, settings) => {
     return safeRun(() => ops.saveSettings(db, settings));
 });
 
+// --- Data cleanup (factory reset) — admin password + security code gated ---
+authHandle('db:cleanup:status', async () => {
+    return safeRun(() => ops.getCleanupStatus(db));
+});
+
+authHandle('db:cleanup:security-code', async (event, payload) => {
+    return safeRun(() => ops.setSecurityCode(db, payload || {}, null));
+});
+
+authHandle('db:cleanup:perform', async (event, payload) => {
+    const p = payload || {};
+    return safeRun(() => ops.performCleanup(db, {
+        adminPassword: p.adminPassword,
+        securityCode: p.securityCode,
+        mode: p.mode || 'wipe-all',
+        envAdmin: null,
+        userId: currentUser ? currentUser.id : null,
+        createBackup: () => ops.backupDatabase(path.join(getDbDir(), 'dairy-plant.db'), db)
+    }));
+});
+
 // --- Email ---
 authHandle('email:send', async (event, opts = {}) => {
     return ops.sendEmail(db, opts);

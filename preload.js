@@ -198,6 +198,11 @@ contextBridge.exposeInMainWorld('api', {
     // Import from Dairy Account Pro Excel (filePath optional — shows a picker when omitted)
     importExcelFromFile: (opts) => ipcRenderer.invoke('excel:import-file', opts),
 
+    // Data cleanup (factory reset)
+    getCleanupStatus: () => ipcRenderer.invoke('db:cleanup:status'),
+    setSecurityCode: (payload) => ipcRenderer.invoke('db:cleanup:security-code', payload),
+    performDataCleanup: (payload) => ipcRenderer.invoke('db:cleanup:perform', payload),
+
     // Backup
     backupDatabase: () => ipcRenderer.invoke('db:backup'),
     listBackups: () => ipcRenderer.invoke('db:backup:list'),

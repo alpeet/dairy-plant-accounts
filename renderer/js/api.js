@@ -259,6 +259,11 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         // Email
         sendEmail: (opts) => apiPost('/email/send', opts),
 
+        // Data cleanup (factory reset)
+        getCleanupStatus: () => apiPost('/cleanup/status'),
+        setSecurityCode: (payload) => apiPost('/cleanup/security-code', payload),
+        performDataCleanup: (payload) => apiPost('/cleanup/perform', payload),
+
         // Backup
         backupDatabase: () => apiPost('/backup'),
         listBackups: () => apiPost('/backup/list'),

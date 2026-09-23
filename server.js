@@ -1086,6 +1086,31 @@ app.post('/api/settings/get', requireRole('admin'), (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Data Cleanup (factory reset) — admin password + security code
+// ──────────────────────────────────────────────────────────────
+const ENV_ADMIN = { password: process.env.AUTH_PASSWORD || 'admin123' };
+
+app.post('/api/cleanup/status', requireRole('admin'), (req, res) => {
+    res.json(ops.getCleanupStatus(db));
+});
+
+app.post('/api/cleanup/security-code', requireRole('admin'), (req, res) => {
+    res.json(ops.setSecurityCode(db, req.body || {}, ENV_ADMIN));
+});
+
+app.post('/api/cleanup/perform', requireRole('admin'), (req, res) => {
+    const body = req.body || {};
+    res.json(ops.performCleanup(db, {
+        adminPassword: body.adminPassword,
+        securityCode: body.securityCode,
+        mode: body.mode || 'wipe-all',
+        envAdmin: ENV_ADMIN,
+        userId: (tokenStore.get(extractToken(req)) || {}).userId || null,
+        createBackup: () => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'), db)
+    }));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Customer / Supplier Statements
 // ──────────────────────────────────────────────────────────────
 app.post('/api/statements/party', (req, res) => {
