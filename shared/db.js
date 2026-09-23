@@ -497,6 +497,62 @@ function runMigrations(db) {
         db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
     }
 
+    // Migration 19: milk_collections.purchase_ref_id — link imported milk
+    // collections back to their purchase bill (money stays on the purchase).
+    try {
+        const mcCols = db.prepare('PRAGMA table_info(milk_collections)').all().map(c => c.name);
+        if (!mcCols.includes('purchase_ref_id')) {
+            db.exec("ALTER TABLE milk_collections ADD COLUMN purchase_ref_id INTEGER DEFAULT NULL");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS idx_milk_collections_purchase_ref ON milk_collections(purchase_ref_id)");
+    } catch (e19) {
+        console.log('Migration 19 (milk purchase_ref_id) skipped:', e19.message);
+    }
+
+    // Migration 20: employees master + salary_records.employee_id / voucher_no.
+    // Employee master persists across handover cleanup; salary records link to it.
+    try {
+        db.exec(`CREATE TABLE IF NOT EXISTS employees (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT DEFAULT '',
+            name TEXT NOT NULL,
+            position TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            monthly_salary REAL DEFAULT 0.0,
+            active INTEGER DEFAULT 1,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )`);
+        const srCols = db.prepare('PRAGMA table_info(salary_records)').all().map(c => c.name);
+        if (!srCols.includes('employee_id')) {
+            db.exec("ALTER TABLE salary_records ADD COLUMN employee_id INTEGER DEFAULT NULL");
+        }
+        if (!srCols.includes('voucher_no')) {
+            db.exec("ALTER TABLE salary_records ADD COLUMN voucher_no TEXT DEFAULT ''");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS idx_salary_records_employee ON salary_records(employee_id)");
+    } catch (e20) {
+        console.log('Migration 20 (employees master) skipped:', e20.message);
+    }
+
+    // Migration 21 (data backfill): turn milk lines inside purchase_items into
+    // milk_collections rows, derive mixing/production batches, and seed the
+    // required employees. Idempotent and transactional.
+    try {
+        const excelImport = require('./excel-import');
+        const backfillLog = (m) => console.log('  ' + m);
+        db.transaction(() => {
+            const milk = excelImport.backfillMilkCollectionsFromPurchases(db, backfillLog);
+            const prod = excelImport.deriveProductionBatches(db, backfillLog);
+            excelImport.ensureRequiredEmployees(db);
+            if (milk.created > 0 || prod.mixBatches > 0 || prod.gapBatches > 0) {
+                excelImport.rebuildStockLedger(db, backfillLog);
+            }
+        })();
+    } catch (e21) {
+        console.log('Migration 21 (milk/production backfill) skipped:', e21.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

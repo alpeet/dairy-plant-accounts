@@ -1116,6 +1116,9 @@ app.post('/api/cleanup/perform', requireRole('admin'), (req, res) => {
 app.post('/api/statements/party', (req, res) => {
     res.json(safeRun(() => ops.getPartyStatement(db, req.body || {})));
 });
+app.post('/api/parties/account-summary', requireAuth, (req, res) => {
+    res.json(safeRun(() => ops.getPartyAccountSummary(db, req.body || {})));
+});
 
 app.post('/api/statements/parties-with-balance', (req, res) => {
     res.json(safeRun(() => ops.listPartiesWithBalance(db, req.body || {})));
@@ -1267,6 +1270,15 @@ app.post('/api/salary/delete', requireRole('operator'), (req, res) => {
 
 app.post('/api/salary/summary', (req, res) => {
     res.json(safeRun(() => ops.getSalarySummary(db, req.body || {})));
+});
+app.post('/api/salary/employees', requireAuth, (req, res) => {
+    res.json(safeRun(() => ops.listEmployees(db, req.body || {})));
+});
+app.post('/api/salary/employees/save', requireAuth, (req, res) => {
+    res.json(safeRun(() => ops.saveEmployee(db, req.body || {})));
+});
+app.post('/api/salary/employees/delete', requireAuth, (req, res) => {
+    res.json(safeRun(() => ops.deleteEmployee(db, Number(req.body && req.body.id))));
 });
 
 // ──────────────────────────────────────────────────────────────

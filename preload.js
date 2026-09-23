@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Statements
     getPartyStatement: (opts) => ipcRenderer.invoke('db:statements:party', opts),
+    getPartyAccountSummary: (opts) => ipcRenderer.invoke('db:parties:account-summary', opts),
     getPartiesWithBalance: (opts) => ipcRenderer.invoke('db:statements:parties-with-balance', opts),
 
     // Daily Cash Collection
@@ -99,6 +100,9 @@ contextBridge.exposeInMainWorld('api', {
     saveSalaryRecord: (data) => ipcRenderer.invoke('db:salary:save', data),
     deleteSalaryRecord: (id) => ipcRenderer.invoke('db:salary:delete', id),
     getSalarySummary: (opts) => ipcRenderer.invoke('db:salary:summary', opts),
+    listEmployees: (opts) => ipcRenderer.invoke('db:salary:employees', opts),
+    saveEmployee: (data) => ipcRenderer.invoke('db:salary:employees-save', data),
+    deleteEmployee: (id) => ipcRenderer.invoke('db:salary:employees-delete', id),
 
     // Vehicle Expenses
     getVehicleExpenses: (opts) => ipcRenderer.invoke('db:vehicle-expenses:list', opts),

@@ -24,19 +24,12 @@ async function renderParties() {
     const parties = result.data;
 
     // Calculate outstanding for each party
-    const receivablesResult = await window.api.getReceivables();
-    const payablesResult = await window.api.getPayables();
-    const receivables = receivablesResult.success ? receivablesResult.data : [];
-    const payables = payablesResult.success ? payablesResult.data : [];
-
-    const outstandingMap = {};
-    receivables.forEach(r => {
-        outstandingMap[r.id] = { receivable: r.outstanding, payable: 0 };
-    });
-    payables.forEach(p => {
-        if (!outstandingMap[p.id]) outstandingMap[p.id] = { receivable: 0, payable: 0 };
-        outstandingMap[p.id].payable = (outstandingMap[p.id].payable || 0) + p.outstanding;
-    });
+    // Ledger-driven accounting summary: one source of truth shared with the
+    // Receivable/Payable page and the party statement (see party_account.js).
+    const summaryResult = await window.api.getPartyAccountSummary(partyFilter);
+    const summary = summaryResult.success ? summaryResult.data : [];
+    const acctMap = {};
+    summary.forEach(a => { acctMap[a.id] = a; });
 
     container.innerHTML = `
         <div class="card" style="margin-bottom:16px">
@@ -78,7 +71,11 @@ async function renderParties() {
                             <th>Email</th>
                             <th>Type</th>
                             <th>Route/Details</th>
-                            <th class="text-right">Opening Balance</th>
+                            <th class="text-right">Opening</th>
+                            <th class="text-right">Purchase</th>
+                            <th class="text-right">Sales</th>
+                            <th class="text-right">Paid</th>
+                            <th class="text-right">Received</th>
                             <th class="text-right">Outstanding</th>
                             <th class="actions">Actions</th>
                         </tr>
@@ -87,7 +84,6 @@ async function renderParties() {
                         ${parties.length === 0
                             ? '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-light)">No parties found</td></tr>'
                             : parties.map(p => {
-                                const out = outstandingMap[p.id];
                                 let detailHtml = '-';
                                 if (p.type === 'farmer') {
                                     detailHtml = escapeHtml(p.route_name || '') || '<span style="color:var(--text-light)">No route</span>';
@@ -104,17 +100,27 @@ async function renderParties() {
                                         <td style="font-size:12px">${p.email ? `<a href="mailto:${escapeHtml(p.email)}" style="color:var(--primary)">${escapeHtml(p.email)}</a>` : '-'}</td>
                                         <td><span class="badge ${p.type === 'customer' ? 'badge-info' : p.type === 'supplier' ? 'badge-warning' : p.type === 'farmer' ? 'badge-success' : p.type === 'partner' ? 'badge-primary' : 'badge-secondary'}">${escapeHtml(p.type)}</span></td>
                                         <td style="font-size:12px">${detailHtml}</td>
-                                        <td class="text-right ${p.opening_balance > 0 ? 'positive' : p.opening_balance < 0 ? 'negative' : ''}">${formatCurrency(p.opening_balance)}</td>
-                                        <td class="text-right">
-                                            ${out ? (out.receivable > 0 && out.payable > 0
-                                                ? `<span style="color:var(--accent)">Dr ${formatCurrency(out.receivable)}</span> / <span style="color:var(--danger)">Cr ${formatCurrency(out.payable)}</span>`
-                                                : out.receivable > 0
-                                                    ? `<span style="color:var(--accent)">${formatCurrency(out.receivable)} (Dr)</span>`
-                                                    : out.payable > 0
-                                                        ? `<span style="color:var(--danger)">${formatCurrency(out.payable)} (Cr)</span>`
-                                                        : '-'
-                                            ) : '-'}
-                                        </td>
+                                        ${(() => {
+                                            const a = acctMap[p.id] || {};
+                                            const purch = (a.purchase_total || 0) + (a.milk_total || 0);
+                                            const sales = a.sales_total || 0;
+                                            const paid = a.paid_total || 0;
+                                            const recv = a.received_total || 0;
+                                            const bal = a.balance || 0;
+                                            const badge = a.balance_type === 'Receivable'
+                                                ? `<span style="color:var(--accent)">${formatCurrency(bal)} (Dr)</span>`
+                                                : a.balance_type === 'Payable'
+                                                    ? `<span style="color:var(--danger)">${formatCurrency(-bal)} (Cr)</span>`
+                                                    : '<span style="color:var(--text-light)">Settled</span>';
+                                            return `
+                                                <td class="text-right ${p.opening_balance > 0 ? 'positive' : p.opening_balance < 0 ? 'negative' : ''}">${formatCurrency(p.opening_balance)}</td>
+                                                <td class="text-right">${formatCurrency(purch)}</td>
+                                                <td class="text-right">${formatCurrency(sales)}</td>
+                                                <td class="text-right">${formatCurrency(paid)}</td>
+                                                <td class="text-right">${formatCurrency(recv)}</td>
+                                                <td class="text-right">${badge}</td>
+                                            `;
+                                        })()}
                                         <td class="actions">
                                             <button class="btn btn-info btn-sm" onclick="viewLedger(${p.id})" title="Ledger">📒</button>
                                             <button class="btn btn-primary btn-sm" onclick="editParty(${p.id})" title="Edit">✏️</button>

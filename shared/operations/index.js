@@ -60,6 +60,7 @@ const { backupDatabase, restoreDatabase, listBackups, deleteBackup, formatFileSi
 
 // ── New modules ──
 const { getPartyStatement, listPartiesWithBalance } = require('./statements');
+const { getPartyAccountSummary } = require('./party_account');
 const { getDailyCashCollection, saveCashCollection, deleteCashCollection } = require('./cash');
 const {
     listDenominations, getDenomination, getDenominationByDate,
@@ -69,7 +70,8 @@ const {
     listPettyCash, getPettyCash, savePettyCash, deletePettyCash, getPettyCashSummary
 } = require('./petty_cash');
 const {
-    listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary
+    listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
+    listEmployees, saveEmployee, deleteEmployee
 } = require('./salary');
 const {
     listVehicleExpenses, getVehicleExpense, saveVehicleExpense,
@@ -160,7 +162,7 @@ module.exports = {
 
     // ── New modules ──
     // Statements
-    getPartyStatement, listPartiesWithBalance,
+    getPartyStatement, listPartiesWithBalance, getPartyAccountSummary,
 
     // Cash
     getDailyCashCollection, saveCashCollection, deleteCashCollection,
@@ -174,6 +176,7 @@ module.exports = {
 
     // Salary
     listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
+    listEmployees, saveEmployee, deleteEmployee,
 
     // Vehicle Expenses
     listVehicleExpenses, getVehicleExpense, saveVehicleExpense,

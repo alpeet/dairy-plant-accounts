@@ -56,8 +56,8 @@ const TRANSACTIONAL_TABLES = [
  */
 const MASTER_TABLES = ['parties', 'products', 'milk_rate_chart', 'routes'];
 
-/** Tables never touched: users, settings, audit_log. */
-const PRESERVED_TABLES = ['users', 'settings', 'audit_log'];
+/** Tables never touched: users, settings, audit_log, employees (master data). */
+const PRESERVED_TABLES = ['users', 'settings', 'audit_log', 'employees'];
 
 const MAX_CODE_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;

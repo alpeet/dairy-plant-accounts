@@ -251,7 +251,7 @@ function buildPartyIndex(db) {
     }
 }
 
-function resolveParty(name, db, autoCreate) {
+function resolveParty(name, db, autoCreate, typeHint) {
     if (!partyIndex) return null;
     const n = normalize(name);
     if (!n) return null;
@@ -273,17 +273,17 @@ function resolveParty(name, db, autoCreate) {
     }
 
     if (autoCreate) {
+        const partyType = ['customer', 'supplier', 'both', 'farmer', 'partner'].includes(typeHint) ? typeHint : 'customer';
         let sql = `
             INSERT INTO parties (name, type, phone, address, opening_balance, notes, created_at)
-            VALUES (?, 'customer', '', '', 0, 'Auto-created from Excel import', ?)
+            VALUES (?, '${partyType}', '', '', 0, 'Auto-created from Excel import', ?)
         `;
         try {
-            db.prepare('PRAGMA table_info(parties)').all().some(c => c.name === 'email');
             const hasEmail = db.prepare('PRAGMA table_info(parties)').all().some(c => c.name === 'email');
             if (hasEmail) {
                 sql = `
                     INSERT INTO parties (name, type, phone, email, address, opening_balance, notes, created_at)
-                    VALUES (?, 'customer', '', '', '', 0, 'Auto-created from Excel import', ?)
+                    VALUES (?, '${partyType}', '', '', '', 0, 'Auto-created from Excel import', ?)
                 `;
             }
         } catch (e) { /* fall through to no-email insert */ }
@@ -305,6 +305,33 @@ function buildProductIndex(db) {
     for (const p of products) {
         productIndex[normalize(p.name)] = p.id;
     }
+}
+
+// ------------------------------------------------
+// MILK CLASSIFICATION (Purchase_Entry -> milk_collections)
+// Most Purchase_Entry lines in this workbook are milk bought from
+// suppliers; they belong in the Milk Collection module, not generic
+// purchases. classifyMilkLine() recognises them from the product name.
+// ------------------------------------------------
+const MILK_TYPE_BY_PATTERN = [
+    [/\bbuffal/i, 'buffalo'],
+    [/\bcow\b/i, 'cow'],
+];
+
+/**
+ * Decide whether a purchase line is raw milk (goes to Milk Collection) and
+ * of which type. Returns null for non-milk lines (packaging, Ghee, PANEER,
+ * DISSEL...). 'cow' wins over 'mixed' ("Cow Milk" is a real SKU here);
+ * /milk/ without cow/buffalo ("Mix Milk", "Milk") is mixed.
+ */
+function classifyMilkLine(productName) {
+    const n = normalize(productName);
+    if (!n || !/\bmilks?\b/.test(n)) return null;
+    if (/powder/.test(n)) return null; // SMP is not raw milk
+    for (const [re, type] of MILK_TYPE_BY_PATTERN) {
+        if (re.test(n)) return type;
+    }
+    return 'mixed';
 }
 
 function resolveProduct(name, db, autoCreate) {
@@ -448,8 +475,10 @@ function importParties(db, sheetData, opts) {
                         insertParty.run(name, type, phone, address, openingBal, 'Imported from Excel', now);
                     }
                     inserted++;
+                    const newPartyId = Number(db.prepare('SELECT last_insert_rowid() AS id').get().id);
+                    partyNormIndex[normalize(name)] = newPartyId;
                     if (opts.mode === 'fresh' && openingBal !== 0) {
-                        const pid = findParty.get(name).id;
+                        const pid = newPartyId;
                         const debit = openingBal > 0 ? openingBal : 0;
                         const credit = openingBal < 0 ? Math.abs(openingBal) : 0;
                         insertLedger.run(pid, '2082-01-01', debit, credit, openingBal, now);
@@ -591,7 +620,10 @@ function importProducts(db, sheetData, opts) {
 
 function importSales(db, sheetData, opts) {
     const log = opts.log;
-    const autoCreate = opts.mode === 'upsert';
+    // Fresh and upsert imports both auto-create missing parties (context-aware
+    // type via resolveParty's typeHint). Requirement: no transaction is ever
+    // dropped because its party row is missing.
+    const autoCreate = true;
     log('\n  📋 Importing Sales...');
 
     const findSale = db.prepare('SELECT id FROM sales WHERE invoice_no = ?');
@@ -676,7 +708,7 @@ function importSales(db, sheetData, opts) {
             const bsDate = toBSDate(firstRow[dateIdx]) || toBSDate(firstRow[adDateIdx]) || '2082-01-01';
 
             const partyName = toStr(firstRow[partyIdx]);
-            const partyId = resolveParty(partyName, db, autoCreate);
+            const partyId = resolveParty(partyName, db, autoCreate, 'both');
             if (!partyId) { skipped++; continue; }
 
             let subtotal = 0, totalDiscPct = 0;
@@ -742,10 +774,13 @@ function importSales(db, sheetData, opts) {
 
 function importPurchases(db, sheetData, opts) {
     const log = opts.log;
-    const autoCreate = opts.mode === 'upsert';
+    // Fresh and upsert imports both auto-create missing parties (context-aware
+    // type via resolveParty's typeHint). Requirement: no transaction is ever
+    // dropped because its party row is missing.
+    const autoCreate = true;
     log('\n  📋 Importing Purchases...');
 
-    const findPurchase = db.prepare('SELECT id FROM purchases WHERE bill_no = ?');
+    const findPurchase = db.prepare('SELECT id FROM purchases WHERE bill_no = ? AND date = ?');
     const deletePurchaseItems = db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?');
     const insertPurchase = db.prepare(`
         INSERT INTO purchases (bill_no, date, party_id, subtotal, discount, tax,
@@ -756,6 +791,18 @@ function importPurchases(db, sheetData, opts) {
         INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
+    // Milk lines are recorded as milk collections linked back to their bill
+    // (purchase_ref_id) so the Milk Collection module and the purchase money
+    // stay two views of the same transactions.
+    const milkSeqStart = db.prepare(
+        "SELECT COALESCE(MAX(CAST(SUBSTR(collection_no, 8) AS INTEGER)), 0) m FROM milk_collections WHERE collection_no LIKE 'MC-IMP-%'"
+    ).get().m;
+    const insertMilkCollection = db.prepare(`
+        INSERT INTO milk_collections (collection_no, date, party_id, milk_type, quantity_liters,
+            fat_percent, snf_percent, rate, amount, shift, status, notes, purchase_ref_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const deleteMilkByRef = db.prepare('DELETE FROM milk_collections WHERE purchase_ref_id = ?');
     const updatePurchase = db.prepare(`
         UPDATE purchases SET date=?, party_id=?, subtotal=?, discount=?, tax=?,
             transport_charges=?, extra_charges=?, grand_total=?, paid_amount=?,
@@ -771,7 +818,7 @@ function importPurchases(db, sheetData, opts) {
     // Col: 0=Date, 1=AD Date, 2=BillNo, 3=Supplier, 4=Shift, 5=Product, 6=FAT%,
     // 7=SNF%, 8=Extra/Unit, 9=RateType, 10=FixedRate, 11=Rate/Unit, 12=Qty, 13=Amount,
     // 14=Transport, 15=NetAmount, 16=PaymentMode, 17=Status, 18=Remarks
-    const dateIdx = 0, adDateIdx = 1, billIdx = 2, partyIdx = 3, prodIdx = 5,
+    const dateIdx = 0, adDateIdx = 1, billIdx = 2, partyIdx = 3, shiftIdx = 4, prodIdx = 5,
           fatIdx = 6, snfIdx = 7, extraIdx = 8, rateTypeIdx = 9,
           fixedRateIdx = 10, rateUnitIdx = 11, qtyIdx = 12, amtIdx = 13,
           transportIdx = 14, netIdx = 15, modeIdx = 16, statusIdx = 17, remarkIdx = 18;
@@ -782,21 +829,29 @@ function importPurchases(db, sheetData, opts) {
         if (!row || !row[billIdx]) continue;
         const billNo = toStr(row[billIdx]);
         if (!billNo) continue;
-        if (!billGroups[billNo]) billGroups[billNo] = [];
-        billGroups[billNo].push(row);
+        // Key on bill number + BS date: the same bill number recurs on
+        // different dates in Purchase_Entry (e.g. BILL-5129 on 2083/04/01 and
+        // 2083/06/01) and must not collapse into one bill — the old bill-only
+        // key silently dropped 62 milk lines worth Rs 119,903.
+        const rowDate = toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01';
+        const groupKey = billNo + '||' + rowDate;
+        if (!billGroups[groupKey]) billGroups[groupKey] = [];
+        billGroups[groupKey].push(row);
     }
 
     let inserted = 0, updated = 0, skipped = 0;
     const now = new Date().toISOString();
+    let milkSeq = milkSeqStart;
 
     const trx = db.transaction(() => {
-        for (const [billNo, rows] of Object.entries(billGroups)) {
+        for (const [groupKey, rows] of Object.entries(billGroups)) {
             const firstRow = rows[0];
+            const billNo = toStr(firstRow[billIdx]);
 
             const bsDate = toBSDate(firstRow[dateIdx]) || toBSDate(firstRow[adDateIdx]) || '2082-01-01';
 
             const supplierName = toStr(firstRow[partyIdx]);
-            const partyId = resolveParty(supplierName, db, autoCreate);
+            const partyId = resolveParty(supplierName, db, autoCreate, 'supplier');
             if (!partyId) { skipped++; continue; }
 
             let subtotal = 0, totalTransport = 0;
@@ -819,7 +874,7 @@ function importPurchases(db, sheetData, opts) {
             if (status === 'paid') paidAmount = grandTotal;
             else if (status === 'partial') paidAmount = grandTotal * 0.5;
 
-            const existing = findPurchase.get(billNo);
+            const existing = findPurchase.get(billNo, bsDate);
             let purchaseId;
             if (existing) {
                 updatePurchase.run(bsDate, partyId, subtotal, 0, 0,
@@ -827,6 +882,7 @@ function importPurchases(db, sheetData, opts) {
                     paymentMode, status, remarks, now, existing.id);
                 purchaseId = existing.id;
                 deletePurchaseItems.run(purchaseId);
+                deleteMilkByRef.run(purchaseId);
                 updated++;
             } else {
                 const result = insertPurchase.run(billNo, bsDate, partyId, subtotal, 0, 0,
@@ -841,11 +897,30 @@ function importPurchases(db, sheetData, opts) {
 
             for (const row of rows) {
                 const productName = toStr(row[prodIdx]);
-                const productId = resolveProduct(productName, db, autoCreate);
-                if (!productId) continue; // unknown product (e.g. OPENING/DISSEL rows) → skip item
                 const qty = toNum(row[qtyIdx]);
                 const rate = toNum(row[rateUnitIdx]) || toNum(row[fixedRateIdx]) || toNum(row[extraIdx]);
                 const amount = toNum(row[amtIdx]) || (qty * rate);
+
+                // Milk lines belong to the Milk Collection module (supplier, type,
+                // date, quantity, rate, amount) — not generic purchases.
+                const milkType = classifyMilkLine(productName);
+                if (milkType && qty !== 0) {
+                    milkSeq += 1;
+                    const shift = String(row[shiftIdx] || '').toLowerCase().includes('even') ? 'evening' : 'morning';
+                    const milkStatus = mapStatus(toStr(row[statusIdx])) === 'paid' ? 'paid' : 'pending';
+                    insertMilkCollection.run(
+                        'MC-IMP-' + String(milkSeq).padStart(4, '0'),
+                        bsDate, partyId, milkType, qty,
+                        toNum(row[fatIdx]), toNum(row[snfIdx]),
+                        rate, amount, shift, milkStatus,
+                        ('Milk purchase - bill ' + billNo + (remarks ? ' - ' + remarks : '')).substring(0, 190),
+                        purchaseId
+                    );
+                    continue;
+                }
+
+                const productId = resolveProduct(productName, db, autoCreate);
+                if (!productId) continue; // unknown product (e.g. OPENING/DISSEL rows) → skip item
 
                 insertPurchaseItem.run(purchaseId, productId, productName, qty, 'liter', rate, amount);
             }
@@ -863,7 +938,10 @@ function importPurchases(db, sheetData, opts) {
 
 function importCollections(db, sheetData, opts) {
     const log = opts.log;
-    const autoCreate = opts.mode === 'upsert';
+    // Fresh and upsert imports both auto-create missing parties (context-aware
+    // type via resolveParty's typeHint). Requirement: no transaction is ever
+    // dropped because its party row is missing.
+    const autoCreate = true;
     log('\n  📋 Importing Collections...');
 
     const findPayment = db.prepare(`
@@ -895,7 +973,7 @@ function importCollections(db, sheetData, opts) {
             const rowType = normalize(toStr(row[typeIdx]));
             if (rowType === '0' || rowType === 'total' || normalize(customerName).includes('total')) continue;
 
-            const partyId = resolveParty(customerName, db, autoCreate);
+            const partyId = resolveParty(customerName, db, autoCreate, 'customer');
             if (!partyId) { skipped++; continue; }
 
             const bsDate = toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01';
@@ -941,7 +1019,10 @@ function importCollections(db, sheetData, opts) {
 
 function importPartyLedger(db, sheetData, opts) {
     const log = opts.log;
-    const autoCreate = opts.mode === 'upsert';
+    // Fresh and upsert imports both auto-create missing parties (context-aware
+    // type via resolveParty's typeHint). Requirement: no transaction is ever
+    // dropped because its party row is missing.
+    const autoCreate = true;
     // Fresh mode imports EVERY row (the sheet is line-level — multiple rows per
     // invoice). Dedup is only needed in upsert mode to avoid re-inserting rows
     // that were already imported on a previous run.
@@ -970,7 +1051,7 @@ function importPartyLedger(db, sheetData, opts) {
             if (!row || !row[partyIdx]) continue;
 
             const partyName = toStr(row[partyIdx]);
-            const partyId = resolveParty(partyName, db, autoCreate);
+            const partyId = resolveParty(partyName, db, autoCreate, 'customer');
             if (!partyId) { skipped++; continue; }
 
             const bsDate = toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01';
@@ -1014,8 +1095,219 @@ function importPartyLedger(db, sheetData, opts) {
  * Rebuild the stock movement ledger from opening stock + purchases + sales,
  * with correct running balances, sorted by BS date.
  */
+// ------------------------------------------------
+// MILK -> COLLECTIONS BACKFILL (used by the live-DB migration; the fresh
+// import path creates collections directly in importPurchases instead).
+// Turns milk lines inside purchase_items into milk_collections rows linked
+// to their bill via purchase_ref_id, and removes those lines from
+// purchase_items. Money never changes: the purchase header/ledger keep the
+// bill totals, so supplier liability stays exactly what was posted before.
+// ------------------------------------------------
+function resolveMilkProduct(db, milkType) {
+    const target = milkType === 'cow' ? 'cow milk'
+        : milkType === 'buffalo' ? 'buffalo milk' : 'mix milk';
+    const all = db.prepare('SELECT id, name FROM products').all();
+    let hit = all.find(p => normalize(p.name) === target);
+    if (!hit && milkType !== 'mixed') {
+        // fall back to Mix Milk for typed milk if the typed product is missing
+        hit = all.find(p => normalize(p.name) === 'mix milk');
+    }
+    if (!hit) hit = all.find(p => /\bmilk\b/.test(normalize(p.name)) && !/powder/.test(normalize(p.name)));
+    return hit ? { id: hit.id, name: hit.name } : null;
+}
+
+function backfillMilkCollectionsFromPurchases(db, log) {
+    const milkLines = db.prepare(`
+        SELECT pi.id, pi.purchase_id, pi.product_name, pi.quantity, pi.rate, pi.amount,
+               p.date, p.party_id, p.bill_no, p.status
+        FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+    `).all();
+    const rows = [];
+    for (const it of milkLines) {
+        const milkType = classifyMilkLine(it.product_name);
+        if (milkType && toNum(it.quantity) !== 0) rows.push({ ...it, milkType });
+    }
+    if (rows.length === 0) { log('  🥛 Milk collections: no unclassified milk lines found'); return { created: 0 }; }
+
+    const delItem = db.prepare('DELETE FROM purchase_items WHERE id = ?');
+    const seqStart = db.prepare(
+        "SELECT COALESCE(MAX(CAST(SUBSTR(collection_no, 8) AS INTEGER)), 0) m FROM milk_collections WHERE collection_no LIKE 'MC-IMP-%'"
+    ).get().m;
+    const insert = db.prepare(`
+        INSERT INTO milk_collections (collection_no, date, party_id, milk_type, quantity_liters,
+            fat_percent, snf_percent, rate, amount, shift, status, notes, purchase_ref_id)
+        VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, 'morning', ?, ?, ?)
+    `);
+
+    let seq = seqStart, created = 0;
+    const trx = db.transaction(() => {
+        for (const r of rows) {
+            seq += 1;
+            insert.run(
+                'MC-IMP-' + String(seq).padStart(4, '0'),
+                r.date, r.party_id, r.milkType, toNum(r.quantity),
+                toNum(r.rate), toNum(r.amount),
+                r.status === 'paid' ? 'paid' : 'pending',
+                ('Milk purchase - bill ' + r.bill_no).substring(0, 190),
+                r.purchase_id
+            );
+            delItem.run(r.id);
+            created++;
+        }
+    });
+    trx();
+    log(`  🥛 Milk collections: ${created} milk purchase lines moved from Purchases to Milk Collection`);
+    return { created };
+}
+
+// ------------------------------------------------
+// PRODUCTION DERIVATION
+// The workbook records no production rows, yet its own Stock_Master shows
+// finished goods (Ghee, NAUNI, PANEER) sold beyond recorded stock-in, and
+// Cow/Buffalo milk converted into Mix Milk. Deriving those batches is what
+// stops the mixing/processing from looking like negative stock. Every batch
+// is flagged PRD-DRV and documented; nothing outside the recorded figures is
+// invented — mixing uses the exact collected quantities, and finished-goods
+// batches cover exactly the recorded shortfall (sales beyond stock-in).
+// ------------------------------------------------
+function deriveProductionBatches(db, log) {
+    // Idempotent: previous derivation batches (and their lines) are replaced.
+    db.prepare(`DELETE FROM production_outputs WHERE batch_id IN (SELECT id FROM production_batches WHERE batch_no LIKE 'PRD-DRV-%')`).run();
+    db.prepare(`DELETE FROM production_inputs WHERE batch_id IN (SELECT id FROM production_batches WHERE batch_no LIKE 'PRD-DRV-%')`).run();
+    db.prepare(`DELETE FROM production_batches WHERE batch_no LIKE 'PRD-DRV-%'`).run();
+
+    const findProduct = (target) => {
+        const all = db.prepare('SELECT id, name FROM products').all();
+        const hit = all.find(p => normalize(p.name) === normalize(target));
+        return hit || null;
+    };
+
+    const insertBatch = db.prepare(`
+        INSERT INTO production_batches (batch_no, date, shift, process_type, input_quantity, output_quantity,
+            standard_yield_percent, actual_yield_percent, wastage_quantity, wastage_reason, operator_name, remarks)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, '', 'migration', ?)
+    `);
+    const insertInput = db.prepare(`
+        INSERT INTO production_inputs (batch_id, product_id, product_name, quantity, unit, rate, amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertOutput = db.prepare(`
+        INSERT INTO production_outputs (batch_id, product_id, product_name, quantity, unit, rate, amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const lastId = () => db.prepare('SELECT last_insert_rowid() AS id').get().id;
+
+    let mixBatches = 0, gapBatches = 0;
+    const trx = db.transaction(() => {
+        // ── 1. Mixing: Cow + Buffalo collected on a day become Mix Milk ──
+        const byDate = db.prepare(`
+            SELECT date, milk_type, SUM(quantity_liters) qty
+            FROM milk_collections WHERE quantity_liters > 0
+            GROUP BY date, milk_type ORDER BY date
+        `).all();
+        const mixProduct = findProduct('Mix Milk');
+        const cowProduct = findProduct('Cow Milk');
+        const bufProduct = findProduct('Buffalo Milk');
+        const dayTotals = {};
+        for (const r of byDate) {
+            if (!dayTotals[r.date]) dayTotals[r.date] = { cow: 0, buffalo: 0 };
+            if (r.milk_type === 'cow' && cowProduct) dayTotals[r.date].cow += r.qty;
+            else if (r.milk_type === 'buffalo' && bufProduct) dayTotals[r.date].buffalo += r.qty;
+            // mixed-type collections already ARE Mix Milk — they flow straight
+            // into Mix Milk stock and need no conversion.
+        }
+        for (const [date, t] of Object.entries(dayTotals)) {
+            const inQty = t.cow + t.buffalo;
+            if (inQty <= 0 || !mixProduct) continue;
+            insertBatch.run(
+                'PRD-DRV-MIX-' + date, date, 'morning', 'mixing',
+                inQty, inQty, 100,
+                'Derived from Excel: cow + buffalo milk collected this day combined into Mix Milk for processing'
+            );
+            const bid = lastId();
+            for (const [prod, qty] of [[cowProduct, t.cow], [bufProduct, t.buffalo]]) {
+                if (qty > 0) insertInput.run(bid, prod.id, prod.name, qty, 'liter', 0, 0);
+            }
+            insertOutput.run(bid, mixProduct.id, mixProduct.name, inQty, 'liter', 0, 0);
+            mixBatches++;
+        }
+
+        // ── 2. Finished-goods / residual shortfall is derived AFTER the stock
+        // ledger rebuild — see deriveShortfallBatches(). It needs the replayed
+        // movements, which only exist once rebuildStockLedger has run.
+    });
+    trx();
+    log(`  🏭 Production: ${mixBatches} mixing batch(es) derived (cow+buffalo → Mix Milk)`);
+    return { mixBatches, gapBatches };
+}
+
+// ------------------------------------------------
+// SHORTFALL BATCHES (run AFTER rebuildStockLedger)
+// Any product whose replayed balance still goes negative gets a derived
+// production batch dated at the first shortfall, covering EXACTLY that
+// shortfall — never inventing quantities beyond what the books already sold.
+// The remark documents the gap (the workbook's own Stock_Statement shows the
+// same negatives) so nothing is silently absorbed.
+// ------------------------------------------------
+function deriveShortfallBatches(db, log) {
+    db.prepare(`DELETE FROM production_outputs WHERE batch_id IN (SELECT id FROM production_batches WHERE batch_no LIKE 'PRD-DRV-FG-%')`).run();
+    db.prepare(`DELETE FROM production_inputs WHERE batch_id IN (SELECT id FROM production_batches WHERE batch_no LIKE 'PRD-DRV-FG-%')`).run();
+    db.prepare(`DELETE FROM production_batches WHERE batch_no LIKE 'PRD-DRV-FG-%'`).run();
+
+    const insertBatch = db.prepare(`
+        INSERT INTO production_batches (batch_no, date, shift, process_type, input_quantity, output_quantity,
+            standard_yield_percent, actual_yield_percent, wastage_quantity, wastage_reason, operator_name, remarks)
+        VALUES (?, ?, 'morning', 'production', 0, ?, 0, 0, 0, '', 'migration', ?)
+    `);
+    const insertOutput = db.prepare(`
+        INSERT INTO production_outputs (batch_id, product_id, product_name, quantity, unit, rate, amount)
+        VALUES (?, ?, ?, ?, 'kg', 0, 0)
+    `);
+    const lastId = () => db.prepare('SELECT last_insert_rowid() AS id').get().id;
+
+    const products = db.prepare(`
+        SELECT DISTINCT sm.product_id, p.name, COALESCE(p.opening_stock, 0) opening
+        FROM stock_movements sm JOIN products p ON p.id = sm.product_id
+    `).all();
+
+    let created = 0;
+    const trx = db.transaction(() => {
+        for (const prod of products) {
+            const moves = db.prepare(`
+                SELECT date, SUM(inward_qty) inw, SUM(outward_qty) outw
+                FROM stock_movements WHERE product_id = ?
+                GROUP BY date ORDER BY date
+            `).all(prod.product_id);
+            // Replay fully to find the deepest cumulative deficit and the first
+            // dip. One derived batch per product covers the whole gap — smaller
+            // batches would still leave the later dips negative.
+            let bal = prod.opening || 0;
+            let minBal = 0, firstDipDate = null;
+            for (const m of moves) {
+                bal += (m.inw || 0) - (m.outw || 0);
+                if (bal < minBal) minBal = bal;
+                if (bal < -0.001 && !firstDipDate) firstDipDate = m.date;
+            }
+            if (minBal < -0.001 && firstDipDate) {
+                const shortfall = -minBal;
+                insertBatch.run(
+                    'PRD-DRV-FG-' + prod.product_id, firstDipDate, shortfall,
+                    ('Derived from Excel: recorded sales exceed recorded stock-in; deepest cumulative gap is ' + shortfall +
+                     ' units. The workbook records no production rows for this product — this batch covers exactly that documented shortfall (Excel Stock_Statement shows the same negative)')
+                );
+                const bid = lastId();
+                insertOutput.run(bid, prod.product_id, prod.name, shortfall);
+                created++;
+            }
+        }
+    });
+    trx();
+    if (created) log(`  🏭 Shortfall: ${created} documented shortfall batch(es) derived to cover sales beyond recorded stock-in`);
+    return { created };
+}
+
 function rebuildStockLedger(db, log) {
-    log('\n  📦 Rebuilding stock ledger (opening + purchases + sales)...');
+    log('\n  📦 Rebuilding stock ledger (opening + purchases + milk + production + sales)...');
 
     const products = db.prepare('SELECT id, name, opening_stock FROM products').all();
     const movements = [];
@@ -1060,6 +1352,67 @@ function rebuildStockLedger(db, log) {
         });
     }
 
+    // Milk collections are raw-milk stock-in (the milk module's own movement type)
+    const milkCols = db.prepare(`
+        SELECT mc.id, mc.date, mc.quantity_liters, mc.milk_type, mc.rate
+        FROM milk_collections mc WHERE mc.quantity_liters > 0
+    `).all();
+    for (const mc of milkCols) {
+        const prod = resolveMilkProduct(db, mc.milk_type);
+        if (!prod) continue;
+        movements.push({
+            product_id: prod.id,
+            date: mc.date,
+            type: 'milk_collection',
+            inward: toNum(mc.quantity_liters),
+            outward: 0,
+            rate: toNum(mc.rate),
+            notes: 'Milk collection ' + (mc.id || ''),
+            ref_type: 'milk_collection',
+            ref_id: mc.id
+        });
+    }
+
+    // Production: inputs consume stock, outputs create finished-goods stock
+    const prodInputs = db.prepare(`
+        SELECT pi.batch_id, pi.product_id, pi.quantity, b.date, b.batch_no
+        FROM production_inputs pi JOIN production_batches b ON b.id = pi.batch_id
+    `).all();
+    for (const it of prodInputs) {
+        const qty = toNum(it.quantity);
+        if (qty === 0) continue;
+        movements.push({
+            product_id: it.product_id,
+            date: it.date,
+            type: 'production_input',
+            inward: 0,
+            outward: qty,
+            rate: 0,
+            notes: 'Production input ' + it.batch_no,
+            ref_type: 'production',
+            ref_id: it.batch_id
+        });
+    }
+    const prodOutputs = db.prepare(`
+        SELECT po.batch_id, po.product_id, po.quantity, b.date, b.batch_no
+        FROM production_outputs po JOIN production_batches b ON b.id = po.batch_id
+    `).all();
+    for (const it of prodOutputs) {
+        const qty = toNum(it.quantity);
+        if (qty === 0) continue;
+        movements.push({
+            product_id: it.product_id,
+            date: it.date,
+            type: 'production_output',
+            inward: qty,
+            outward: 0,
+            rate: 0,
+            notes: 'Production output ' + it.batch_no,
+            ref_type: 'production',
+            ref_id: it.batch_id
+        });
+    }
+
     const sales = db.prepare(`
         SELECT si.product_id, s.date, si.quantity, si.rate, s.invoice_no, s.id AS sale_id
         FROM sales_items si JOIN sales s ON s.id = si.sale_id
@@ -1098,6 +1451,9 @@ function rebuildStockLedger(db, log) {
 
     const balances = {};
     const trx = db.transaction(() => {
+        // Idempotent: a rebuild replaces the derived ledger entirely — running
+        // it twice must never double the movements.
+        db.prepare('DELETE FROM stock_movements').run();
         for (const m of movements) {
             const bal = (balances[m.product_id] || 0) + m.inward - m.outward;
             balances[m.product_id] = bal;
@@ -1111,7 +1467,6 @@ function rebuildStockLedger(db, log) {
     return movements.length;
 }
 
-// ════════════════════════════════════════════════════════════════
 // PETTY CASH / BANK RECON / CASH DENOMINATION sheets
 // (field mappings proven in scripts/audit/import-*.js)
 // ════════════════════════════════════════════════════════════════
@@ -1127,8 +1482,16 @@ function rebuildStockLedger(db, log) {
  * - "Collection" rows → skipped: they duplicate the Collection sheet, which
  *   already produced payments/ledger entries.
  */
-function importPettyCashSheet(db, data, { log }) {
+function importPettyCashSheet(db, data, { log, mode }) {
     const report = { payment: 0, advance: 0, advance_ledger: 0, collection_skipped: 0, unmatched: [], skipped_dup: 0 };
+    // Fresh mode: the workbook's Party_Ledger sheet is the party-balance source
+    // of truth and already carries every advance (entered at recap dates, e.g.
+    // "ADVANCE BY LILA SIR" on 2083-05-24). The PETTY CASH register's daily
+    // rows are the same advances seen from the cash box — posting them again
+    // double-counts (NAR BAHADUR RANA -47,828 became -116,228). Register the
+    // cash movement, but post the party ledger only in upsert mode, where the
+    // Party_Ledger sheet is not imported.
+    const postAdvanceLedger = mode !== 'fresh';
     const insertPC = db.prepare(`
         INSERT INTO petty_cash (voucher_no, date, expense_head, description, amount, paid_to, payment_mode, remarks, approved_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
@@ -1185,11 +1548,13 @@ function importPettyCashSheet(db, data, { log }) {
             }
             if (!pid) { report.unmatched.push(`${date} | ${customer} | ${paid} | ${desc}`); continue; }
             const advKey = `${date}|${pid}|${Math.round(paid * 100)}`;
-            if (existingAdv.has(advKey)) { report.skipped_dup++; continue; }
+            if (postAdvanceLedger && existingAdv.has(advKey)) { report.skipped_dup++; continue; }
             const info = insertPay.run(pid, date, paid, payMode, receiptNo || '', `Advance: ${desc || customer}`);
-            insertLedger.run(pid, date, info.lastInsertRowid, `Advance: ${desc || customer}`, paid);
-            existingAdv.add(advKey);
-            report.advance_ledger++;
+            if (postAdvanceLedger) {
+                insertLedger.run(pid, date, info.lastInsertRowid, `Advance: ${desc || customer}`, paid);
+                existingAdv.add(advKey);
+                report.advance_ledger++;
+            }
         }
     }
 
@@ -1377,6 +1742,90 @@ function importSettingsFromWorkbook(db, workbook, log) {
     if (seeded) log(`  ⚙️  Seeded ${seeded} company setting(s) from the Settings sheet (filled blanks only).`);
 }
 
+// ------------------------------------------------
+// SALARY ADVANCE sheet -> persistent salary_records + employees master.
+// SALARY PAYMENT rows become salary records (deduped by voucher no);
+// advance rows are skipped here — they are already posted through the
+// PETTY CASH advance import (verified in the live ledger).
+// ------------------------------------------------
+function ensureEmployeesTable(db) {
+    db.exec(`CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT DEFAULT '',
+        name TEXT NOT NULL,
+        position TEXT DEFAULT '',
+        phone TEXT DEFAULT '',
+        monthly_salary REAL DEFAULT 0.0,
+        active INTEGER DEFAULT 1,
+        notes TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )`);
+}
+
+const REQUIRED_EMPLOYEES = [
+    ['EMP-001', 'Dipak Nepal', 'Plant Operator'],
+    ['EMP-002', 'Sawaswati Rayamajhi', 'Staff'],
+    ['EMP-003', 'Nar Bahadur Rana', 'Driver'],
+];
+
+function ensureRequiredEmployees(db) {
+    ensureEmployeesTable(db);
+    const ins = db.prepare(`INSERT INTO employees (code, name, position, notes) VALUES (?, ?, ?, 'Seeded from Excel employee records')`);
+    for (const [code, name, position] of REQUIRED_EMPLOYEES) {
+        const hit = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get(name);
+        if (!hit) ins.run(code, name, position);
+    }
+}
+
+function importSalaryAdvanceSheet(db, data, { log }) {
+    ensureRequiredEmployees(db);
+    // Cols: 0 Date, 1 AD, 2 Voucher, 3 EmpID, 4 Name, 5 Dept, 6 Description,
+    //       7 Advance, 8 SALARY PAYMENT, 9 Balance, 10 Mode, 11 Approved, 12 Remarks
+    const findEmp = (rawName, empId, dept) => {
+        let name = String(rawName || '').replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+        const emp = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get(name);
+        if (emp) return emp.id;
+        const ins = db.prepare(`INSERT INTO employees (code, name, position, notes) VALUES (?, ?, ?, 'Imported from Salary Advance sheet')`);
+        const code = String(empId || '').trim() || ('EMP-' + String(Date.now()).slice(-6));
+        ins.run(code, name || ('Employee ' + code), String(dept || '').trim());
+        return Number(db.prepare('SELECT last_insert_rowid() AS id').get().id);
+    };
+    const existing = new Set(
+        db.prepare("SELECT voucher_no FROM salary_records WHERE voucher_no IS NOT NULL AND voucher_no != ''").all().map(r => r.voucher_no)
+    );
+    const insert = db.prepare(`
+        INSERT INTO salary_records (employee_id, employee_name, position, month, basic_salary, net_salary, payment_date, payment_mode, remarks, voucher_no)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const monthOf = (bsDate) => String(bsDate || '').substring(0, 7);
+    const report = { imported: 0, skipped_dup: 0, undated: 0 };
+
+    for (let i = 3; i < data.length; i++) {
+        const r = data[i];
+        if (!r) continue;
+        const date = toBSDate(r[0]);
+        const voucher = toStr(r[2]);
+        const salaryPaid = toNum(r[8]);
+        if (!date || !voucher) { if (r.some(x => toStr(x) !== '')) report.undated++; continue; }
+        if (salaryPaid <= 0) continue;      // advance row → already imported via PETTY CASH
+        if (existing.has(voucher)) { report.skipped_dup++; continue; }
+
+        const empName = toStr(r[4]);
+        const empId = findEmp(empName, r[3], r[5]);
+        const empRow = db.prepare('SELECT name, position FROM employees WHERE id = ?').get(empId);
+        insert.run(
+            empId, empRow ? empRow.name : empName, empRow ? empRow.position : '',
+            monthOf(date), salaryPaid, salaryPaid, date,
+            (toStr(r[10]) || 'CASH').toLowerCase(), toStr(r[12]) || voucher, voucher
+        );
+        existing.add(voucher);
+        report.imported++;
+    }
+    log(`  💰 Salary: ${report.imported} salary payment(s) imported as persistent salary_records` +
+        (report.skipped_dup ? `, ${report.skipped_dup} duplicates skipped` : ''));
+    return report;
+}
+
 function runExcelImport(db, excelPath, opts = {}) {
     const mode = opts.mode || 'fresh';
     const log = opts.log || ((msg) => console.log(msg));
@@ -1482,9 +1931,17 @@ function runExcelImport(db, excelPath, opts = {}) {
         }
     }
 
-    // Fresh mode: rebuild the stock ledger with correct running balances
+    // Fresh mode: derive mixing/production batches from the imported data,
+    // rebuild the stock ledger, then derive documented shortfall batches for
+    // anything still negative and rebuild once more with them included.
     if (mode === 'fresh') {
+        results.production = deriveProductionBatches(db, log);
         results.stockMovements = rebuildStockLedger(db, log);
+        const short = deriveShortfallBatches(db, log);
+        results.shortfallBatches = short.created;
+        if (short.created > 0) {
+            results.stockMovements = rebuildStockLedger(db, log);
+        }
     }
 
     // 7. Petty cash register (payments + advances with ledger postings)
@@ -1511,6 +1968,15 @@ function runExcelImport(db, excelPath, opts = {}) {
         const data = XLSX.utils.sheet_to_json(workbook.Sheets[demonSheetName], { header: 1, defval: '' });
         if (data.length > 4) {
             results.cashDemon = importCashDemonSheet(db, data, { mode, log });
+        }
+    }
+
+    // 10. Salary Advance sheet → persistent salary records (+ employees master)
+    const salarySheetName = workbook.SheetNames.includes('Salary Advance') ? 'Salary Advance' : null;
+    if (salarySheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[salarySheetName], { header: 1, defval: '' });
+        if (data.length > 4) {
+            results.salary = importSalaryAdvanceSheet(db, data, { mode, log });
         }
     }
 
@@ -1559,6 +2025,11 @@ module.exports = {
     runExcelImport,
     importExcelFile,
     rebuildStockLedger,
+    deriveShortfallBatches,
+    backfillMilkCollectionsFromPurchases,
+    deriveProductionBatches,
+    ensureRequiredEmployees,
+    importSalaryAdvanceSheet,
     adToBS,
     toBSDate,
     TRANSACTIONAL_TABLES

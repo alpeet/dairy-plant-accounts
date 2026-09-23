@@ -135,7 +135,8 @@ function showAddSalary(existingData) {
             <div class="form-row">
                 <div class="form-group">
                     <label>Employee Name *</label>
-                    <input type="text" class="form-control" id="salEmpName" value="${escapeHtml(d.employee_name)}">
+                    <input type="text" class="form-control" id="salEmpName" list="salEmpList" value="${escapeHtml(d.employee_name)}" placeholder="Type or pick an employee">
+                    <datalist id="salEmpList"></datalist>
                 </div>
                 <div class="form-group">
                     <label>Position</label>
@@ -194,6 +195,29 @@ function showAddSalary(existingData) {
             <button class="btn btn-primary" onclick="saveSalaryEntry(${existingData ? existingData.id : 'null'})">Save</button>
         </div>
     `);
+
+    // Fill the employee datalist from the persistent employees master and
+    // autofill position / monthly salary when an employee is picked.
+    (async () => {
+        try {
+            const res = await window.api.listEmployees({ active_only: true });
+            if (!res.success || !Array.isArray(res.data)) return;
+            const dl = document.getElementById('salEmpList');
+            if (dl) dl.innerHTML = res.data.map(e => `<option value="${escapeHtml(e.name)}">`).join('');
+            const nameInput = document.getElementById('salEmpName');
+            if (nameInput) {
+                nameInput.addEventListener('change', () => {
+                    const emp = res.data.find(e => e.name === nameInput.value);
+                    if (!emp) return;
+                    const pos = document.getElementById('salPosition');
+                    const basic = document.getElementById('salBasic');
+                    if (pos && emp.position && !pos.value) pos.value = emp.position;
+                    if (basic && emp.monthly_salary > 0 && (!basic.value || Number(basic.value) === 0)) basic.value = emp.monthly_salary;
+                    basic && basic.dispatchEvent(new Event('input'));
+                });
+            }
+        } catch (e) { /* datalist is optional */ }
+    })();
 
     // Auto-calculate net
     document.querySelectorAll('#salBasic, #salAllowance, #salAdvance, #salDeduction').forEach(el => {

@@ -144,6 +144,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
 
         // Statements
         getPartyStatement: (opts) => apiPost('/statements/party', opts || {}),
+        getPartyAccountSummary: (opts) => apiPost('/parties/account-summary', opts || {}),
         getPartiesWithBalance: (opts) => apiPost('/statements/parties-with-balance', opts || {}),
 
         // Daily Cash Collection
@@ -181,6 +182,9 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         saveSalaryRecord: (data) => apiPost('/salary/save', data),
         deleteSalaryRecord: (id) => apiPost('/salary/delete', { id }),
         getSalarySummary: (opts) => apiPost('/salary/summary', opts || {}),
+        listEmployees: (opts) => apiPost('/salary/employees', opts || {}),
+        saveEmployee: (data) => apiPost('/salary/employees/save', data || {}),
+        deleteEmployee: (id) => apiPost('/salary/employees/delete', { id }),
 
         // Vehicle Expenses
         getVehicleExpenses: (opts) => apiPost('/vehicle-expenses/list', opts || {}),

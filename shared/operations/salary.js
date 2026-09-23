@@ -97,4 +97,57 @@ function getSalarySummary(db, { month } = {}) {
     return db.prepare(query).get(...params);
 }
 
-module.exports = { listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary };
+// ============================================================
+// Employees master (persistent — survives cleanup, imports seed it)
+// ============================================================
+
+function listEmployees(db, { search, active_only } = {}) {
+    ensureEmployeesTable(db);
+    let query = 'SELECT * FROM employees WHERE 1=1';
+    const params = [];
+    if (search) { query += ' AND (name LIKE ? OR code LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+    if (active_only) query += ' AND active = 1';
+    query += ' ORDER BY name COLLATE NOCASE';
+    return db.prepare(query).all(...params);
+}
+
+function saveEmployee(db, data) {
+    ensureEmployeesTable(db);
+    const trx = db.transaction(() => {
+        if (data.id) {
+            db.prepare(`UPDATE employees SET code=?, name=?, position=?, phone=?, monthly_salary=?, active=?, notes=?,
+                updated_at=datetime('now','localtime') WHERE id=?`).run(
+                data.code || '', data.name, data.position || '', data.phone || '',
+                parseFloat(data.monthly_salary || 0), data.active === 0 ? 0 : 1, data.notes || '', data.id);
+            return { id: data.id };
+        }
+        const r = db.prepare(`INSERT INTO employees (code, name, position, phone, monthly_salary, notes) VALUES (?, ?, ?, ?, ?, ?)`).run(
+            data.code || '', data.name, data.position || '', data.phone || '',
+            parseFloat(data.monthly_salary || 0), data.notes || '');
+        return { id: Number(r.lastInsertRowid) };
+    });
+    return trx();
+}
+
+function deleteEmployee(db, id) {
+    ensureEmployeesTable(db);
+    db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(id);
+    return { id, deactivated: true };
+}
+
+function ensureEmployeesTable(db) {
+    db.exec(`CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT DEFAULT '',
+        name TEXT NOT NULL,
+        position TEXT DEFAULT '',
+        phone TEXT DEFAULT '',
+        monthly_salary REAL DEFAULT 0.0,
+        active INTEGER DEFAULT 1,
+        notes TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT DEFAULT (datetime('now','localtime'))
+    )`);
+}
+
+module.exports = { listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary, listEmployees, saveEmployee, deleteEmployee };

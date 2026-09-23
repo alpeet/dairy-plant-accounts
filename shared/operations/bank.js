@@ -70,14 +70,25 @@ function findPartyByName(db, name) {
  * Used to avoid double-posting rows the Party_Ledger already reflects.
  */
 function findExistingLedgerEntry(db, { party_id, date, debit, credit, reference_no }) {
+    // The workbook records the same QR transfer on slightly different dates in
+    // Party_Ledger vs BANK RECON (±2 days in practice). Match same-date rows
+    // first, then accept a ±5-day same-amount lookalike so the party ledger is
+    // never double-counted by the bank import.
     const rows = db.prepare(
-        `SELECT id, reference_type, description FROM ledger_entries
-         WHERE party_id = ? AND date = ? AND debit = ? AND credit = ?`
-    ).all(party_id, date, debit, credit);
+        `SELECT id, reference_type, description, date FROM ledger_entries
+         WHERE party_id = ? AND debit = ? AND credit = ?
+           AND date BETWEEN date(?, '-5 days') AND date(?, '+5 days')
+         ORDER BY CASE WHEN date = ? THEN 0 ELSE 1 END, id`
+    ).all(party_id, debit, credit, date, date, date);
     if (rows.length === 0) return null;
     // Prefer an entry that references this bank transaction or the same reference number
     const byRef = rows.find(r => (r.description || '').includes(String(reference_no || '')));
-    return byRef || rows[0];
+    if (byRef) return byRef;
+    // Otherwise prefer an exact-date match, and never swallow a sale/purchase
+    // document row — only receipt/payment/adjustment rows can represent the
+    // same money as a bank transfer.
+    const postable = rows.filter(r => ['payment_received', 'payment_made', 'adjustment'].includes(r.reference_type));
+    return postable.find(r => r.date === date) || postable[0] || null;
 }
 
 /**

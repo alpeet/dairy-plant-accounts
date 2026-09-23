@@ -263,6 +263,7 @@ CREATE TABLE IF NOT EXISTS milk_collections (
     shift TEXT DEFAULT 'morning' CHECK(shift IN ('morning', 'evening', 'combined')),
     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'processed', 'paid')),
     notes TEXT DEFAULT '',
+    purchase_ref_id INTEGER DEFAULT NULL,
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
@@ -511,8 +512,21 @@ CREATE TABLE IF NOT EXISTS cash_deposits (
 -- ============================================================
 -- SALARY / PAYROLL RECORDS
 -- ============================================================
+CREATE TABLE IF NOT EXISTS employees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT DEFAULT '',
+    name TEXT NOT NULL,
+    position TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    monthly_salary REAL DEFAULT 0.0,
+    active INTEGER DEFAULT 1,
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS salary_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id INTEGER DEFAULT NULL,
     employee_name TEXT NOT NULL,
     position TEXT DEFAULT '',
     month TEXT NOT NULL,
@@ -524,10 +538,12 @@ CREATE TABLE IF NOT EXISTS salary_records (
     payment_date TEXT,
     payment_mode TEXT DEFAULT 'cash' CHECK(payment_mode IN ('cash', 'bank', 'upi')),
     remarks TEXT DEFAULT '',
+    voucher_no TEXT DEFAULT '',
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
-    FOREIGN KEY (created_by) REFERENCES users(id)
+    FOREIGN KEY (created_by) REFERENCES users(id),
+    FOREIGN KEY (employee_id) REFERENCES employees(id)
 );
 
 -- ============================================================

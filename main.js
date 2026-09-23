@@ -759,6 +759,10 @@ authHandle('db:statements:party', async (event, params = {}) => {
     return safeRun(() => ops.getPartyStatement(db, params));
 });
 
+authHandle('db:parties:account-summary', async (event, params = {}) => {
+    return safeRun(() => ops.getPartyAccountSummary(db, params || {}));
+});
+
 authHandle('db:statements:parties-with-balance', async (event, params = {}) => {
     return safeRun(() => ops.listPartiesWithBalance(db, params));
 });
@@ -883,6 +887,16 @@ authHandle('db:salary:get', async (event, id) => {
 
 authHandle('db:salary:save', async (event, data) => {
     return safeRun(() => ops.saveSalaryRecord(db, data));
+});
+
+authHandle('db:salary:employees', async (event, params = {}) => {
+    return safeRun(() => ops.listEmployees(db, params || {}));
+});
+authHandle('db:salary:employees-save', async (event, data = {}) => {
+    return safeRun(() => ops.saveEmployee(db, data));
+});
+authHandle('db:salary:employees-delete', async (event, id) => {
+    return safeRun(() => ops.deleteEmployee(db, Number(id)));
 });
 
 authHandle('db:salary:delete', async (event, id) => {

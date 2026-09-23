@@ -293,13 +293,19 @@ function getPurchaseRegister(db, { from_date, to_date, party_id, status } = {}) 
  * Outstanding receivables from sales.
  */
 function getReceivables(db) {
+    // Ledger-driven: same source as the party statement / Parties tab
+    // (party_account.getPartyAccountSummary), so every view agrees.
+    // balance > 0 = the party owes us (receivable).
     return db.prepare(`
-        SELECT p.id, p.name, p.phone,
-            COALESCE(SUM(s.grand_total - s.paid_amount), 0) as outstanding
-        FROM sales s JOIN parties p ON s.party_id = p.id
-        WHERE s.status IN ('unpaid', 'partial')
-        GROUP BY s.party_id HAVING outstanding > 0
-        ORDER BY outstanding DESC
+        SELECT p.id, p.name, p.phone, p.opening_balance,
+            (p.opening_balance + COALESCE(SUM(le.debit), 0) - COALESCE(SUM(le.credit), 0)) AS balance,
+            CASE WHEN (p.opening_balance + COALESCE(SUM(le.debit), 0) - COALESCE(SUM(le.credit), 0)) > 0
+                 THEN (p.opening_balance + COALESCE(SUM(le.debit), 0) - COALESCE(SUM(le.credit), 0)) ELSE 0 END AS outstanding
+        FROM parties p
+        LEFT JOIN ledger_entries le ON le.party_id = p.id
+        GROUP BY p.id
+        HAVING balance > 0.005
+        ORDER BY balance DESC
     `).all();
 }
 
@@ -307,13 +313,17 @@ function getReceivables(db) {
  * Outstanding payables from purchases.
  */
 function getPayables(db) {
+    // Ledger-driven: balance < 0 = we owe the party (payable).
     return db.prepare(`
-        SELECT p.id, p.name, p.phone,
-            COALESCE(SUM(pr.grand_total - pr.paid_amount), 0) as outstanding
-        FROM purchases pr JOIN parties p ON pr.party_id = p.id
-        WHERE pr.status IN ('unpaid', 'partial')
-        GROUP BY pr.party_id HAVING outstanding > 0
-        ORDER BY outstanding DESC
+        SELECT p.id, p.name, p.phone, p.opening_balance,
+            (p.opening_balance + COALESCE(SUM(le.debit), 0) - COALESCE(SUM(le.credit), 0)) AS balance,
+            CASE WHEN (p.opening_balance + COALESCE(SUM(le.debit), 0) - COALESCE(SUM(le.credit), 0)) < 0
+                 THEN -(p.opening_balance + COALESCE(SUM(le.debit), 0) - COALESCE(SUM(le.credit), 0)) ELSE 0 END AS outstanding
+        FROM parties p
+        LEFT JOIN ledger_entries le ON le.party_id = p.id
+        GROUP BY p.id
+        HAVING balance < -0.005
+        ORDER BY balance ASC
     `).all();
 }
 
