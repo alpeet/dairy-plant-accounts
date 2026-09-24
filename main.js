@@ -434,6 +434,9 @@ function createWindow() {
 // ============================================================
 
 // auth:status — is a login required? is this the first run (setup needed)?
+// --- App version (no auth required — shown on the login screen) ---
+ipcMain.handle('app:version', () => app.getVersion());
+
 ipcMain.handle('auth:status', async () => {
     const needsSetup = db ? auth.countUsers(db) === 0 : true;
     return {
@@ -1077,6 +1080,7 @@ authHandle('db:cleanup:perform', async (event, payload) => {
     return safeRun(() => ops.performCleanup(db, {
         adminPassword: p.adminPassword,
         securityCode: p.securityCode,
+        confirmText: p.confirmText,
         mode: p.mode || 'wipe-all',
         envAdmin: null,
         userId: currentUser ? currentUser.id : null,

@@ -7,6 +7,51 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+// ── Number formatting helpers for statement display ──
+// Kill floating-point noise (97.64999999999999 → "97.65") and trim needless
+// trailing zeros (93.00 → "93"). Amounts keep exactly two decimals.
+function round2(v) {
+    const n = Number(v);
+    return isFinite(n) ? Math.round((n + Number.EPSILON) * 100) / 100 : 0;
+}
+
+function trimNum(v, maxDp = 2) {
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    let s = n.toFixed(maxDp);
+    if (s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
+    return s;
+}
+
+function money2(v) {
+    const n = round2(v);
+    try {
+        return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } catch (e) {
+        return n.toFixed(2);
+    }
+}
+
+function titleCaseMilk(t) {
+    const s = String(t || '').trim();
+    return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
+}
+
+/**
+ * Format ONE milk transaction as statement particulars:
+ *   "Buffalo Milk 240 L @91.45 | Fat 5.9 | SNF 8.5"
+ * Quality fields (Fat / SNF / Addition) appear only when actually stored
+ * (non-null, non-zero) for that transaction — never invented, never zero-filled.
+ */
+function formatMilkLine(m) {
+    const type = titleCaseMilk(m.milk_type) || 'Milk';
+    const parts = [`${type} Milk ${trimNum(m.quantity_liters)} L @${trimNum(m.rate)}`];
+    if (m.fat_percent != null && Number(m.fat_percent) !== 0) parts.push(`Fat ${trimNum(m.fat_percent)}`);
+    if (m.snf_percent != null && Number(m.snf_percent) !== 0) parts.push(`SNF ${trimNum(m.snf_percent)}`);
+    if (m.extra_per_unit != null && Number(m.extra_per_unit) !== 0) parts.push(`Addition ${trimNum(m.extra_per_unit)}`);
+    return parts.join(' | ');
+}
+
 /**
  * Get party statement with running balance.
  * Builds from ledger_entries with party info and opening balance.
@@ -54,6 +99,9 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.milk_type END AS milk_type,
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.quantity_liters END AS milk_quantity,
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.rate END AS milk_rate,
+            CASE WHEN le.reference_type = 'milk_collection' THEN mc.fat_percent END AS milk_fat,
+            CASE WHEN le.reference_type = 'milk_collection' THEN mc.snf_percent END AS milk_snf,
+            CASE WHEN le.reference_type = 'milk_collection' THEN mc.extra_per_unit END AS milk_extra,
             CASE WHEN le.reference_type = 'payment_received' THEN pay_r.mode END AS payment_mode,
             CASE WHEN le.reference_type = 'payment_made' THEN pay_m.mode END AS payment_mode_made,
             CASE WHEN le.reference_type = 'payment_received' THEN pay_r.notes END AS payment_notes,
@@ -69,44 +117,98 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
         ORDER BY le.date ASC, le.id ASC
     `).all(party_id, from, to);
 
-    // Milk detail for imported purchases: milk collections linked to the bill
-    // (purchase_ref_id) are shown as a breakdown on the purchase line, so the
-    // statement shows type / quantity / rate / amount for every milk supply.
-    const milkByPurchase = {};
-    const textRefToId = {};
+    // Milk detail for purchase rows: resolve EACH ledger row to its OWN
+    // purchase and attach only that purchase's milk collections.
+    //
+    // Ledger rows imported from the workbook's Party_Ledger sheet carry the
+    // bill NUMBER as text in reference_id (e.g. 'BILL-5152') instead of the
+    // purchases.id. Bill numbers REPEAT across dates in the source data, so
+    // resolution must be by bill number + entry date — resolving by bill
+    // number alone would print other days' milk on this row.
+    const milkByEntry = {};
     try {
-        // Ledger rows imported from the workbook's Party_Ledger sheet carry the
-        // bill NUMBER as text in reference_id (e.g. 'BILL-5006') instead of the
-        // purchases.id — resolve them so the milk breakdown still attaches.
-        const textBillRefs = [...new Set(entries
-            .filter(e => e.reference_type === 'purchase' && e.reference_id && !Number.isInteger(e.reference_id))
-            .map(e => String(e.reference_id)))];
-        if (textBillRefs.length) {
-            const ph = textBillRefs.map(() => '?').join(',');
-            const byBill = db.prepare(`SELECT id, bill_no FROM purchases WHERE party_id = ? AND bill_no IN (${ph})`).all(party_id, ...textBillRefs);
-            for (const p of byBill) {
-                textRefToId[p.bill_no] = p.id;
-                const milkLines = db.prepare(`
-                    SELECT mc.milk_type, mc.quantity_liters, mc.rate, mc.amount
-                    FROM milk_collections mc WHERE mc.purchase_ref_id = ?
-                `).all(p.id);
-                if (milkLines.length) milkByPurchase[p.id] = milkLines;
+        const hasMilkRef = db.prepare(
+            "SELECT COUNT(*) AS n FROM pragma_table_info('milk_collections') WHERE name = 'purchase_ref_id'"
+        ).get().n > 0;
+        if (hasMilkRef) {
+            const purchaseEntries = entries.filter(e => e.reference_type === 'purchase');
+            const resolveByBillDate = db.prepare(
+                'SELECT id FROM purchases WHERE party_id = ? AND bill_no = ? AND date = ? ORDER BY id LIMIT 1'
+            );
+            const resolveByBill = db.prepare(
+                'SELECT id FROM purchases WHERE party_id = ? AND bill_no = ? ORDER BY id LIMIT 1'
+            );
+            const pidByEntry = new Map();
+            const purchaseIds = new Set();
+            for (const e of purchaseEntries) {
+                let pid = null;
+                if (e.reference_id != null && Number.isInteger(e.reference_id)) {
+                    pid = e.reference_id;
+                } else if (e.reference_id != null && String(e.reference_id).trim() !== '') {
+                    const bill = String(e.reference_id).trim();
+                    const hit = resolveByBillDate.get(party_id, bill, e.date) || resolveByBill.get(party_id, bill);
+                    pid = hit ? hit.id : null;
+                }
+                if (pid != null) {
+                    pidByEntry.set(e.id, pid);
+                    purchaseIds.add(pid);
+                }
+            }
+            if (purchaseIds.size) {
+                const ids = [...purchaseIds];
+                const ph = ids.map(() => '?').join(',');
+                const lines = db.prepare(`
+                    SELECT mc.id, mc.purchase_ref_id, mc.milk_type, mc.quantity_liters, mc.rate, mc.amount,
+                           mc.fat_percent, mc.snf_percent, mc.extra_per_unit
+                    FROM milk_collections mc
+                    WHERE mc.purchase_ref_id IN (${ph})
+                    ORDER BY mc.date, mc.id
+                `).all(...ids);
+                const linesByPid = {};
+                for (const l of lines) {
+                    (linesByPid[l.purchase_ref_id] = linesByPid[l.purchase_ref_id] || []).push(l);
+                }
+                // Amount-based attribution: a ledger row may only display milk
+                // lines whose qty×rate equals the ROW's own amount (the source
+                // Party_Ledger transaction). Bill-level lines that the ledger
+                // never posted (workbook-internal supply vs ledger gaps) must
+                // NOT leak into the statement. Each line is consumed once so
+                // repeated rows on a bill never show the same line twice.
+                const lineValue = l => (l.amount != null ? Number(l.amount) : Number(l.quantity_liters || 0) * Number(l.rate || 0));
+                const matchByDateAmount = db.prepare(`
+                    SELECT id, milk_type, quantity_liters, rate, amount, fat_percent, snf_percent, extra_per_unit
+                    FROM milk_collections
+                    WHERE party_id = ? AND date = ? AND ABS(COALESCE(amount, quantity_liters * rate) - ?) <= 0.01
+                    ORDER BY id LIMIT 1
+                `);
+                const usedLineIds = new Set();
+                for (const e of purchaseEntries) {
+                    const pid = pidByEntry.get(e.id);
+                    const rowAmount = Math.abs((e.credit || 0) - (e.debit || 0));
+                    let shown = [];
+                    if (pid != null && rowAmount > 0) {
+                        const candidates = (linesByPid[pid] || []).filter(l => !usedLineIds.has(l.id));
+                        const exact = candidates.filter(l => Math.abs(lineValue(l) - rowAmount) <= 0.01);
+                        const total = candidates.reduce((s, l) => s + lineValue(l), 0);
+                        if (exact.length >= 1) {
+                            shown = [exact[0]]; // the line this row actually charges
+                        } else if (Math.abs(total - rowAmount) <= 0.01) {
+                            shown = candidates; // full-bill row: all lines together equal the row amount
+                        }
+                    }
+                    // Fallback: no attributable line on the linked purchase — try any
+                    // of this party's collections on the SAME DATE worth exactly the
+                    // row amount. Still transaction-true (date + amount match).
+                    if (!shown.length && rowAmount > 0) {
+                        const hit = matchByDateAmount.get(party_id, e.date, rowAmount);
+                        if (hit && !usedLineIds.has(hit.id)) shown = [hit];
+                    }
+                    for (const l of shown) usedLineIds.add(l.id);
+                    milkByEntry[e.id] = shown;
+                }
             }
         }
-        const milkRows = db.prepare(`
-            SELECT mc.purchase_ref_id, mc.milk_type, mc.quantity_liters, mc.rate, mc.amount
-            FROM milk_collections mc
-            JOIN purchases p ON p.id = mc.purchase_ref_id
-            WHERE p.party_id = ? AND mc.date >= ? AND mc.date <= ?
-        `).all(party_id, from, to);
-        for (const m of milkRows) {
-            // Skip purchases already enriched via the bill-number path above —
-            // adding them again would print each milk line twice.
-            if (milkByPurchase[m.purchase_ref_id]) continue;
-            if (!milkByPurchase[m.purchase_ref_id]) milkByPurchase[m.purchase_ref_id] = [];
-            milkByPurchase[m.purchase_ref_id].push(m);
-        }
-    } catch (e) { /* purchase_ref_id column not present yet */ }
+    } catch (e) { /* schema difference — statements degrade to plain description */ }
 
     // Fill in payment method/notes for receipt rows whose ledger reference is
     // textual (Party_Ledger import): match this party's payments by date +
@@ -140,20 +242,43 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
         let description = entry.description || '';
         if (String(description).trim() === '0') description = ''; // filler from Excel import
         if (entry.reference_type === 'purchase') {
-            const milkLines = milkByPurchase[entry.reference_id] || milkByPurchase[textRefToId[String(entry.reference_id)]] || [];
+            // ONLY this row's own milk lines (resolved by bill + date above).
+            const milkLines = milkByEntry[entry.id] || [];
             if (milkLines.length) {
-                const n2 = v => { const s = Number(v).toFixed(2); return s.endsWith('.00') ? s.slice(0, -3) : s; };
-                const lines = milkLines.map(m =>
-                    `${String(m.milk_type || 'mixed').toUpperCase()} Milk ${n2(m.quantity_liters)}L @${n2(m.rate)} = ${n2(m.amount)}`
-                ).join(' | ');
-                if (lines) description = (description ? description + ' — ' : '') + lines;
+                const text = milkLines.map(formatMilkLine).join(' | ');
+                const base = String(description).trim();
+                // Imported purchase rows carry just the milk type ("Buffalo
+                // Milk") as description — the formatted line already contains
+                // it, so don't print it twice. Keep any other base text.
+                const isPlainType = milkLines.every(m =>
+                    base.toLowerCase() === (titleCaseMilk(m.milk_type) + ' milk').toLowerCase());
+                description = (!base || isPlainType) ? text : base + ' — ' + text;
             }
+        } else if (entry.reference_type === 'milk_collection' && entry.milk_type) {
+            // Direct milk-collection ledger rows: their own joined fields only.
+            description = formatMilkLine({
+                milk_type: entry.milk_type,
+                quantity_liters: entry.milk_quantity,
+                rate: entry.milk_rate,
+                fat_percent: entry.milk_fat,
+                snf_percent: entry.milk_snf,
+                extra_per_unit: entry.milk_extra
+            });
         }
         if (entry.reference_type === 'payment_received' || entry.reference_type === 'payment_made') {
             const mode = entry.payment_mode || entry.payment_mode_made || '';
             const notes = entry.payment_notes || entry.payment_notes_made || '';
             const extras = [mode ? `mode: ${mode}` : '', notes ? notes : ''].filter(Boolean).join(' — ');
             if (extras) description = (description ? description + ' (' + extras + ')' : extras);
+            // Imported rows whose description cell was empty (Excel filler "0")
+            // must not render a blank Particulars — show the transaction kind.
+            if (!description.trim()) {
+                description = entry.reference_type === 'payment_received' ? 'Payment Received' : 'Payment Made';
+            }
+        } else if (!description.trim() && entry.reference_type === 'adjustment') {
+            description = 'Adjustment';
+        } else if (!description.trim()) {
+            description = entry.reference_type.charAt(0).toUpperCase() + entry.reference_type.slice(1).replace(/_/g, ' ');
         }
 
         return {

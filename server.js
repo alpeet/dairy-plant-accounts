@@ -817,6 +817,17 @@ function webAuthRedirect(req, res, next) {
     next();
 }
 
+// ──────────────────────────────────────────────────────────────
+// App version (public — read by login screen and Settings > About)
+// ──────────────────────────────────────────────────────────────
+let APP_VERSION = 'unknown';
+try {
+    APP_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || APP_VERSION;
+} catch (e) { /* fall back to 'unknown' */ }
+app.get('/api/version', (req, res) => {
+    res.json({ success: true, data: { version: APP_VERSION } });
+});
+
 app.use(requireAuth);
 app.use(webAuthRedirect);
 
@@ -1103,6 +1114,7 @@ app.post('/api/cleanup/perform', requireRole('admin'), (req, res) => {
     res.json(ops.performCleanup(db, {
         adminPassword: body.adminPassword,
         securityCode: body.securityCode,
+        confirmText: body.confirmText,
         mode: body.mode || 'wipe-all',
         envAdmin: ENV_ADMIN,
         userId: (tokenStore.get(extractToken(req)) || {}).userId || null,

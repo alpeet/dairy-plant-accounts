@@ -81,6 +81,9 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
     }
 
     window.api = {
+        // App info (server returns {version} — normalize to a plain string like Electron does)
+        getAppVersion: () => apiPost('/version').then(j => (j && j.success && j.data && typeof j.data === 'object') ? { success: true, data: j.data.version } : j),
+
         // Dashboard
         getDashboard: () => apiPost('/dashboard'),
         globalSearch: (opts) => apiPost('/search', opts),

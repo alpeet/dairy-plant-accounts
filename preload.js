@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+    // App info
+    getAppVersion: () => ipcRenderer.invoke('app:version'),
+
     // Dashboard
     getDashboard: () => ipcRenderer.invoke('db:dashboard'),
     globalSearch: (opts) => ipcRenderer.invoke('db:search', opts),

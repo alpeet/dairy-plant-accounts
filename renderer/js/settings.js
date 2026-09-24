@@ -274,7 +274,7 @@ async function renderSettings() {
                 <h2>About</h2>
             </div>
             <div style="font-size:13px;color:var(--text-light);line-height:1.8">
-                <p><strong>Prarambha Account &amp; Stock Management</strong> v1.4.7</p>
+                <p><strong>Prarambha Account &amp; Stock Management</strong> v<span data-app-version></span></p>
                 <p>A professional accounting and stock management application (Desktop + Web).</p>
                 <p>Built with Electron + SQLite.</p>
                 <p style="margin-top:12px;font-size:12px">
@@ -378,20 +378,23 @@ function buildDataCleanupCard() {
     return `
         <div class="card" style="max-width:600px;margin-top:20px;border:2px solid #fecaca">
             <div class="card-header">
-                <h2>🧹 Data Cleanup (Handover Reset)</h2>
+                <h2>🧹 Fresh Start / Handover Reset</h2>
             </div>
             <div class="settings-section">
                 <p style="font-size:13px;color:var(--text-light);margin:0 0 12px">
-                    Permanently clears business data so the app can be handed to a new user, then re-filled
-                    by importing an Excel workbook. A verified safety backup is created first, everything runs
-                    in one transaction, and the action is written to the audit log.
+                    <strong>Prepare this application for a new business/client.</strong>
+                    This permanently removes existing business and accounting data. A verified backup is
+                    created before the reset, everything runs in one transaction, and the action is written
+                    to the audit log.
                     <strong style="color:#b91c1c">This cannot be undone inside the app</strong> — restore the
                     backup file if you change your mind.
                 </p>
                 <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
-                    Always kept: user logins, app &amp; company settings, audit log.
+                    Always kept: user logins &amp; admin access, system settings, audit log, database schema.
+                    Cleared: all transactions, parties, products, employees and the company profile (next client
+                    enters their own).
                 </p>
-                <button class="btn btn-secondary btn-sm" onclick="loadCleanupCounts()">📊 Show What Would Be Cleared</button>
+                <button class="btn btn-secondary btn-sm" onclick="loadCleanupCounts()">📊 Show What Will Be Cleared</button>
                 <div id="cleanupCounts" style="margin-top:12px"></div>
             </div>
         </div>`;
@@ -407,77 +410,103 @@ async function loadCleanupCounts() {
         return;
     }
     const d = result.data;
-    const rows = Object.entries(d.counts).map(([t, c]) =>
-        `<tr><td style="padding:3px 8px">${CLEANUP_LABELS[t] || t}</td><td style="padding:3px 8px;text-align:right;font-weight:600">${c === null ? '—' : c.toLocaleString()}</td></tr>`
-    ).join('');
+    // Categories with zero records are hidden (per spec, 0 or omitted is fine)
+    const rows = Object.entries(d.counts)
+        .filter(([t, c]) => c !== null && c > 0)
+        .map(([t, c]) =>
+            `<tr><td style="padding:3px 8px">${CLEANUP_LABELS[t] || t}</td><td style="padding:3px 8px;text-align:right;font-weight:600">${c.toLocaleString()}</td></tr>`
+        ).join('');
     const fmt = n => n.toLocaleString();
     box.innerHTML = `
-        <div style="font-size:13px;margin-bottom:8px">Rows that will be deleted: <strong>${fmt(d.transactional_rows)}</strong>
-            ${d.has_security_code ? '' : ' · <span style="color:#b91c1c">set a Security Code first (above)</span>'}
+        <div style="font-size:13px;margin-bottom:8px"><strong>Data that will be removed</strong> — ${fmt(d.transactional_rows)} records total:
+            ${d.has_security_code ? '' : ' · <span style="color:#b45309">security code not set (optional — admin password is enough)</span>'}
             ${d.locked_out ? ' · <span style="color:#b91c1c">temporarily locked after wrong code attempts</span>' : ''}
         </div>
         <div style="max-height:220px;overflow:auto;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:12px">
-            <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${rows}</tbody></table>
+            <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${rows || '<tr><td style="padding:8px;color:var(--text-light)">Nothing to clear — the book is already empty.</td></tr>'}</tbody></table>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-            <div style="padding:12px;background:var(--bg);border-radius:6px;text-align:center">
-                <h3 style="font-size:13px;margin:0 0 6px">Clear transactions only</h3>
-                <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Keeps parties, products, routes and rate charts — start fresh with the same names.</p>
-                <button class="btn btn-secondary btn-sm" onclick="performDataCleanup('keep-masters')" ${d.has_security_code && !d.locked_out ? '' : 'disabled'}>🧹 Clear Transactions</button>
-            </div>
-            <div style="padding:12px;background:#fef2f2;border-radius:6px;text-align:center">
-                <h3 style="font-size:13px;margin:0 0 6px;color:#b91c1c">Full factory reset</h3>
-                <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Also clears parties and products. The app becomes an empty book — import Excel next.</p>
-                <button class="btn btn-danger btn-sm" onclick="performDataCleanup('wipe-all')" ${d.has_security_code && !d.locked_out ? '' : 'disabled'}>🗑️ Wipe All Data</button>
-            </div>
+        <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">
+            Also cleared: company profile &amp; signature, SMTP credentials${d.business_settings && d.business_settings.length ? ` (${d.business_settings.length} business settings keys)` : ''}.
+            Never touched: user logins, system settings, audit log.
+        </div>
+        <div style="text-align:center">
+            <button class="btn btn-danger" onclick="performDataCleanup('wipe-all')" ${d.locked_out ? 'disabled' : ''}>🧹 Handover Reset</button>
         </div>`;
 }
 
 async function performDataCleanup(mode) {
-    const what = mode === 'keep-masters'
-        ? 'ALL transactions (sales, purchases, collections, payments, ledger, stock, expenses…), keeping parties, products, users and settings.'
-        : 'ALL business data INCLUDING parties and products. Only user logins, settings and the audit log remain.';
-    if (!confirm('This permanently deletes ' + what + '\n\nA safety backup is created first. Continue?')) return;
-
     showModal(`
-        <div class="modal-header"><h2>🔒 Confirm Data Cleanup</h2></div>
+        <div class="modal-header"><h2>⚠️ Confirm Handover Reset</h2></div>
         <div class="modal-body">
-            <p style="font-size:13px;margin:0 0 12px">Enter <strong>both</strong> secrets to start. A verified backup is created before anything is deleted.</p>
+            <div style="padding:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin-bottom:14px">
+                <p style="font-size:13px;margin:0 0 8px;font-weight:600">This will permanently remove all existing business and accounting data from this application.</p>
+                <p style="font-size:12px;margin:0 0 4px">• A verified backup will be created before the reset.</p>
+                <p style="font-size:12px;margin:0 0 4px">• This action cannot be undone from inside the application.</p>
+                <p style="font-size:12px;margin:0">• Continue only if you want to prepare this application for a fresh business/client.</p>
+            </div>
             <div class="form-group">
                 <label>Admin password</label>
                 <input type="password" class="form-control" id="cleanupAdminPw" autocomplete="off">
             </div>
-            <div class="form-group">
-                <label>Security code</label>
+            <div class="form-group" id="cleanupSecCodeGroup" style="display:none">
+                <label>Security code <span style="font-weight:400;font-size:12px;color:var(--text-light)">(extra protection — configured in 🔐 Security above)</span></label>
                 <input type="password" class="form-control" id="cleanupSecCode" autocomplete="off">
             </div>
-            <p style="font-size:11px;color:var(--text-light);margin:0">5 wrong security codes lock cleanup for 15 minutes.</p>
+            <div class="form-group">
+                <label>Type <strong>RESET</strong> to continue</label>
+                <input type="text" class="form-control" id="cleanupConfirmText" placeholder="RESET" autocomplete="off">
+            </div>
+            <p style="font-size:11px;color:var(--text-light);margin:0">If a security code is configured, 5 wrong attempts lock the reset for 15 minutes.</p>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-danger" onclick="confirmDataCleanup('${mode}')">Delete Everything Selected</button>
+            <button class="btn btn-danger" id="cleanupGoBtn" onclick="confirmDataCleanup('${mode}')" disabled>🧹 Permanently Reset Business Data</button>
         </div>`);
+
+    // Security-code field appears only when a code is actually configured
+    window.api.getCleanupStatus().then(r => {
+        const grp = document.getElementById('cleanupSecCodeGroup');
+        if (grp && r && r.success && r.data.has_security_code) grp.style.display = '';
+    });
+
+    // Enable the destructive button only when RESET is typed exactly
+    const input = document.getElementById('cleanupConfirmText');
+    const go = document.getElementById('cleanupGoBtn');
+    if (input && go) {
+        input.addEventListener('input', () => {
+            go.disabled = input.value.trim() !== 'RESET';
+        });
+    }
 }
 
 async function confirmDataCleanup(mode) {
     const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
     const adminPassword = val('cleanupAdminPw');
     const securityCode = val('cleanupSecCode');
-    if (!adminPassword || !securityCode) { showToast('Enter both the admin password and the security code.', 'error'); return; }
-    const result = await window.api.performDataCleanup({ adminPassword, securityCode, mode });
+    const confirmText = val('cleanupConfirmText');
+    if (!adminPassword) { showToast('Enter your admin password.', 'error'); return; }
+    if (confirmText.trim().toUpperCase() !== 'RESET') { showToast('Type RESET (in capitals) to confirm.', 'error'); return; }
+    const btn = document.getElementById('cleanupGoBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Backing up, then resetting...'; }
+    const result = await window.api.performDataCleanup({ adminPassword, securityCode, confirmText, mode });
     if (result && result.success) {
         const b = result.data && result.data.backup;
         showModal(`
-            <div class="modal-header"><h2>✅ Data cleared</h2></div>
+            <div class="modal-header"><h2>✅ Handover Reset Completed Successfully</h2></div>
             <div class="modal-body">
-                <p style="font-size:13px;margin:0 0 10px">${result.data.message}</p>
-                ${b ? `<p style="font-size:12px;margin:0 0 6px">💾 Safety backup: <strong>${b.filename}</strong> (${(b.size / 1048576).toFixed(1)} MB)</p>
-                       <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Keep this file until the new user's data is in. To undo, restore it from Settings → Backup History.</p>` : ''}
-                <p style="font-size:12px;margin:0">Next step: import the new user's Excel in Settings → “Update Data from Excel”.</p>
+                <p style="font-size:13px;margin:0 0 10px">All previous business data has been cleared.</p>
+                ${b ? `<p style="font-size:12px;margin:0 0 6px">💾 Backup created and verified: <strong>${b.filename}</strong> (${(b.size / 1048576).toFixed(1)} MB)</p>
+                       <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Keep this file until the new client's data is in. To undo, restore it from Settings → Backup History.</p>` : ''}
+                <p style="font-size:12px;margin:0 0 10px">The application is now ready for a new business/client.</p>
+                <p style="font-size:12px;margin:0"><strong>Next steps:</strong> enter the new company information (Settings → Business Settings), then import the new Excel workbook in “Update Data from Excel”.</p>
             </div>
             <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal(); renderSettings()">Done</button></div>`);
     } else {
-        showToast((result && result.error) || 'The cleanup did not run.', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '🧹 Permanently Reset Business Data'; }
+        showToast((result && result.error) || 'The reset did not run.', 'error');
+        if (result && /backup/i.test(result.error || '')) {
+            showToast('Backup could not be created. No data has been deleted.', 'error');
+        }
         if (result && /locked/i.test(result.error || '')) renderSettings();
     }
 }
