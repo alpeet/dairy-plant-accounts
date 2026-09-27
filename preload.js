@@ -205,10 +205,11 @@ contextBridge.exposeInMainWorld('api', {
     // Import from Dairy Account Pro Excel (filePath optional — shows a picker when omitted)
     importExcelFromFile: (opts) => ipcRenderer.invoke('excel:import-file', opts),
 
-    // Data cleanup (factory reset)
+    // Fresh Start / Handover Reset (backup-first workflow)
     getCleanupStatus: () => ipcRenderer.invoke('db:cleanup:status'),
     setSecurityCode: (payload) => ipcRenderer.invoke('db:cleanup:security-code', payload),
     performDataCleanup: (payload) => ipcRenderer.invoke('db:cleanup:perform', payload),
+    freshStartBackupSaveAs: () => ipcRenderer.invoke('db:fresh-start:backup-save-as'),
 
     // Backup
     backupDatabase: () => ipcRenderer.invoke('db:backup'),
@@ -216,6 +217,7 @@ contextBridge.exposeInMainWorld('api', {
     deleteBackup: (filename) => ipcRenderer.invoke('db:backup:delete', filename),
     downloadBackupFile: (filename) => ipcRenderer.invoke('db:backup:download', filename),
     restoreBackup: (filename) => ipcRenderer.invoke('db:restore', filename),
+    restoreBackupFromFile: () => ipcRenderer.invoke('db:restore:from-file'),
     getDatabasePath: () => ipcRenderer.invoke('db:path'),
 
     // Print / PDF

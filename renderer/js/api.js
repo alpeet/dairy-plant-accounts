@@ -266,16 +266,21 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         // Email
         sendEmail: (opts) => apiPost('/email/send', opts),
 
-        // Data cleanup (factory reset)
+        // Fresh Start / Handover Reset (backup-first workflow)
         getCleanupStatus: () => apiPost('/cleanup/status'),
         setSecurityCode: (payload) => apiPost('/cleanup/security-code', payload),
         performDataCleanup: (payload) => apiPost('/cleanup/perform', payload),
+        // Web: the server snapshots the DB to its own backups folder — the user
+        // can download the file from Backup History (browsers cannot show a
+        // native "Save As" dialog for server-side files).
+        freshStartBackupSaveAs: () => apiPost('/fresh-start/backup'),
 
         // Backup
         backupDatabase: () => apiPost('/backup'),
         listBackups: () => apiPost('/backup/list'),
         deleteBackup: (filename) => apiPost('/backup/delete', { filename }),
         restoreBackup: (filename) => apiPost('/backup/restore', { filename }),
+        restoreBackupFromFile: (sourcePath) => apiPost('/backup/restore-from-file', { path: sourcePath }),
         getTableInfo: () => apiPost('/db/table-info'),
         getDatabasePath: () => apiPost('/db-path'),
 

@@ -56,7 +56,7 @@ const {
     getSettings, saveSettings
 } = require('./settings');
 
-const { backupDatabase, restoreDatabase, listBackups, deleteBackup, formatFileSize, getBackupDir } = require('./backup');
+const { backupDatabase, backupDatabaseToPath, restoreDatabase, restoreDatabaseFromPath, listBackups, deleteBackup, formatFileSize, getBackupDir } = require('./backup');
 
 // ── New modules ──
 const { getPartyStatement, listPartiesWithBalance } = require('./statements');
@@ -82,7 +82,7 @@ const {
     deleteOtherExpense, getExpenseCategories, getExpensesSummary
 } = require('./expenses');
 const { logAudit, getAuditLogs } = require('./audit');
-const { getCleanupStatus, setSecurityCode, performCleanup } = require('./data_cleanup');
+const { getFreshStartStatus, getFreshStartWipePlan, setSecurityCode, performCleanup, verifyBackupFile, FRESH_START_KEEP_TABLES } = require('./data_cleanup');
 const { runIntegrityChecks } = require('./integrity');
 const { getTableInfo } = require('./table_info');
 const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
@@ -149,16 +149,24 @@ module.exports = {
     // Settings
     getSettings, saveSettings,
 
-    // Data cleanup (factory reset) — admin password + security code gated
-    getCleanupStatus, setSecurityCode, performCleanup,
+    // Fresh Start / Handover Reset — admin password + security code gated
+    getFreshStartStatus, setSecurityCode, performCleanup,
 
     // Backup
     backupDatabase,
+    backupDatabaseToPath,
     restoreDatabase,
+    restoreDatabaseFromPath,
     listBackups,
     deleteBackup,
     formatFileSize,
     getBackupDir,
+
+    // Fresh Start / Handover Reset
+    getFreshStartStatus,
+    getFreshStartWipePlan,
+    verifyBackupFile,
+    FRESH_START_KEEP_TABLES,
 
     // ── New modules ──
     // Statements

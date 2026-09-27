@@ -538,17 +538,48 @@ function runMigrations(db) {
     // Migration 21 (data backfill): turn milk lines inside purchase_items into
     // milk_collections rows, derive mixing/production batches, and seed the
     // required employees. Idempotent and transactional.
+    //
+    // IMPORTANT (§Fresh Start): this backfill must NEVER resurrect business
+    // data on a cleared/reset book. After a Fresh Start / Handover Reset the
+    // database is intentionally empty — nothing to derive, and the old staff
+    // master (Dipak Nepal, …) must NOT be re-seeded for the next client. So:
+    //   • no business data at all  → skip the whole backfill (empty book)
+    //   • fresh-start marker set   → derive from imported data, but never
+    //                                re-seed the previous business's employees
+    // (`fresh_start_completed_at` is written by the reset and kept as a
+    //  system setting so it survives future resets.)
     try {
-        const excelImport = require('./excel-import');
-        const backfillLog = (m) => console.log('  ' + m);
-        db.transaction(() => {
-            const milk = excelImport.backfillMilkCollectionsFromPurchases(db, backfillLog);
-            const prod = excelImport.deriveProductionBatches(db, backfillLog);
-            excelImport.ensureRequiredEmployees(db);
-            if (milk.created > 0 || prod.mixBatches > 0 || prod.gapBatches > 0) {
-                excelImport.rebuildStockLedger(db, backfillLog);
-            }
-        })();
+        let hasBusinessData = false;
+        try {
+            hasBusinessData = db.prepare(`SELECT
+                (SELECT COUNT(*) FROM parties) +
+                (SELECT COUNT(*) FROM purchases) +
+                (SELECT COUNT(*) FROM sales) +
+                (SELECT COUNT(*) FROM milk_collections) AS n`).get().n > 0;
+        } catch (e) {
+            hasBusinessData = false;
+        }
+        let freshStartMarker = null;
+        try {
+            freshStartMarker = db.prepare("SELECT value FROM settings WHERE key = 'fresh_start_completed_at'").get() || null;
+        } catch (e) { /* settings table missing */ }
+
+        if (!hasBusinessData) {
+            console.log('Migration 21 (milk/production/employee backfill) skipped — empty book (fresh start).');
+        } else {
+            const excelImport = require('./excel-import');
+            const backfillLog = (m) => console.log('  ' + m);
+            db.transaction(() => {
+                const milk = excelImport.backfillMilkCollectionsFromPurchases(db, backfillLog);
+                const prod = excelImport.deriveProductionBatches(db, backfillLog);
+                if (!freshStartMarker) {
+                    excelImport.ensureRequiredEmployees(db);
+                }
+                if (milk.created > 0 || prod.mixBatches > 0 || prod.gapBatches > 0) {
+                    excelImport.rebuildStockLedger(db, backfillLog);
+                }
+            })();
+        }
     } catch (e21) {
         console.log('Migration 21 (milk/production backfill) skipped:', e21.message);
     }

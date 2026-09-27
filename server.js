@@ -233,31 +233,12 @@ ensureAdminUser();
 })();
 
 // ──────────────────────────────────────────────────────────────
-// Auto-Import Excel Data on First Run
+// First-run data: NONE. (§16 — do not mix installer/app with business data.)
+// The database starts empty; an empty database must STAY empty across
+// restarts (a Fresh Start / Handover Reset must not be silently undone by
+// re-importing an old workbook). Business data is only brought in explicitly
+// via Settings → Update Data from Excel.
 // ──────────────────────────────────────────────────────────────
-try {
-    // Check if the database has business data
-    const partyCount = db.prepare("SELECT COUNT(*) as c FROM parties").get().c;
-    if (partyCount === 0) {
-        const excelPath = path.join(__dirname, 'Dairy_Accounts_Professional.xlsx');
-        if (fs.existsSync(excelPath)) {
-            console.log('  📂 Database has no business data. Running Excel import...');
-            try {
-                excelImport.runExcelImport(db, excelPath, { mode: 'fresh' });
-            } catch (importErr) {
-                console.error('  ❌ Excel import failed:', importErr.message);
-                console.error('     The server will start with an empty database.');
-            }
-        } else {
-            console.log('  ℹ️  No Excel file found at:', excelPath);
-            console.log('     Place Dairy_Accounts_Professional.xlsx in the project root and restart to import data.');
-        }
-    } else {
-        console.log(`  ✅ Database has ${partyCount} parties — skipping import.`);
-    }
-} catch (checkErr) {
-    console.log('  ℹ️  Could not check database state:', checkErr.message);
-}
 
 // ──────────────────────────────────────────────────────────────
 // Authentication Routes (no auth required)
@@ -1102,11 +1083,36 @@ app.post('/api/settings/get', requireRole('admin'), (req, res) => {
 const ENV_ADMIN = { password: process.env.AUTH_PASSWORD || 'admin123' };
 
 app.post('/api/cleanup/status', requireRole('admin'), (req, res) => {
-    res.json(ops.getCleanupStatus(db));
+    res.json(ops.getFreshStartStatus(db));
 });
 
 app.post('/api/cleanup/security-code', requireRole('admin'), (req, res) => {
     res.json(ops.setSecurityCode(db, req.body || {}, ENV_ADMIN));
+});
+
+// POST /api/fresh-start/backup — COMPLETE snapshot via the SQLite Online Backup
+// API to a server-side file (browser has no native Save dialog; the file can
+// then be downloaded via Backup History). Verified before success is reported.
+app.post('/api/fresh-start/backup', requireRole('admin'), async (req, res) => {
+    try {
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+        const backupDir = ops.getBackupDir(path.join(dbDir, 'dairy-plant.db'));
+        const destPath = path.join(backupDir, `DairyAccounts_Backup_${stamp}.dab`);
+        const backup = await ops.backupDatabaseToPath(db, path.join(dbDir, 'dairy-plant.db'), destPath, {
+            appVersion: APP_VERSION || null
+        });
+        const verify = ops.verifyBackupFile(backup.path);
+        if (!verify.ok) {
+            try { fs.unlinkSync(backup.path); } catch (e) { /* best effort */ }
+            return res.json({ success: false, error: `Backup verification failed (${verify.reason}). No data has been changed.` });
+        }
+        res.json({ success: true, data: { ...backup, verified: true } });
+    } catch (err) {
+        console.error('Fresh Start backup failed:', err.message);
+        res.json({ success: false, error: `Backup failed. No data has been changed. (${err.message})` });
+    }
 });
 
 app.post('/api/cleanup/perform', requireRole('admin'), (req, res) => {
@@ -1115,10 +1121,10 @@ app.post('/api/cleanup/perform', requireRole('admin'), (req, res) => {
         adminPassword: body.adminPassword,
         securityCode: body.securityCode,
         confirmText: body.confirmText,
-        mode: body.mode || 'wipe-all',
         envAdmin: ENV_ADMIN,
         userId: (tokenStore.get(extractToken(req)) || {}).userId || null,
-        createBackup: () => ops.backupDatabase(path.join(dbDir, 'dairy-plant.db'), db)
+        backupPath: body.backupPath,
+        verifyBackup: ops.verifyBackupFile
     }));
 });
 
@@ -1574,6 +1580,46 @@ app.post('/api/backup/delete', requireRole('admin'), (req, res) => {
         }
         ops.deleteBackup(path.join(dbDir, 'dairy-plant.db'), filename);
         res.json({ success: true, data: { message: `Deleted backup: ${filename}` } });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/backup/restore-from-file — Restore from a server-side file path
+// chosen by filename (used by ♻️ Restore Backup when the file is not in the
+// data/backups history — e.g. a .dab snapshot saved elsewhere on the server).
+app.post('/api/backup/restore-from-file', requireRole('admin'), (req, res) => {
+    try {
+        const { path: sourcePath } = req.body || {};
+        if (!sourcePath) {
+            return res.json({ success: false, error: 'Backup file path is required' });
+        }
+        const verify = ops.verifyBackupFile(sourcePath);
+        if (!verify.ok) {
+            return res.json({ success: false, error: `This file cannot be restored (${verify.reason}).` });
+        }
+        const result = ops.restoreDatabaseFromPath(
+            path.join(dbDir, 'dairy-plant.db'),
+            sourcePath,
+            () => {
+                try {
+                    if (db && typeof db.close === 'function') {
+                        db.close();
+                        console.log('  → Database connection closed for restore');
+                    }
+                } catch (e) {
+                    console.error('  ⚠️ Error closing database:', e.message);
+                }
+            }
+        );
+        try {
+            db = initDatabase(dbDir);
+            console.log('  ✅ Database re-initialized after restore');
+        } catch (err) {
+            console.error('  ❌ Failed to re-initialize database after restore:', err.message);
+            return res.json({ success: false, error: 'Backup restored but failed to re-initialize: ' + err.message });
+        }
+        res.json({ success: true, data: result });
     } catch (err) {
         res.json({ success: false, error: err.message });
     }

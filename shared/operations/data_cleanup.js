@@ -5,20 +5,24 @@
  * installed application can be handed to a new client and refilled by
  * importing a fresh Excel workbook.
  *
- * Safety design (matches the handover spec):
+ * Simple, fast workflow (no slow pre-reset record counting):
+ *
+ *   BACKUP FIRST  →  VERIFY BACKUP  →  CONFIRM  →  RESET  →  FRESH APP
+ *
  *   1. PRIMARY GATE — the administrator's own login password.
  *   2. OPTIONAL GATE — a separate security code, ONLY if one is configured.
- *      It is an additional protection for this destructive action; it is
- *      never required anywhere else and never blocks normal use. If it is
- *      set, the existing code must be used (no forced change).
  *   3. EXPLICIT CONFIRMATION — the admin must type RESET.
- *   4. A backup is created BEFORE anything is deleted and is verified
+ *   4. A COMPLETE backup is created BEFORE anything is deleted (the admin
+ *      picks the location with a Save Backup As… dialog) and is verified
  *      (file exists, opens as SQLite, integrity_check ok). If the backup
  *      fails or cannot be verified, NOTHING is deleted.
  *   5. The wipe runs inside ONE transaction — either the complete business
  *      data set is cleared or nothing is touched (no partial state).
  *   6. The reset is written to the immutable audit log, including the
  *      backup filename reference.
+ *
+ * The business tables are discovered from the live schema (sqlite_master +
+ * foreign_key graph + FRESH_START_KEEP_TABLES), NOT hard-coded per project.
  *
  * Preserved: user logins/admin access, security-code + auth settings,
  * system settings (behavior/system-level), database schema, audit log.
@@ -33,46 +37,12 @@ const fs = require('fs');
 const Database = require('better-sqlite3');
 const auth = require('../auth');
 
-/** Tables cleared in BOTH modes, in FK-safe order (children first). */
-const TRANSACTIONAL_TABLES = [
-    // document line items first (they reference their headers)
-    'sales_items',
-    'purchase_items',
-    'production_inputs',
-    'production_outputs',
-    // documents
-    'sales',
-    'purchases',
-    'milk_collections',
-    'payments',
-    'bank_transactions',
-    'production_batches',
-    'partner_capital',
-    'denomination_counts',
-    'petty_cash',
-    'cash_deposits',
-    'cash_collections',
-    'salary_records',
-    'vehicle_expenses',
-    'other_expenses',
-    // payroll master is handed-over business data; salary_records cleared above
-    'employees',
-    // ledgers and stock
-    'ledger_entries',
-    'stock_movements'
-];
-
 /**
- * Extra tables cleared ONLY in full mode. parties/products are masters;
- * routes and milk_rate_chart stay in keep-masters because preserved parties
- * reference routes (FK) and the same business keeps its milk pricing.
- * routes is listed AFTER parties/products: users (preserved) may reference
- * routes, so user assignments are nulled before routes is cleared.
+ * Tables NEVER cleared by the Fresh Start reset — login/system/audit only.
+ * Everything else found in the live schema is treated as business data and
+ * is cleared, children before parents (FK graph ordering).
  */
-const MASTER_TABLES = ['parties', 'products', 'milk_rate_chart', 'routes'];
-
-/** Tables never touched: users, audit_log and system-level settings. */
-const PRESERVED_TABLES = ['users', 'settings', 'audit_log'];
+const FRESH_START_KEEP_TABLES = new Set(['users', 'settings', 'audit_log']);
 
 /**
  * System-level settings keys that survive the reset (behavior/system config).
@@ -86,7 +56,11 @@ const SYSTEM_SETTING_KEYS = new Set([
     'security_code_locked_until',
     'app_version',
     'allow_negative_stock',
-    'paper_size'
+    'paper_size',
+    // Written by the reset itself: tells startup migrations/backfills that
+    // this book was deliberately cleared, so they must not re-seed the
+    // previous business's data (e.g. the staff master) on the next launch.
+    'fresh_start_completed_at'
 ]);
 
 const MAX_CODE_ATTEMPTS = 5;
@@ -166,32 +140,119 @@ function verifyAdminPassword(db, password, envAdmin) {
 // Status (for the Settings screen — real counts, no hard-coding)
 // ============================================================
 
-function getCleanupStatus(db) {
-    const counts = {};
-    const all = [...TRANSACTIONAL_TABLES, ...MASTER_TABLES];
-    for (const t of all) {
+/**
+ * Build the Fresh Start wipe plan from the LIVE database schema — never from
+ * a hard-coded table list.
+ *
+ * 1. Read every user table from sqlite_master.
+ * 2. Keep-tables (users/settings/audit_log) and internal tables are excluded.
+ * 3. Order children before parents using the declared foreign keys so the
+ *    DELETEs never violate an FK constraint (foreign_keys pragma is left as
+ *    the caller configured it — ordering alone makes the wipe safe).
+ * 4. Tables with declared FKs pointing OUT of the wipe set into a kept table
+ *    (e.g. salary_records → employees — both business tables) are still
+ *    cleared; FKs from a wiped table into a KEPT table (e.g. users → routes)
+ *    are detached by an UPDATE … SET col = NULL before the wipe.
+ *
+ * @returns {{ tables: string[], detach: Array<{table: string, column: string}>, missing: string[] }}
+ */
+function getFreshStartWipePlan(database) {
+    const fks = []; // { from, to, fromColumn }
+    const db = database;
+
+    const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name);
+    const keep = new Set([...FRESH_START_KEEP_TABLES].filter(t => names.includes(t)));
+    const wipe = names.filter(t => !keep.has(t));
+    const wipeSet = new Set(wipe);
+
+    for (const t of wipe) {
+        let fkRows = [];
         try {
-            counts[t] = db.prepare(`SELECT COUNT(*) AS c FROM "${t}"`).get().c;
-        } catch (e) {
-            counts[t] = null; // table missing in this schema version
+            fkRows = db.pragma(`foreign_key_list('${t}')`);
+        } catch (e) { /* pragma failed — treat as no FKs */ }
+        for (const fk of fkRows) {
+            if (fk.table && !wipeSet.has(fk.table)) {
+                // Wiped table references a KEPT table — detach before wiping
+                fks.push({ from: t, to: fk.table, fromColumn: fk.from });
+            }
         }
     }
-    // Business-identity settings that will be cleared (computed, not hard-coded)
+
+    // Kahn topological sort for DELETION: a table may only be emitted once
+    // every table that REFERENCES it (its children) has already been emitted —
+    // children are deleted before parents so FK constraints stay satisfied.
+    const referencing = new Map(); // parent -> [tables that reference it]
+    for (const t of wipe) {
+        for (const target of fkTargets(t)) {
+            if (target === t) continue;
+            if (!referencing.has(target)) referencing.set(target, []);
+            referencing.get(target).push(t);
+        }
+    }
+    const emitted = new Set();
+    const ordered = [];
+    let pending = [...wipe];
+    let guard = pending.length + 1;
+    while (pending.length && guard-- > 0) {
+        let progressed = false;
+        const next = [];
+        for (const t of pending) {
+            const children = referencing.get(t) || [];
+            const blocked = children.some(c => wipeSet.has(c) && !emitted.has(c));
+            if (!blocked) {
+                ordered.push(t);
+                emitted.add(t);
+                progressed = true;
+            } else {
+                next.push(t);
+            }
+        }
+        pending = next;
+        if (!progressed) break; // cyclic FKs — emit the rest in original order
+    }
+    for (const t of pending) ordered.push(t);
+
+    return { tables: ordered, detach: fks };
+
+    /** Tables (within the wipe set) that `t` declares FKs INTO. */
+    function fkTargets(t) {
+        const deps = [];
+        try {
+            for (const fk of db.pragma(`foreign_key_list('${t}')`)) {
+                if (fk.table && fk.table !== t) deps.push(fk.table);
+            }
+        } catch (e) { /* none */ }
+        return deps;
+    }
+}
+
+// ============================================================
+// Status (for the Settings screen — lightweight, NO record counting)
+// ============================================================
+
+/**
+ * Everything the Fresh Start UI needs WITHOUT scanning business records.
+ * Only the (tiny) settings and users tables are read.
+ */
+function getFreshStartStatus(db) {
     let business_settings = [];
     try {
         business_settings = db.prepare('SELECT key FROM settings ORDER BY key').all()
             .map(r => r.key).filter(k => !SYSTEM_SETTING_KEYS.has(k));
     } catch (e) { /* settings table missing — nothing to list */ }
+    let admin_count = 0;
+    try {
+        admin_count = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin' AND is_active = 1").get().c;
+    } catch (e) { /* users table missing */ }
     return {
         success: true,
         data: {
-            counts,
-            transactional_rows: all.reduce((s, t) => s + (counts[t] || 0), 0),
             has_security_code: !!getSecurityCodeHash(db),
             locked_out: isLockedOut(db),
             remaining_attempts: isLockedOut(db) ? 0 : getRemainingAttempts(db),
-            preserved: PRESERVED_TABLES,
-            business_settings
+            business_settings,
+            admin_count,
+            keep_tables: [...FRESH_START_KEEP_TABLES]
         }
     };
 }
@@ -260,23 +321,26 @@ function verifyBackupFile(backupPath) {
 // ============================================================
 
 /**
- * Wipe business data (Handover Reset).
+ * Wipe business data (Fresh Start / Handover Reset).
+ * The wipe set is computed from the LIVE schema — see getFreshStartWipePlan().
  * @param {object} db        - better-sqlite3 connection
  * @param {object} opts
  *   adminPassword  (required) login password of an admin — primary gate
  *   securityCode   (optional) required ONLY when a security code is set
  *   confirmText    (required) must be exactly 'RESET'
- *   mode           'wipe-all' (default) clears parties/products too;
- *                  'keep-masters' preserves parties and products.
  *   envAdmin       {password} from environment config (optional)
  *   userId         acting user id for the audit record
- *   createBackup   async fn() => {filename,...} — called BEFORE the wipe;
- *                  the returned backup file is verified before deleting.
+ *   backupPath     (required) path of the COMPLETE backup created in Step 1
+ *                  (Save Backup As… / Online Backup API). The reset NEVER runs
+ *                  without one: the file must exist and pass verification
+ *                  before anything is deleted.
+ *   verifyBackup   optional alternate verifier fn(path) => {ok, reason}
  */
 function performCleanup(db, opts = {}) {
     const {
-        adminPassword, securityCode, confirmText, mode = 'wipe-all',
-        envAdmin = null, userId = null, createBackup = null
+        adminPassword, securityCode, confirmText,
+        envAdmin = null, userId = null,
+        backupPath = null, verifyBackup = null
     } = opts;
 
     // ── Gate 0: lockout (only applies when a security code is configured) ──
@@ -313,37 +377,34 @@ function performCleanup(db, opts = {}) {
         clearAttempts(db);
     }
 
-    if (mode !== 'wipe-all' && mode !== 'keep-masters') {
-        return { success: false, error: 'Unknown cleanup mode.' };
+    // ── BACKUP FIRST: the reset is anchored to a VERIFIED backup file ──
+    // (Step 1 of the UI flow already created it via the Save Backup As… dialog
+    // / Online Backup API; here we require it and verify it again.)
+    if (!backupPath) {
+        return { success: false, error: 'No backup found. Create the complete backup first (Step 1) — nothing has been deleted.' };
     }
+    if (!fs.existsSync(backupPath)) {
+        return { success: false, error: `Backup verification failed (file not found: ${backupPath}). Create the backup first (Step 1). No data has been deleted.` };
+    }
+    const verify = (typeof verifyBackup === 'function' ? verifyBackup : verifyBackupFile)(backupPath);
+    if (!verify.ok) {
+        return { success: false, error: `Backup verification failed (${verify.reason}). No data has been deleted.` };
+    }
+    const backupInfo = { path: backupPath, filename: backupPath.split(/[\\/]/).pop() };
 
-    // ── Backup BEFORE deleting anything, then VERIFY it ──
-    let backupInfo = null;
-    if (typeof createBackup === 'function') {
-        try {
-            backupInfo = createBackup();
-        } catch (e) {
-            return { success: false, error: `Backup could not be created. No data has been deleted. (${e.message})` };
-        }
-        if (!backupInfo || !backupInfo.path) {
-            return { success: false, error: 'Backup could not be created. No data has been deleted.' };
-        }
-        const verify = verifyBackupFile(backupInfo.path);
-        if (!verify.ok) {
-            try { fs.unlinkSync(backupInfo.path); } catch (e) { /* best effort */ }
-            return { success: false, error: `Backup verification failed (${verify.reason}). No data has been deleted.` };
-        }
-    }
+    // ── Wipe plan from the LIVE schema (children before parents) ──
+    const plan = getFreshStartWipePlan(db);
+    const tables = plan.tables;
 
     // ── Wipe, atomically ──
-    const tables = mode === 'keep-masters' ? TRANSACTIONAL_TABLES : [...TRANSACTIONAL_TABLES, ...MASTER_TABLES];
     try {
         const wipe = db.transaction(() => {
-            // Preserved users may hold FK references into routes — detach them
-            // before the routes table is cleared (wipe-all only).
-            if (mode === 'wipe-all') {
-                try { db.prepare('UPDATE users SET assigned_route_id = NULL').run(); } catch (e) {
-                    if (!/no such column/i.test(e.message)) throw e;
+            // Detach FKs from wiped tables into KEPT tables (e.g. users → routes)
+            for (const d of plan.detach) {
+                try {
+                    db.prepare(`UPDATE "${d.from}" SET "${d.fromColumn}" = NULL`).run();
+                } catch (e) {
+                    if (!/no such (column|table)/i.test(e.message)) throw e;
                 }
             }
             for (const t of tables) {
@@ -373,14 +434,21 @@ function performCleanup(db, opts = {}) {
             } catch (e) {
                 // sqlite_sequence does not exist until the first AUTOINCREMENT insert
             }
+            // Persistent Fresh Start marker — keeps the book empty across
+            // app restarts by telling startup backfills not to re-seed the
+            // previous business's master data.
+            try {
+                db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('fresh_start_completed_at', ?)")
+                    .run(new Date().toISOString());
+            } catch (e) { /* settings table missing — skip */ }
             // Immutable audit record of the reset, with backup reference
             try {
                 db.prepare(`
                     INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, changed_by)
                     VALUES (?, ?, ?, ?, ?, ?)
                 `).run('settings', null, 'delete',
-                    JSON.stringify({ action: 'HANDOVER_RESET', mode, backup: backupInfo ? backupInfo.filename : null }),
-                    JSON.stringify({ action: 'HANDOVER_RESET', mode, cleared_tables: tables, backup: backupInfo ? backupInfo.filename : null, backup_verified: !!(backupInfo && backupInfo.path) }),
+                    JSON.stringify({ action: 'HANDOVER_RESET', backup: backupInfo ? backupInfo.filename : null }),
+                    JSON.stringify({ action: 'HANDOVER_RESET', cleared_tables: tables, backup: backupInfo ? backupInfo.filename : null, backup_verified: !!(backupInfo && backupInfo.path) }),
                     userId || null);
             } catch (e) { /* audit must never break the wipe */ }
         });
@@ -392,10 +460,7 @@ function performCleanup(db, opts = {}) {
     return {
         success: true,
         data: {
-            message: mode === 'keep-masters'
-                ? 'Transactions cleared. Parties, products, routes, rate charts, users, system settings and audit log kept.'
-                : 'Handover Reset completed successfully. All business data cleared. Users, system settings and audit log kept.',
-            mode,
+            message: 'Fresh Start completed successfully. All business data cleared. Users, system settings and audit log kept.',
             backup: backupInfo,
             backup_verified: !!(backupInfo && backupInfo.path),
             cleared_tables: tables.length
@@ -404,11 +469,10 @@ function performCleanup(db, opts = {}) {
 }
 
 module.exports = {
-    TRANSACTIONAL_TABLES,
-    MASTER_TABLES,
-    PRESERVED_TABLES,
+    FRESH_START_KEEP_TABLES,
+    getFreshStartWipePlan,
+    getFreshStartStatus,
     SYSTEM_SETTING_KEYS,
-    getCleanupStatus,
     setSecurityCode,
     performCleanup,
     verifyBackupFile,

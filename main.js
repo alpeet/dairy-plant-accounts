@@ -42,29 +42,15 @@ function getDbDir() {
 }
 
 /**
- * On the very first run (empty database), import the bundled business data from
- * Dairy_Accounts_Professional.xlsx so the installed app is ready to use.
- * Import is idempotent — it only runs when the database has no parties yet.
+ * NOTE (§16 — installer purity): the installer intentionally does NOT bundle
+ * Dairy_Accounts_Professional.xlsx or any business database. A new device
+ * starts as a clean application: the admin creates/logs in, enters their own
+ * company information (Settings → Business Settings) and imports their own
+ * Excel workbook (Settings → Update Data from Excel). The previous business's
+ * data lives only in the Fresh Start backup file (DairyAccounts_Backup_*.dab).
  */
 function importBundledExcelData(dbDir) {
-    try {
-        const partyCount = db.prepare('SELECT COUNT(*) as c FROM parties').get().c;
-        if (partyCount > 0) {
-            console.log(`  ✅ Database has ${partyCount} parties — skipping Excel import.`);
-            return;
-        }
-        const excelPath = path.join(__dirname, 'Dairy_Accounts_Professional.xlsx');
-        if (!fs.existsSync(excelPath)) {
-            console.log('  ℹ️  No bundled Excel file found — starting with an empty database.');
-            return;
-        }
-        console.log('  📂 First run detected — importing bundled business data...');
-        excelImport.runExcelImport(db, excelPath, { mode: 'fresh' });
-        console.log('  ✅ Excel import finished.');
-    } catch (err) {
-        console.error('  ❌ Excel import failed:', err.message);
-        console.error('     The app will continue with an empty database.');
-    }
+    // Intentionally a no-op: nothing business-related ships inside the app.
 }
 
 function initAppDatabase() {
@@ -1066,13 +1052,63 @@ authHandle('db:settings:save', async (event, settings) => {
     return safeRun(() => ops.saveSettings(db, settings));
 });
 
-// --- Data cleanup (factory reset) — admin password + security code gated ---
+// --- Data cleanup (Fresh Start / Handover Reset) — admin password + optional
+//     security code gated. Backup-first: the admin chooses WHERE to save the
+//     complete backup (Save Backup As… dialog) BEFORE the reset can run. ---
 authHandle('db:cleanup:status', async () => {
-    return safeRun(() => ops.getCleanupStatus(db));
+    return safeRun(() => ops.getFreshStartStatus(db));
 });
 
 authHandle('db:cleanup:security-code', async (event, payload) => {
     return safeRun(() => ops.setSecurityCode(db, payload || {}, null));
+});
+
+/**
+ * Step 1 of Fresh Start: show a Save Backup As… dialog, then snapshot the
+ * COMPLETE live database to the chosen path via SQLite's Online Backup API
+ * (consistent even while the app is running), and verify the result.
+ * Nothing is deleted here.
+ */
+authHandle('db:fresh-start:backup-save-as', async () => {
+    try {
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+        const dbPath = path.join(getDbDir(), 'dairy-plant.db');
+
+        const result = await dialog.showSaveDialog(mainWindow, {
+            title: 'Save Backup As — Fresh Start / Handover Reset',
+            message: 'Choose where to save the complete backup (required before reset)',
+            defaultPath: path.join(app.getPath('documents'), 'Dairy Accounts Backups', `DairyAccounts_Backup_${stamp}.dab`),
+            filters: [
+                { name: 'Dairy Accounts Backup', extensions: ['dab'] },
+                { name: 'SQLite Database', extensions: ['db'] },
+                { name: 'All Files', extensions: ['*'] }
+            ],
+            properties: ['createDirectory', 'showOverwriteConfirmation']
+        });
+        if (result.canceled || !result.filePath) {
+            return { success: false, canceled: true };
+        }
+
+        // COMPLETE snapshot via the Online Backup API (WAL-safe)
+        const backup = await ops.backupDatabaseToPath(db, dbPath, result.filePath, {
+            appVersion: app.getVersion()
+        });
+
+        // Verify BEFORE reporting success: exists, opens as SQLite, integrity_check ok
+        const verify = ops.verifyBackupFile(backup.path);
+        if (!verify.ok) {
+            try { fs.unlinkSync(backup.path); } catch (e) { /* best effort */ }
+            try { fs.unlinkSync(backup.metaPath); } catch (e) { /* best effort */ }
+            return { success: false, error: `Backup verification failed (${verify.reason}). No data has been changed.` };
+        }
+
+        return { success: true, data: { ...backup, verified: true } };
+    } catch (err) {
+        console.error('Fresh Start backup failed:', err.message);
+        return { success: false, error: `Backup failed. No data has been changed. (${err.message})` };
+    }
 });
 
 authHandle('db:cleanup:perform', async (event, payload) => {
@@ -1081,10 +1117,10 @@ authHandle('db:cleanup:perform', async (event, payload) => {
         adminPassword: p.adminPassword,
         securityCode: p.securityCode,
         confirmText: p.confirmText,
-        mode: p.mode || 'wipe-all',
         envAdmin: null,
         userId: currentUser ? currentUser.id : null,
-        createBackup: () => ops.backupDatabase(path.join(getDbDir(), 'dairy-plant.db'), db)
+        backupPath: p.backupPath,
+        verifyBackup: ops.verifyBackupFile
     }));
 });
 
@@ -1223,7 +1259,7 @@ authHandle('db:backup:download', async (event, filename) => {
     return { success: true, data: { path: result.filePath } };
 });
 
-// --- Restore ---
+// --- Restore (from Backup History filename) ---
 authHandle('db:restore', async (event, filename) => {
     return safeRun(() => {
         const result = ops.restoreDatabase(
@@ -1251,6 +1287,59 @@ authHandle('db:restore', async (event, filename) => {
         }
         return result;
     });
+});
+
+// --- ♻️ Restore Backup from ANY file the user picks (.dab / .db) ---
+authHandle('db:restore:from-file', async () => {
+    try {
+        const result = await dialog.showOpenDialog(mainWindow, {
+            title: 'Restore Backup — pick a DairyAccounts_Backup_*.dab (or .db) file',
+            message: 'Choose the backup file to restore. A safety backup of the current data is created first.',
+            defaultPath: path.join(app.getPath('documents'), 'Dairy Accounts Backups'),
+            properties: ['openFile', 'createDirectory'],
+            filters: [
+                { name: 'Dairy Accounts Backup', extensions: ['dab', 'db', 'sqlite'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        });
+        if (result.canceled || !result.filePaths || !result.filePaths[0]) {
+            return { success: false, canceled: true };
+        }
+        const sourcePath = result.filePaths[0];
+
+        // Refuse to restore from garbage: the file must be a valid SQLite DB
+        const verify = ops.verifyBackupFile(sourcePath);
+        if (!verify.ok) {
+            return { success: false, error: `This file cannot be restored (${verify.reason}).` };
+        }
+
+        const restore = ops.restoreDatabaseFromPath(
+            path.join(getDbDir(), 'dairy-plant.db'),
+            sourcePath,
+            () => {
+                try {
+                    if (db && typeof db.close === 'function') {
+                        db.close();
+                        console.log('  → Database connection closed for restore');
+                    }
+                } catch (e) {
+                    console.error('  ⚠️ Error closing database:', e.message);
+                }
+            }
+        );
+
+        try {
+            db = initDatabase(getDbDir());
+            console.log('  ✅ Database re-initialized after restore');
+        } catch (err) {
+            console.error('  ❌ Failed to re-initialize database after restore:', err.message);
+            throw new Error('Backup restored but failed to re-initialize: ' + err.message);
+        }
+        return { success: true, data: restore };
+    } catch (err) {
+        console.error('Restore from file failed:', err.message);
+        return { success: false, error: err.message };
+    }
 });
 
 // --- Print handlers ---

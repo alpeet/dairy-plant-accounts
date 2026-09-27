@@ -360,20 +360,6 @@ async function submitSecurityCode(hasCode) {
     }
 }
 
-const CLEANUP_LABELS = {
-    sales_items: 'Sales line items', purchase_items: 'Purchase line items',
-    production_inputs: 'Production inputs', production_outputs: 'Production outputs',
-    sales: 'Sales invoices', purchases: 'Purchase bills', milk_collections: 'Milk collections',
-    payments: 'Payments', bank_transactions: 'Bank transactions',
-    production_batches: 'Production batches', partner_capital: 'Partner capital entries',
-    denomination_counts: 'Cash denomination counts', petty_cash: 'Petty cash vouchers',
-    cash_deposits: 'Cash deposits', salary_records: 'Salary records',
-    vehicle_expenses: 'Vehicle expenses', other_expenses: 'Other expenses',
-    ledger_entries: 'Ledger entries', stock_movements: 'Stock movements',
-    routes: 'Routes', milk_rate_chart: 'Milk rate charts',
-    parties: 'Parties (customers, suppliers, farmers)', products: 'Products (items)'
-};
-
 function buildDataCleanupCard() {
     return `
         <div class="card" style="max-width:600px;margin-top:20px;border:2px solid #fecaca">
@@ -383,67 +369,92 @@ function buildDataCleanupCard() {
             <div class="settings-section">
                 <p style="font-size:13px;color:var(--text-light);margin:0 0 12px">
                     <strong>Prepare this application for a new business/client.</strong>
-                    This permanently removes existing business and accounting data. A verified backup is
-                    created before the reset, everything runs in one transaction, and the action is written
-                    to the audit log.
+                    Create a complete backup of the current application first, then clear business data so this
+                    application can be used for a new business/client.
                     <strong style="color:#b91c1c">This cannot be undone inside the app</strong> — restore the
-                    backup file if you change your mind.
+                    backup file with ♻️ Restore Backup if you change your mind.
                 </p>
                 <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                    <strong>Step 1 — Create Complete Backup</strong> (you choose where to save it; verified before
+                    anything else happens). <strong>Step 2 — Confirm.</strong> <strong>Step 3 — Reset.</strong><br>
                     Always kept: user logins &amp; admin access, system settings, audit log, database schema.
-                    Cleared: all transactions, parties, products, employees and the company profile (next client
-                    enters their own).
+                    Cleared: all business data — transactions, parties, products, employees, company profile.
                 </p>
-                <button class="btn btn-secondary btn-sm" onclick="loadCleanupCounts()">📊 Show What Will Be Cleared</button>
-                <div id="cleanupCounts" style="margin-top:12px"></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                    <button class="btn btn-danger" onclick="startFreshStartFlow()">🧹 Fresh Start / Handover Reset</button>
+                    <button class="btn btn-secondary" onclick="restoreBackupFromFile()">♻️ Restore Backup</button>
+                </div>
             </div>
         </div>`;
 }
 
-async function loadCleanupCounts() {
-    const box = document.getElementById('cleanupCounts');
-    if (!box) return;
-    box.innerHTML = '<p style="font-size:12px;color:var(--text-light)">Counting rows...</p>';
-    const result = await window.api.getCleanupStatus();
-    if (!result || !result.success) {
-        box.innerHTML = '<p style="font-size:12px;color:#b91c1c">Could not load row counts.</p>';
+/**
+ * Fresh Start — STEP 1: Create the complete backup FIRST (Save Backup As…).
+ * Nothing is deleted in this step. On success the confirmation screen opens.
+ */
+async function startFreshStartFlow() {
+    const isElectron = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent);
+    showModal(`
+        <div class="modal-header"><h2>🧹 Fresh Start — Step 1: Create Complete Backup</h2></div>
+        <div class="modal-body">
+            <div style="padding:12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;margin-bottom:14px;font-size:13px">
+                A <strong>complete backup</strong> of the current application data (database, transactions, parties,
+                stock, balances and settings) is created first. Nothing is deleted until you confirm later.
+            </div>
+            <div id="fsBackupStatus" style="font-size:13px;color:var(--text-light);margin-bottom:10px">
+                ${isElectron
+                    ? 'A <strong>Save Backup As…</strong> dialog will open — choose where to keep the backup file (recommended: Documents / Dairy Accounts Backups).'
+                    : 'The server will create a verified snapshot in its backups folder; you can download it afterwards from Settings → Data Management → Backup History.'}
+            </div>
+            <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">If the backup cannot be created or verified, <strong>the reset will not run and nothing will be changed</strong>.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="fsBackupBtn" onclick="createFreshStartBackup()">💾 Create Backup…</button>
+        </div>`);
+}
+
+async function createFreshStartBackup() {
+    const btn = document.getElementById('fsBackupBtn');
+    const status = document.getElementById('fsBackupStatus');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Creating complete backup…'; }
+    if (status) status.innerHTML = '⏳ Creating a complete, verified snapshot of the database…';
+
+    let result = null;
+    try {
+        result = await window.api.freshStartBackupSaveAs();
+    } catch (e) {
+        result = { success: false, error: e.message };
+    }
+
+    if (!result || result.canceled) {
+        if (btn) { btn.disabled = false; btn.textContent = '💾 Create Backup…'; }
+        if (status) status.innerHTML = 'Backup canceled — choose a location to continue, or Cancel to stop.';
         return;
     }
-    const d = result.data;
-    // Categories with zero records are hidden (per spec, 0 or omitted is fine)
-    const rows = Object.entries(d.counts)
-        .filter(([t, c]) => c !== null && c > 0)
-        .map(([t, c]) =>
-            `<tr><td style="padding:3px 8px">${CLEANUP_LABELS[t] || t}</td><td style="padding:3px 8px;text-align:right;font-weight:600">${c.toLocaleString()}</td></tr>`
-        ).join('');
-    const fmt = n => n.toLocaleString();
-    box.innerHTML = `
-        <div style="font-size:13px;margin-bottom:8px"><strong>Data that will be removed</strong> — ${fmt(d.transactional_rows)} records total:
-            ${d.has_security_code ? '' : ' · <span style="color:#b45309">security code not set (optional — admin password is enough)</span>'}
-            ${d.locked_out ? ' · <span style="color:#b91c1c">temporarily locked after wrong code attempts</span>' : ''}
-        </div>
-        <div style="max-height:220px;overflow:auto;border:1px solid var(--border,#e2e8f0);border-radius:6px;margin-bottom:12px">
-            <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${rows || '<tr><td style="padding:8px;color:var(--text-light)">Nothing to clear — the book is already empty.</td></tr>'}</tbody></table>
-        </div>
-        <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">
-            Also cleared: company profile &amp; signature, SMTP credentials${d.business_settings && d.business_settings.length ? ` (${d.business_settings.length} business settings keys)` : ''}.
-            Never touched: user logins, system settings, audit log.
-        </div>
-        <div style="text-align:center">
-            <button class="btn btn-danger" onclick="performDataCleanup('wipe-all')" ${d.locked_out ? 'disabled' : ''}>🧹 Handover Reset</button>
-        </div>`;
-}
+    if (!result || !result.success) {
+        if (btn) { btn.disabled = false; btn.textContent = '💾 Try Again'; }
+        if (status) status.innerHTML = `<span style="color:#b91c1c;font-weight:600">⛔ Backup failed. No data has been changed.</span><br><span style="font-size:12px">${escapeHtml((result && result.error) || 'Unknown error')}</span>`;
+        return;
+    }
 
-async function performDataCleanup(mode) {
+    // ── Backup created AND verified → simple confirmation screen (Step 2) ──
+    const b = result.data || {};
     showModal(`
-        <div class="modal-header"><h2>⚠️ Confirm Handover Reset</h2></div>
+        <div class="modal-header"><h2>⚠️ Fresh Start Confirmation</h2></div>
         <div class="modal-body">
-            <div style="padding:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin-bottom:14px">
-                <p style="font-size:13px;margin:0 0 8px;font-weight:600">This will permanently remove all existing business and accounting data from this application.</p>
-                <p style="font-size:12px;margin:0 0 4px">• A verified backup will be created before the reset.</p>
-                <p style="font-size:12px;margin:0 0 4px">• This action cannot be undone from inside the application.</p>
-                <p style="font-size:12px;margin:0">• Continue only if you want to prepare this application for a fresh business/client.</p>
+            <div style="padding:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;margin-bottom:14px;font-size:13px">
+                ✅ <strong>Backup created successfully.</strong><br>
+                The current application state has been safely backed up${b.filename ? `: <strong>${escapeHtml(b.filename)}</strong> (${formatFileSize(b.size)})` : ''}.<br>
+                <span style="font-size:12px;color:var(--text-light)">${b.path ? 'Saved to: ' + escapeHtml(b.path) : 'Stored in the server backups folder (downloadable from Backup History).'}</span>
             </div>
+            <p style="font-size:13px;margin:0 0 10px">
+                The next step will clear the existing business data and prepare this application for fresh use.
+            </p>
+            <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                This cannot be undone unless you restore the backup (♻️ Restore Backup). User logins, admin access,
+                system settings and the audit log are kept.
+            </p>
             <div class="form-group">
                 <label>Admin password</label>
                 <input type="password" class="form-control" id="cleanupAdminPw" autocomplete="off">
@@ -456,58 +467,124 @@ async function performDataCleanup(mode) {
                 <label>Type <strong>RESET</strong> to continue</label>
                 <input type="text" class="form-control" id="cleanupConfirmText" placeholder="RESET" autocomplete="off">
             </div>
-            <p style="font-size:11px;color:var(--text-light);margin:0">If a security code is configured, 5 wrong attempts lock the reset for 15 minutes.</p>
+            <p id="fsResetError" style="font-size:12px;color:#b91c1c;margin:0;display:none"></p>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-danger" id="cleanupGoBtn" onclick="confirmDataCleanup('${mode}')" disabled>🧹 Permanently Reset Business Data</button>
+            <button class="btn btn-danger" id="cleanupGoBtn" onclick="confirmFreshStartReset()" disabled>🧹 Continue Fresh Start</button>
         </div>`);
 
+    // Backup file reference kept in a module variable (paths can contain quotes)
+    window._fsBackupRef = b.path || b.filename || '';
     // Security-code field appears only when a code is actually configured
     window.api.getCleanupStatus().then(r => {
         const grp = document.getElementById('cleanupSecCodeGroup');
         if (grp && r && r.success && r.data.has_security_code) grp.style.display = '';
-    });
+    }).catch(() => {});
 
     // Enable the destructive button only when RESET is typed exactly
     const input = document.getElementById('cleanupConfirmText');
     const go = document.getElementById('cleanupGoBtn');
     if (input && go) {
         input.addEventListener('input', () => {
-            go.disabled = input.value.trim() !== 'RESET';
+            go.disabled = input.value.trim().toUpperCase() !== 'RESET';
         });
     }
 }
 
-async function confirmDataCleanup(mode) {
+/**
+ * Fresh Start — STEP 3: the actual reset (backup was already created & verified).
+ */
+async function confirmFreshStartReset() {
+    const backupRef = (typeof window !== 'undefined' && window._fsBackupRef) || undefined;
     const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
     const adminPassword = val('cleanupAdminPw');
     const securityCode = val('cleanupSecCode');
     const confirmText = val('cleanupConfirmText');
-    if (!adminPassword) { showToast('Enter your admin password.', 'error'); return; }
-    if (confirmText.trim().toUpperCase() !== 'RESET') { showToast('Type RESET (in capitals) to confirm.', 'error'); return; }
+    const errEl = document.getElementById('fsResetError');
+    const showErr = msg => { if (errEl) { errEl.textContent = msg; errEl.style.display = ''; } else { showToast(msg, 'error'); } };
+    if (!adminPassword) { showErr('Enter your admin password.'); return; }
+    if (confirmText.trim().toUpperCase() !== 'RESET') { showErr('Type RESET (in capitals) to confirm.'); return; }
     const btn = document.getElementById('cleanupGoBtn');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Backing up, then resetting...'; }
-    const result = await window.api.performDataCleanup({ adminPassword, securityCode, confirmText, mode });
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Resetting business data…'; }
+    const result = await window.api.performDataCleanup({ adminPassword, securityCode, confirmText, backupPath: backupRef || undefined });
     if (result && result.success) {
         const b = result.data && result.data.backup;
         showModal(`
-            <div class="modal-header"><h2>✅ Handover Reset Completed Successfully</h2></div>
+            <div class="modal-header"><h2>✅ Fresh Start Completed</h2></div>
             <div class="modal-body">
-                <p style="font-size:13px;margin:0 0 10px">All previous business data has been cleared.</p>
-                ${b ? `<p style="font-size:12px;margin:0 0 6px">💾 Backup created and verified: <strong>${b.filename}</strong> (${(b.size / 1048576).toFixed(1)} MB)</p>
-                       <p style="font-size:11px;color:var(--text-light);margin:0 0 10px">Keep this file until the new client's data is in. To undo, restore it from Settings → Backup History.</p>` : ''}
-                <p style="font-size:12px;margin:0 0 10px">The application is now ready for a new business/client.</p>
+                <p style="font-size:13px;margin:0 0 10px">All business data has been cleared. The application is now ready for a new business/client.</p>
+                ${b ? `<p style="font-size:12px;margin:0 0 6px">💾 Backup used for this reset: <strong>${escapeHtml(b.filename || '')}</strong>${b.size ? ` (${formatFileSize(b.size)})` : ''}</p>` : ''}
+                <p style="font-size:12px;margin:0 0 10px">To undo, use ♻️ Restore Backup and pick that file.</p>
                 <p style="font-size:12px;margin:0"><strong>Next steps:</strong> enter the new company information (Settings → Business Settings), then import the new Excel workbook in “Update Data from Excel”.</p>
             </div>
-            <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal(); renderSettings()">Done</button></div>`);
+            <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal(); setTimeout(() => window.location.reload(), 150)">Done — Reload Fresh App</button></div>`);
     } else {
-        if (btn) { btn.disabled = false; btn.textContent = '🧹 Permanently Reset Business Data'; }
-        showToast((result && result.error) || 'The reset did not run.', 'error');
-        if (result && /backup/i.test(result.error || '')) {
-            showToast('Backup could not be created. No data has been deleted.', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '🧹 Continue Fresh Start'; }
+        showErr((result && result.error) || 'The reset did not run.');
+    }
+}
+
+/**
+ * ♻️ Restore Backup — restore from a backup FILE (any location).
+ * Desktop: native Open dialog. Web: downloads list from Backup History or a
+ * server-side path. A safety backup of the current state is created first.
+ */
+async function restoreBackupFromFile() {
+    const isElectron = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent);
+    if (isElectron) {
+        const confirmed = await confirmAction(
+            '♻️ Restore Backup?',
+            'A backup file (.dab / .db) replaces ALL current application data.\n\nA safety backup of the current state is created automatically first.\n\nThe app reloads after the restore.',
+            'Choose Backup File…',
+            'Cancel'
+        );
+        if (!confirmed) return;
+        showToast('⏳ Restoring backup… This may take a moment.', 'info');
+        const result = await window.api.restoreBackupFromFile();
+        if (result && result.success) {
+            showToast('✅ Backup restored. Reloading app…', 'success');
+            setTimeout(() => window.location.reload(), 1500);
+        } else if (result && result.canceled) {
+            // user cancelled the file picker — nothing to do
+        } else {
+            showToast(`Restore failed: ${(result && result.error) || 'unknown error'}`, 'error');
         }
-        if (result && /locked/i.test(result.error || '')) renderSettings();
+        return;
+    }
+    // Web: restore from a filename in the server backups folder
+    showModal(`
+        <div class="modal-header"><h2>♻️ Restore Backup (Web)</h2></div>
+        <div class="modal-body">
+            <p style="font-size:13px;margin:0 0 10px">Restore from a backup file in the server's backups folder (e.g. a Fresh Start snapshot). A safety backup of the current data is created first.</p>
+            <div class="form-group">
+                <label>Backup filename</label>
+                <input type="text" class="form-control" id="fsRestoreFilename" placeholder="DairyAccounts_Backup_2026-09-27_10-45-30.dab" autocomplete="off">
+            </div>
+            <p id="fsRestoreError" style="font-size:12px;color:#b91c1c;margin:0;display:none"></p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="fsRestoreBtn" onclick="doWebRestoreFromFile()">♻️ Restore</button>
+        </div>`);
+}
+
+async function doWebRestoreFromFile() {
+    const name = (document.getElementById('fsRestoreFilename') || {}).value || '';
+    const errEl = document.getElementById('fsRestoreError');
+    if (!name.trim()) {
+        if (errEl) { errEl.textContent = 'Enter the backup filename (see Backup History).'; errEl.style.display = ''; }
+        return;
+    }
+    const btn = document.getElementById('fsRestoreBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Restoring…'; }
+    const result = await window.api.restoreBackupFromFile(name.trim());
+    if (result && result.success) {
+        showToast('✅ Backup restored. Reloading app…', 'success');
+        setTimeout(() => window.location.reload(), 1500);
+    } else {
+        if (btn) { btn.disabled = false; btn.textContent = '♻️ Restore'; }
+        if (errEl) { errEl.textContent = (result && result.error) || 'Restore failed.'; errEl.style.display = ''; }
     }
 }
 
@@ -1589,10 +1666,12 @@ window.loadBackupHistory = loadBackupHistory;
 window.downloadBackup = downloadBackup;
 window.deleteBackupFile = deleteBackupFile;
 window.restoreBackupFile = restoreBackupFile;
+window.restoreBackupFromFile = restoreBackupFromFile;
+window.doWebRestoreFromFile = doWebRestoreFromFile;
 window.loadTableInfo = loadTableInfo;
-window.loadCleanupCounts = loadCleanupCounts;
-window.performDataCleanup = performDataCleanup;
-window.confirmDataCleanup = confirmDataCleanup;
+window.startFreshStartFlow = startFreshStartFlow;
+window.createFreshStartBackup = createFreshStartBackup;
+window.confirmFreshStartReset = confirmFreshStartReset;
 window.submitSecurityCode = submitSecurityCode;
 window.toggleTableGroup = toggleTableGroup;
 window.renderDBTables = renderDBTables;
