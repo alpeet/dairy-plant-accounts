@@ -12,6 +12,19 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const accounting = require('./accounting');
+
+const CLASS_META = {
+    cash_to_bank_transfer: {
+        reason: 'cash_to_bank_transfer',
+        note: 'cash-to-bank transfer (internal): Bank DR / Cash CR — not income, not a customer payment'
+    },
+    expense: {
+        reason: 'expense_row',
+        note: 'office/operating expense paid from the bank: Expense DR / Bank CR — no party ledger posting'
+    }
+};
+
 function ensureBankTable(db) {
     db.exec(`
         CREATE TABLE IF NOT EXISTS bank_transactions (
@@ -45,6 +58,45 @@ function ensureBankTable(db) {
     try { db.exec("ALTER TABLE bank_transactions ADD COLUMN payment_mode TEXT DEFAULT 'QR/Bank'"); } catch (e) { /* ok */ }
     try { db.exec("ALTER TABLE bank_transactions ADD COLUMN match_status TEXT DEFAULT 'none'"); } catch (e) { /* ok */ }
     try { db.exec("ALTER TABLE bank_transactions ADD COLUMN ledger_posted INTEGER DEFAULT 0"); } catch (e) { /* ok */ }
+    // Accounting classification of the row (cash→bank transfer / expense /
+    // customer receipt / supplier payment). A deposit of cash sales must never
+    // be treated as a sale, income, receivable or customer payment again.
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN accounting_class TEXT DEFAULT ''"); } catch (e) { /* ok */ }
+}
+
+/**
+ * The accounting classification of a bank row, preferring the stored value and
+ * deriving it from the row's wording/reference for older rows.
+ * @returns {'cash_to_bank_transfer'|'expense'|'customer_receipt'|'supplier_payment'|'unclassified'}
+ */
+function bankRowClass(row) {
+    if (!row) return 'unclassified';
+    return row.accounting_class || accounting.classifyBankRow(row);
+}
+
+/**
+ * Rows that move money between the plant's own pockets (cash deposits, own
+ * account transfers) or are expenses paid from the bank. These carry no party
+ * relationship, so they are never posted to a party ledger and never queued
+ * for party matching.
+ * @private
+ */
+function isNonPartyRow(row) {
+    const cls = bankRowClass(row);
+    return cls === 'cash_to_bank_transfer' || cls === 'expense';
+}
+
+/** @private */
+function _markNonParty(db, id, cls) {
+    const meta = CLASS_META[cls] || { reason: cls, note: cls };
+    db.prepare(
+        `UPDATE bank_transactions
+            SET accounting_class = ?, ledger_posted = 1, ledger_entry_id = NULL, match_status = 'auto',
+                remarks = CASE WHEN COALESCE(remarks,'') = '' THEN ? ELSE remarks || '; ' || ? END,
+                updated_at = datetime('now','localtime')
+          WHERE id = ?`
+    ).run(cls, meta.note, meta.note, id);
+    return { success: true, posted: false, reason: meta.reason, ledger_entry_id: null };
 }
 
 /**
@@ -102,6 +154,12 @@ function postBankToLedger(db, id) {
     ensureBankTable(db);
     const txn = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
     if (!txn) return { success: false, error: 'Bank transaction not found' };
+    // Cash→Bank deposits and expenses paid from the bank are internal money
+    // movements: they must never become a second sale, income, receivable or
+    // customer payment in a party's ledger.
+    if (isNonPartyRow(txn)) {
+        return _markNonParty(db, id, bankRowClass(txn));
+    }
     if (txn.ledger_posted && txn.ledger_entry_id) {
         return { success: true, posted: false, reason: 'already_posted' };
     }
@@ -170,11 +228,22 @@ function listBankTransactions(db, { from_date, to_date, search, match_status, ba
  */
 function getBankReviewQueue(db) {
     ensureBankTable(db);
+    // Internal transfers and bank-paid expenses need no party, so they are not
+    // "needs review" items: resolving them to a party would invent a customer
+    // receipt / supplier payment that does not exist.
     return db.prepare(`
         SELECT b.*, p.name AS party_name
         FROM bank_transactions b
         LEFT JOIN parties p ON p.id = b.party_id
         WHERE b.match_status IN ('review', 'unmatched')
+          AND COALESCE(b.accounting_class, '') NOT IN ('cash_to_bank_transfer', 'expense')
+          AND b.id NOT IN (
+              SELECT id FROM bank_transactions
+               WHERE accounting_class = '' AND (
+                   UPPER(COALESCE(txn_type,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(counterparty_name,'')) LIKE '%DEPOSIT%'
+                OR UPPER(COALESCE(txn_type,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(counterparty_name,'')) LIKE '%OFFICE EXPENSE%'
+               )
+          )
         ORDER BY b.date, b.id
     `).all();
 }
@@ -203,35 +272,42 @@ function saveBankTransaction(db, data, userId = null) {
         party_id, match_status, remarks
     } = data || {};
     const amount = parseFloat(credit || 0) > 0 ? parseFloat(credit || 0) : (parseFloat(debit || 0) || 0);
-    const status = match_status || (party_id ? 'auto' : 'review');
+    const cls = accounting.classifyBankRow({
+        txn_type, description, counterparty_name, reference_no, remarks, debit, credit
+    });
+    const nonParty = cls === 'cash_to_bank_transfer' || cls === 'expense';
+    const status = nonParty ? 'auto' : (match_status || (party_id ? 'auto' : 'review'));
 
     if (id) {
         db.prepare(`
             UPDATE bank_transactions SET
                 date = ?, reference_no = ?, counterparty_name = ?, description = ?,
                 debit = ?, credit = ?, amount = ?, payment_mode = ?, bank_account = ?,
-                txn_type = ?, party_id = ?, match_status = ?, remarks = ?,
+                txn_type = ?, party_id = ?, match_status = ?, accounting_class = ?, remarks = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
         `).run(date, reference_no || '', counterparty_name || '', description || '',
               debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-              txn_type || '', party_id || null, status, remarks || '', id);
+              txn_type || '', party_id || null, status, cls, remarks || '', id);
+        if (nonParty) return { success: true, data: getBankTransaction(db, id), accounting_class: cls };
         return { success: true, data: getBankTransaction(db, id) };
     }
 
     const ins = db.prepare(`
         INSERT INTO bank_transactions
             (date, reference_no, counterparty_name, description, debit, credit, amount,
-             payment_mode, bank_account, txn_type, party_id, match_status, remarks, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class, remarks, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(date, reference_no || '', counterparty_name || '', description || '',
            debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-           txn_type || '', party_id || null, status, remarks || '', userId);
+           txn_type || '', nonParty ? null : (party_id || null), status, cls, remarks || '', userId);
     const newId = Number(ins.lastInsertRowid);
-    if (party_id) {
+    if (nonParty) {
+        _markNonParty(db, newId, cls);
+    } else if (party_id) {
         postBankToLedger(db, newId);
     }
-    return { success: true, data: getBankTransaction(db, newId) };
+    return { success: true, data: getBankTransaction(db, newId), accounting_class: cls };
 }
 
 /**
@@ -300,7 +376,7 @@ function getBankStatement(db, { bank_account, from_date, to_date } = {}) {
  */
 function importBankRows(db, rows) {
     ensureBankTable(db);
-    const report = { read: 0, inserted: 0, skipped_dup: 0, auto_posted: 0, already_in_ledger: 0, review_queue: 0, unmatched: 0, errors: [] };
+    const report = { read: 0, inserted: 0, skipped_dup: 0, auto_posted: 0, already_in_ledger: 0, review_queue: 0, unmatched: 0, transfers: 0, expenses: 0, errors: [] };
 
     const existingRefs = new Set(
         db.prepare("SELECT reference_no FROM bank_transactions WHERE reference_no != ''").all().map(r => r.reference_no)
@@ -312,8 +388,8 @@ function importBankRows(db, rows) {
     const insert = db.prepare(`
         INSERT INTO bank_transactions
             (date, reference_no, counterparty_name, description, debit, credit, amount,
-             payment_mode, bank_account, txn_type, party_id, match_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const doImport = db.transaction(() => {
@@ -328,15 +404,27 @@ function importBankRows(db, rows) {
             const credit = isCredit ? (r.credit || 0) : 0;
             const amount = isCredit ? credit : debit;
 
-            const partyId = exactNameMap.get(normalizeName(r.counterparty_name)) || null;
-            const status = partyId ? 'auto' : (r.counterparty_name ? 'review' : 'none');
+            // Classify BEFORE matching: a cash deposit into the bank (or an
+            // expense paid from it) carries no customer/supplier relationship,
+            // so it is never auto-matched to a party by name.
+            const cls = accounting.classifyBankRow(r);
+            const nonParty = cls === 'cash_to_bank_transfer' || cls === 'expense';
+            const partyId = nonParty ? null : (exactNameMap.get(normalizeName(r.counterparty_name)) || null);
+            const status = nonParty ? 'auto' : (partyId ? 'auto' : (r.counterparty_name ? 'review' : 'none'));
 
             const res = insert.run(r.date, ref, r.counterparty_name || '', r.description || '',
                 debit, credit, amount, r.payment_mode || 'QR/Bank', r.bank_account || '',
-                r.txn_type || '', partyId, status);
+                r.txn_type || '', partyId, status, cls);
             const newId = Number(res.lastInsertRowid);
             if (ref) existingRefs.add(ref);
             report.inserted++;
+
+            if (nonParty) {
+                _markNonParty(db, newId, cls);
+                if (cls === 'cash_to_bank_transfer') report.transfers++;
+                else report.expenses++;
+                continue;
+            }
 
             if (partyId) {
                 const posted = postBankToLedger(db, newId);
@@ -366,5 +454,7 @@ module.exports = {
     postBankToLedger,
     importBankRows,
     findPartyByName,
-    normalizeName
+    normalizeName,
+    bankRowClass,
+    isNonPartyRow
 };

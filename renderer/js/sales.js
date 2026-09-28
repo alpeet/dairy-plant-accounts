@@ -63,7 +63,8 @@ async function renderSales() {
                             <th>Party</th>
                             <th>Items</th>
                             <th class="text-right">Total</th>
-                            <th class="text-right">Paid</th>
+                            <th class="text-right">Received</th>
+                            <th class="text-right">Outstanding</th>
                             <th>Status</th>
                             <th>Payment</th>
                             <th class="actions">Actions</th>
@@ -71,7 +72,7 @@ async function renderSales() {
                     </thead>
                     <tbody>
                         ${sales.length === 0
-                            ? '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-light)">No sales found. Create your first sale!</td></tr>'
+                            ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No sales found. Create your first sale!</td></tr>'
                             : sales.map(s => `
                                 <tr>
                                     <td><strong>${escapeHtml(s.invoice_no)}</strong></td>
@@ -79,7 +80,8 @@ async function renderSales() {
                                     <td>${escapeHtml(s.party_name)}</td>
                                     <td class="text-center">${s.item_count || 0}</td>
                                     <td class="text-right">${formatCurrency(s.grand_total)}</td>
-                                    <td class="text-right">${formatCurrency(s.paid_amount)}</td>
+                                    <td class="text-right" title="Money actually received against this invoice (from receipt transactions)">${formatCurrency(s.received_amount != null ? s.received_amount : s.paid_amount)}</td>
+                                    <td class="text-right" style="color:${(s.outstanding_amount || 0) > 0 ? 'var(--danger)' : 'var(--accent)'}">${formatCurrency(s.outstanding_amount != null ? s.outstanding_amount : (s.grand_total - s.paid_amount))}</td>
                                     <td>${statusBadge(s.status)}</td>
                                     <td>${statusBadge(s.payment_mode)}</td>
                                     <td class="actions">
@@ -248,12 +250,12 @@ async function showSaleForm(saleId = null) {
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Status</label>
-                            <select class="form-control" name="status">
-                                <option value="paid" ${sale && sale.status === 'paid' ? 'selected' : ''}>Paid</option>
-                                <option value="unpaid" ${sale && sale.status === 'unpaid' ? 'selected' : ''}>Unpaid</option>
-                                <option value="partial" ${sale && sale.status === 'partial' ? 'selected' : ''}>Partial</option>
-                            </select>
+                            <label>Status (calculated)</label>
+                            <input type="text" class="form-control" value="${sale ? String(sale.status || '').toUpperCase() : 'AUTO'}" readonly style="background:#f5f5f5">
+                            <small style="color:var(--text-light);font-size:11px">
+                                Paid / Partial / Unpaid is worked out from the money actually received against this invoice —
+                                entering a Paid Amount records a receipt, so a Rs 1,000 receipt against a Rs 10,000 invoice stays Partial.
+                            </small>
                         </div>
                         <div class="form-group">
                             <label>Notes</label>

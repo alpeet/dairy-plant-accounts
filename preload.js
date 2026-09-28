@@ -63,6 +63,12 @@ contextBridge.exposeInMainWorld('api', {
     getTodaySummary: () => ipcRenderer.invoke('db:reports:today-summary'),
     getFarmerStatement: (opts) => ipcRenderer.invoke('db:reports:farmer-statement', opts),
 
+    // Accounting core — cash/bank position, sale settlements, reconciliation
+    getCashBankPosition: (opts) => ipcRenderer.invoke('db:accounting:cash-bank', opts),
+    getSaleSettlements: (opts) => ipcRenderer.invoke('db:accounting:sale-settlements', opts),
+    getAccountingReconciliation: (opts) => ipcRenderer.invoke('db:accounting:reconciliation', opts),
+    classifyBankRow: (row) => ipcRenderer.invoke('db:accounting:classify-bank-row', row),
+
     // Statements
     getPartyStatement: (opts) => ipcRenderer.invoke('db:statements:party', opts),
     getPartyAccountSummary: (opts) => ipcRenderer.invoke('db:parties:account-summary', opts),

@@ -106,8 +106,12 @@ const { listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartner
 const {
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
     getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
-    postBankToLedger, importBankRows, findPartyByName, normalizeName
+    postBankToLedger, importBankRows, findPartyByName, normalizeName,
+    bankRowClass, isNonPartyRow
 } = require('./bank');
+
+// ── Accounting core (money precision, account mapping, settlement, reconcile) ──
+const accounting = require('./accounting');
 
 module.exports = {
     // Dashboard
@@ -229,4 +233,23 @@ module.exports = {
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
     getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
     postBankToLedger, importBankRows, findPartyByName, normalizeName,
+    bankRowClass, isNonPartyRow,
+
+    // Accounting Core — ONE source of truth for precision, the debit/credit
+    // account mapping, milk cost recognised once, bank-row classification,
+    // sale settlement from actual receipts, cash/bank position and the
+    // cross-module reconciliation.
+    CURRENCY_TOLERANCE: accounting.CURRENCY_TOLERANCE,
+    round2: accounting.round2,
+    moneyEq: accounting.moneyEq,
+    paymentStatus: accounting.paymentStatus,
+    ACCOUNT: accounting.ACCOUNT,
+    classifyTransaction: accounting.classifyTransaction,
+    classifyBankRow: accounting.classifyBankRow,
+    listClassifiedBankRows: accounting.listClassifiedBankRows,
+    getMilkCostSummary: accounting.getMilkCostSummary,
+    getSaleSettlements: accounting.getSaleSettlements,
+    getCashBankPosition: accounting.getCashBankPosition,
+    getExpenseSummary: accounting.getExpenseSummary,
+    getReconciliation: accounting.getReconciliation,
 };

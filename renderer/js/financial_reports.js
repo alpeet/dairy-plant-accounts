@@ -94,13 +94,14 @@ async function showProfitLoss(preloadedData = null) {
                 <table>
                     <thead><tr><th>Category</th><th class="text-right">Amount</th></tr></thead>
                     <tbody>
-                        <tr><td>🥛 Milk Collection (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(data.expenses.milk_collection.total)}</td></tr>
-                        <tr><td>📦 Purchases</td><td class="text-right">${formatCurrency(data.expenses.purchases.total)}</td></tr>
+                        <tr><td>🥛 Milk Purchase — Milk Collection (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(data.expenses.milk_collection.total)}</td></tr>
+                        <tr><td>📦 Purchases (non-milk)${data.milk_cost_basis && data.milk_cost_basis.linked_milk_in_purchases ? `<br><span style="font-size:11px;color:var(--text-light)">${formatCurrency(data.milk_cost_basis.linked_milk_in_purchases)} of milk already on the bills above is excluded — counted once</span>` : ''}</td><td class="text-right">${formatCurrency(data.expenses.purchases.total)}</td></tr>
                         <tr style="background:var(--bg);font-weight:600"><td>Cost of Goods Sold</td><td class="text-right">${formatCurrency(data.cogs || 0)}</td></tr>
                         <tr><td>👷 Salary</td><td class="text-right">${formatCurrency(data.expenses.salary.total)}</td></tr>
                         <tr><td>📋 Other Expenses</td><td class="text-right">${formatCurrency(data.expenses.other_expenses.total)}</td></tr>
                         <tr><td>💰 Petty Cash</td><td class="text-right">${formatCurrency(data.expenses.petty_cash.total)}</td></tr>
                         <tr><td>🚛 Vehicle Expenses</td><td class="text-right">${formatCurrency(data.expenses.vehicle_expenses.total)}</td></tr>
+                        ${data.expenses.bank_expenses && data.expenses.bank_expenses.total ? `<tr><td>🏦 Office Expenses (paid from bank)</td><td class="text-right">${formatCurrency(data.expenses.bank_expenses.total)}</td></tr>` : ''}
                         <tr style="background:var(--bg);font-weight:600"><td>Operating Expenses</td><td class="text-right">${formatCurrency(data.operating_expenses || 0)}</td></tr>
                         <tr style="background:var(--bg);font-weight:700"><td>Total Expenses</td><td class="text-right">${formatCurrency(data.expenses.total_expenses)}</td></tr>
                     </tbody>
@@ -121,11 +122,90 @@ async function showProfitLoss(preloadedData = null) {
                 Period: ${data.from_date || preset.from} to ${data.to_date || preset.to}
             </span>
         </div>
+        <div id="pl-reconcile-section" style="margin-top:20px"></div>
         <div id="pl-monthly-section" style="margin-top:20px"></div>
         `}
     `;
     enhanceProfitLossDateInputs(container);
+    loadProfitLossReconciliation();
     loadProfitLossMonthly();
+}
+
+// ============================================================
+// Cross-module reconciliation panel
+// ============================================================
+async function loadProfitLossReconciliation() {
+    const section = document.getElementById('pl-reconcile-section');
+    if (!section) return;
+    const preset = _finLastData.profitLoss
+        ? { from: _finLastData.profitLoss.from_date, to: _finLastData.profitLoss.to_date }
+        : getDatePreset('this_month');
+    const result = await window.api.getAccountingReconciliation({ from_date: preset.from, to_date: preset.to });
+    if (!result.success) { section.innerHTML = ''; return; }
+    renderProfitLossReconciliation(result.data);
+}
+
+/**
+ * One panel where Daybook · Cash · Bank · Sales · Receivable · P&L are compared
+ * for the same period. Every figure is produced by the shared accounting core,
+ * so a transaction that shows up in two modules can be seen to be counted once.
+ */
+function renderProfitLossReconciliation(rec) {
+    const section = document.getElementById('pl-reconcile-section');
+    if (!section || !rec) return;
+    _finLastData.reconciliation = rec;
+    const fmt = formatCurrency;
+    const row = (label, value, sub) => `
+        <tr>
+            <td>${label}${sub ? `<br><span style="font-size:11px;color:var(--text-light)">${sub}</span>` : ''}</td>
+            <td class="text-right" style="font-weight:600">${fmt(value)}</td>
+        </tr>`;
+    const checks = (rec.checks || []).map(c => `
+        <tr>
+            <td>${c.ok ? '✅' : '❌'} ${escapeHtml(c.label)}</td>
+            <td class="text-right" style="font-size:12px;color:${c.ok ? 'var(--accent)' : 'var(--danger)'}">
+                ${c.ok ? 'balanced' : `off by ${fmt(c.difference)}`}
+            </td>
+        </tr>`).join('');
+
+    section.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <h3 style="margin:0">🔗 Cross-module Reconciliation</h3>
+            <span style="font-size:12px;color:var(--text-light)">${rec.from_date} → ${rec.to_date}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="card">
+                <div class="card-header"><h3>Money flow</h3></div>
+                <table>
+                    <tbody>
+                        ${row(`Sales (${rec.sales.count} invoices)`, rec.sales.total, 'Sales revenue in the P&L is the same figure')}
+                        ${row('Customer receipts', rec.receivable.customer_receipts, `${rec.receivable.receipt_count} receipt transactions`)}
+                        ${row('Receivable (sales − receipts)', rec.receivable.from_sales_minus_receipts, `party-ledger view ${fmt(rec.receivable.ledger_receivable)} — difference ${fmt(rec.receivable.difference_vs_ledger)} (opening balances / Excel adjustments)`)}
+                        ${row('Cash received', rec.cash.cash_receipts, 'collections in cash, plus cash taken at the counter')}
+                        ${row('Cash deposited to bank', rec.cash.deposited_to_bank, `${rec.transfers.bank_rows + rec.transfers.duplicate_of_cash_deposits} transfer row(s) — never income`)}
+                        ${row('Cash balance', rec.cash.balance, `in ${fmt(rec.cash.total_in)} − out ${fmt(rec.cash.total_out)}`)}
+                        ${row('Bank balance', rec.bank.balance, `in ${fmt(rec.bank.total_in)} − out ${fmt(rec.bank.total_out)}`)}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card">
+                <div class="card-header"><h3>Cost &amp; result</h3></div>
+                <table>
+                    <tbody>
+                        ${row('Milk purchase cost (once)', rec.cost.milk_cost, `collections ${fmt(rec.cost.milk_collections)}; ${fmt(rec.cost.linked_to_purchase)} of milk on purchase bills excluded`)}
+                        ${row('Purchases (non-milk)', rec.cost.non_milk_purchases, `gross purchase register ${fmt(rec.cost.purchases_total)}`)}
+                        ${row('COGS', rec.cost.cogs, 'milk + non-milk purchases')}
+                        ${row('Operating expenses', rec.expenses.total_operating_expenses, `other ${fmt(rec.expenses.other_expenses)} · petty ${fmt(rec.expenses.petty_cash)} · salary ${fmt(rec.expenses.salary)} · vehicle ${fmt(rec.expenses.vehicle_expenses)} · bank-paid ${fmt(rec.expenses.bank_expenses)}`)}
+                        ${row('Net profit / (loss)', rec.profit.net_profit, `income ${fmt(rec.profit.total_income)} − expenses ${fmt(rec.profit.total_expenses)}`)}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card" style="margin-top:12px">
+            <div class="card-header"><h3>Consistency checks</h3></div>
+            <table><tbody>${checks}</tbody></table>
+        </div>
+    `;
 }
 
 /**
@@ -569,7 +649,11 @@ async function showDaybookPage() {
     // latest transaction is older than today (which is common with Excel-synced data).
     const preset = getDatePreset('this_month');
 
-    const result = await window.api.getDayBook({ from_date: preset.from, to_date: preset.to });
+    // Enhanced daybook: also carries the money movements that touch no party
+    // account (cash deposits → Bank DR · Cash CR, office expenses paid from the
+    // bank → Expense DR · Bank CR). Customer receipts / supplier payments from
+    // bank rows are already in the daybook through their documents.
+    const result = await window.api.getEnhancedDaybook({ from_date: preset.from, to_date: preset.to });
     const data = result.success ? result.data : { entries: [], totalDebit: 0, totalCredit: 0, net: 0, count: 0 };
 
     container.innerHTML = `
@@ -596,26 +680,36 @@ async function showDaybookPage() {
             <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">Total Credit</span><span class="value" style="font-size:18px;color:var(--danger)">${formatCurrency(data.totalCredit)}</span></div>
             <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">Net Balance</span><span class="value" style="font-size:18px">${formatCurrency(data.net)}</span></div>
         </div>
+        ${data.milk && data.milk.on_purchase_bills > 0 ? `<div style="background:#e8f5e9;border-left:4px solid #4caf50;padding:10px 14px;border-radius:6px;font-size:12px;margin-bottom:10px">
+            🥛 <strong>${data.milk.on_purchase_bills}</strong> milk collections worth ${formatCurrency(data.milk.on_purchase_bills_total)} are recorded on their purchase bills (shown as informational rows, ₹0 here) — the money is already in the Purchase rows above, so it is never counted twice.
+        </div>` : ''}
         <div class="table-container">
             <table>
-                <thead><tr><th>Date</th><th>Ref No</th><th>Type</th><th>Account</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th></tr></thead>
+                <thead><tr><th>Date</th><th>Ref No</th><th>Type</th><th>Account</th><th>Particulars</th><th>Accounts (DR → CR)</th><th class="text-right">Debit</th><th class="text-right">Credit</th></tr></thead>
                 <tbody>
                     ${(data.entries || []).map(e => {
                         const badgeClass = e.type === 'sale' || e.transaction_type === 'Sale' ? 'badge-primary' : 
                             e.type === 'receipt' || e.transaction_type === 'Receipt' ? 'badge-success' : 'badge-danger';
-                        return `<tr>
+                        // Every row carries the double-entry pair its type maps to,
+                        // so the direction can be read from the accounts rather than
+                        // trusted from a label.
+                        const accounts = e.debit_account && e.credit_account
+                            ? `${e.debit_account} → ${e.credit_account}` : '';
+                        const isTransfer = !!e.is_transfer;
+                        return `<tr${isTransfer ? ' style="background:#f1f8ff"' : ''}>
                             <td>${formatDate(e.date)}</td>
                             <td>${escapeHtml(e.ref_no || '')}</td>
-                            <td><span class="badge ${badgeClass}">${e.transaction_type || e.type}</span></td>
+                            <td><span class="badge ${badgeClass}">${e.transaction_type || e.type}</span>${isTransfer ? ' <span class="badge badge-info">transfer</span>' : ''}</td>
                             <td>${escapeHtml(e.account || '')}</td>
                             <td style="max-width:200px;font-size:12px">${escapeHtml(e.particulars || '')}</td>
+                            <td style="font-size:11px;color:var(--text-light);max-width:190px">${escapeHtml(accounts)}</td>
                             <td class="text-right" style="color:${e.debit > 0 ? 'var(--accent)' : ''}">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td>
                             <td class="text-right" style="color:${e.credit > 0 ? 'var(--danger)' : ''}">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td>
                         </tr>`;
                     }).join('')}
-                    ${(!data.entries || data.entries.length === 0) ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No transactions found</td></tr>' : ''}
+                    ${(!data.entries || data.entries.length === 0) ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No transactions found</td></tr>' : ''}
                 </tbody>
-                <tfoot><tr><td colspan="5"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.totalDebit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalCredit)}</strong></td></tr></tfoot>
+                <tfoot><tr><td colspan="6"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.totalDebit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.totalCredit)}</strong></td></tr></tfoot>
             </table>
         </div>
     `;
@@ -625,7 +719,7 @@ async function showDaybookPage() {
 function applyDaybookPage() {
     const from = document.getElementById('dbFrom')?.value || '';
     const to = document.getElementById('dbTo')?.value || '';
-    window.api.getDayBook({ from_date: from, to_date: to }).then(r => {
+    window.api.getEnhancedDaybook({ from_date: from, to_date: to }).then(r => {
         if (r.success) { _finLastData.daybook = r.data; showDaybookPage(); }
         else showToast(r.error, 'error');
     });
@@ -709,13 +803,18 @@ async function showCashCollectionPage() {
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyCashCollectionPage()">Generate</button></div>
         </div>
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+            <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Expected (Total Sales)</span><span class="value" style="font-size:20px">${formatCurrency(data.expected_amount != null ? data.expected_amount : data.total_sales)}</span><span class="sub">From the sales records</span></div>
+            <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Cash Received</span><span class="value" style="font-size:20px">${formatCurrency(data.cash_received)}</span><span class="sub">Collected against those sales</span></div>
+            <div class="summary-card ${(data.difference || 0) > 0 ? 'card-danger' : 'card-success'}" style="margin:0;padding:12px"><span class="label">Difference</span><span class="value" style="font-size:20px">${formatCurrency(data.difference)}</span><span class="sub">Expected − received</span></div>
+        </div>
+        <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Total In</span><span class="value" style="font-size:20px">${formatCurrency(data.total_cash_in)}</span><span class="sub">Sales + Receipts + Other</span></div>
             <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">Total Out</span><span class="value" style="font-size:20px">${formatCurrency(data.total_cash_out)}</span><span class="sub">Payments made</span></div>
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Net Position</span><span class="value" style="font-size:20px">${formatCurrency(data.net_cash)}</span><span class="sub">${data.net_cash >= 0 ? 'Surplus' : 'Deficit'}</span></div>
         </div>
         <div class="table-container">
             <table>
-                <thead><tr><th>Date</th><th>Party</th><th class="text-right">Sales</th><th class="text-right">Receipts</th><th class="text-right">Total In</th><th class="text-right">Payments</th><th class="text-right">Other</th><th class="text-right">Net</th><th>Mode</th><th class="actions">Source</th></tr></thead>
+                <thead><tr><th>Date</th><th>Party</th><th class="text-right">Expected (Sales)</th><th class="text-right">Cash Received</th><th class="text-right">Difference</th><th class="text-right">Sales (cash mode)</th><th class="text-right">Receipts</th><th class="text-right">Total In</th><th class="text-right">Payments</th><th class="text-right">Other</th><th class="text-right">Net</th><th>Mode</th><th class="actions">Source</th></tr></thead>
                 <tbody>
                     ${data.days.map(d => {
                         const partyLabel = d.party_names && d.party_names.length > 0 
@@ -724,6 +823,9 @@ async function showCashCollectionPage() {
                         return `<tr>
                         <td>${formatDate(d.date)}</td>
                         <td style="font-size:12px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.party_names && d.party_names.length > 0 ? escapeHtml(partyLabel) : '<span style="color:var(--text-light)">' + partyLabel + '</span>'}</td>
+                        <td class="text-right"><strong>${formatCurrency(d.expected_amount || 0)}</strong></td>
+                        <td class="text-right" style="color:var(--accent)">${formatCurrency(d.cash_received || 0)}</td>
+                        <td class="text-right" style="color:${(d.difference || 0) > 0 ? 'var(--danger)' : 'var(--accent)'}">${formatCurrency(d.difference || 0)}</td>
                         <td class="text-right">${formatCurrency(d.cash_sales_total)}</td>
                         <td class="text-right">${formatCurrency(d.cash_receipts_total)}</td>
                         <td class="text-right"><strong>${formatCurrency(d.total_cash_in)}</strong></td>
@@ -734,10 +836,13 @@ async function showCashCollectionPage() {
                         <td class="actions" style="font-size:11px">${d.manual_entry ? '<span style="color:var(--accent);font-weight:600">📝 Manual</span>' : '<span style="color:var(--text-light)">Auto</span>'}</td>
                     </tr>`;
                     }).join('')}
-                    ${data.days.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No data for this period. Click "Record Payment Collection" to add a manual entry.</td></tr>' : ''}
+                    ${data.days.length === 0 ? '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text-light)">No data for this period. Click "Record Payment Collection" to add a manual entry.</td></tr>' : ''}
                 </tbody>
                 <tfoot><tr><td><strong>Total</strong></td>
                     <td></td>
+                    <td class="text-right"><strong>${formatCurrency(data.expected_amount || 0)}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.cash_received || 0)}</strong></td>
+                    <td class="text-right"><strong>${formatCurrency(data.difference || 0)}</strong></td>
                     <td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.cash_sales_total, 0))}</strong></td>
                     <td class="text-right"><strong>${formatCurrency(data.days.reduce((s,d) => s + d.cash_receipts_total, 0))}</strong></td>
                     <td class="text-right"><strong>${formatCurrency(data.total_cash_in)}</strong></td>

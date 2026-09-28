@@ -148,6 +148,22 @@ function getDailyCashCollection(db, { from_date, to_date } = {}) {
     const from = from_date || new Date().toISOString().split('T')[0];
     const to = to_date || from;
 
+    // Total sales for the day — this is the EXPECTED money for the day
+    // (expected vs actually-received), taken from the sales records themselves.
+    // It is deliberately NOT derived from cash transactions, bank deposits,
+    // daybook debits or duplicated payment rows.
+    const totalSales = db.prepare(`
+        SELECT s.date, COUNT(*) as count,
+               COALESCE(SUM(s.grand_total), 0) as total,
+               COALESCE(SUM(s.paid_amount), 0) as paid,
+               COALESCE(SUM(CASE WHEN LOWER(s.payment_mode) = 'cash'
+                                 AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.reference_type = 'sale' AND p.reference_id = s.id)
+                            THEN s.paid_amount ELSE 0 END), 0) as cash_paid
+        FROM sales s
+        WHERE s.date >= ? AND s.date <= ?
+        GROUP BY s.date ORDER BY s.date
+    `).all(from, to);
+
     // Cash sales (payment_mode = 'cash')
     const cashSales = db.prepare(`
         SELECT date, COUNT(*) as count, COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(paid_amount), 0) as paid
@@ -174,23 +190,44 @@ function getDailyCashCollection(db, { from_date, to_date } = {}) {
 
     // Build daily breakdown
     const dateMap = {};
-    
+    const blankDay = (date) => ({
+        date,
+        total_sales: 0, sales_count: 0, sales_paid: 0,
+        cash_sales_count: 0, cash_sales_total: 0,
+        cash_receipts_count: 0, cash_receipts_total: 0,
+        cash_payments_count: 0, cash_payments_total: 0,
+        other_receipts_total: 0, manual_entry: false,
+        // Expected = total sales · Actual = cash received against them
+        cash_received: 0, expected_amount: 0, difference: 0
+    });
+    const day = (d) => dateMap[d] || (dateMap[d] = blankDay(d));
+
+    // Expected amount for the day, straight from the sales register.
+    totalSales.forEach(s => {
+        const d = day(s.date);
+        d.total_sales = s.total;
+        d.sales_count = s.count;
+        d.sales_paid = s.paid;
+        d.expected_amount = s.total;
+        d.cash_sales_from_sales = s.cash_paid;
+    });
+
     cashSales.forEach(s => {
-        if (!dateMap[s.date]) dateMap[s.date] = { date: s.date, cash_sales_count: 0, cash_sales_total: 0, cash_receipts_count: 0, cash_receipts_total: 0, cash_payments_count: 0, cash_payments_total: 0, other_receipts_total: 0, manual_entry: false };
-        dateMap[s.date].cash_sales_count = s.count;
-        dateMap[s.date].cash_sales_total = s.total;
+        const d = day(s.date);
+        d.cash_sales_count = s.count;
+        d.cash_sales_total = s.total;
     });
 
     cashReceipts.forEach(r => {
-        if (!dateMap[r.date]) dateMap[r.date] = { date: r.date, cash_sales_count: 0, cash_sales_total: 0, cash_receipts_count: 0, cash_receipts_total: 0, cash_payments_count: 0, cash_payments_total: 0, other_receipts_total: 0, manual_entry: false };
-        dateMap[r.date].cash_receipts_count = r.count;
-        dateMap[r.date].cash_receipts_total = r.total;
+        const d = day(r.date);
+        d.cash_receipts_count = r.count;
+        d.cash_receipts_total = r.total;
     });
 
     cashPayments.forEach(p => {
-        if (!dateMap[p.date]) dateMap[p.date] = { date: p.date, cash_sales_count: 0, cash_sales_total: 0, cash_receipts_count: 0, cash_receipts_total: 0, cash_payments_count: 0, cash_payments_total: 0, other_receipts_total: 0, manual_entry: false };
-        dateMap[p.date].cash_payments_count = p.count;
-        dateMap[p.date].cash_payments_total = p.total;
+        const d = day(p.date);
+        d.cash_payments_count = p.count;
+        d.cash_payments_total = p.total;
     });
 
     // Also get sales by other modes (bank, upi, credit) for completeness
@@ -202,8 +239,7 @@ function getDailyCashCollection(db, { from_date, to_date } = {}) {
     `).all(from, to);
 
     otherSales.forEach(s => {
-        if (!dateMap[s.date]) dateMap[s.date] = { date: s.date, cash_sales_count: 0, cash_sales_total: 0, cash_receipts_count: 0, cash_receipts_total: 0, cash_payments_count: 0, cash_payments_total: 0, other_receipts_total: 0, manual_entry: false };
-        dateMap[s.date].other_receipts_total += s.total;
+        day(s.date).other_receipts_total += s.total;
     });
 
     // Include manual cash collection entries
@@ -238,27 +274,19 @@ function getDailyCashCollection(db, { from_date, to_date } = {}) {
         `).all(from, to);
 
         manual_entries.forEach(e => {
-            if (!dateMap[e.date]) {
-                dateMap[e.date] = { 
-                    date: e.date, cash_sales_count: 0, cash_sales_total: 0, 
-                    cash_receipts_count: 0, cash_receipts_total: 0, 
-                    cash_payments_count: 0, cash_payments_total: 0, 
-                    other_receipts_total: 0, manual_entry: true,
-                    payment_mode: e.payment_mode || 'cash',
-                    party_names: []
-                };
-            }
+            const d = day(e.date);
+            if (!Array.isArray(d.party_names)) d.party_names = [];
             // Merge manual entries on top of auto-aggregated
-            dateMap[e.date].cash_sales_total += (e.cash_sales || 0);
-            dateMap[e.date].cash_receipts_total += (e.cash_receipts || 0);
-            dateMap[e.date].cash_payments_total += (e.cash_payments || 0);
-            dateMap[e.date].other_receipts_total += (e.other_receipts || 0);
-            dateMap[e.date].manual_entry = true;
-            dateMap[e.date].payment_mode = e.payment_mode || 'cash';
+            d.cash_sales_total += (e.cash_sales || 0);
+            d.cash_receipts_total += (e.cash_receipts || 0);
+            d.cash_payments_total += (e.cash_payments || 0);
+            d.other_receipts_total += (e.other_receipts || 0);
+            d.manual_entry = true;
+            d.payment_mode = e.payment_mode || 'cash';
             // Collect unique party names for display in the main report table
             if (e.party_name && e.party_name.trim()) {
-                if (!dateMap[e.date].party_names.includes(e.party_name)) {
-                    dateMap[e.date].party_names.push(e.party_name);
+                if (!d.party_names.includes(e.party_name)) {
+                    d.party_names.push(e.party_name);
                 }
             }
         });
@@ -267,20 +295,45 @@ function getDailyCashCollection(db, { from_date, to_date } = {}) {
     }
 
     const days = Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date));
-    
-    // Calculate per-day net
+    const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Per-day figures. `expected_amount` is the day's total sales; `cash_received`
+    // is the cash actually collected against those sales (cash receipts plus any
+    // money taken in at the counter on the sale itself); the difference is the
+    // money still to be received.
     days.forEach(d => {
-        d.total_cash_in = d.cash_sales_total + d.cash_receipts_total + d.other_receipts_total;
-        d.total_cash_out = d.cash_payments_total;
-        d.net_cash = d.total_cash_in - d.total_cash_out;
+        d.total_cash_in = r2(d.cash_sales_total + d.cash_receipts_total + d.other_receipts_total);
+        d.total_cash_out = r2(d.cash_payments_total);
+        d.net_cash = r2(d.total_cash_in - d.total_cash_out);
+        const cashAtCounter = r2(d.cash_sales_from_sales || 0);
+        d.cash_received = r2(d.cash_receipts_total + cashAtCounter);
+        d.expected_amount = r2(d.total_sales || 0);
+        d.difference = r2(d.expected_amount - d.cash_received);
+        d.received_total = r2(d.sales_paid || 0);
+        d.outstanding = r2((d.total_sales || 0) - (d.sales_paid || 0));
     });
 
     // Totals
-    const total_cash_in = days.reduce((s, d) => s + d.total_cash_in, 0);
-    const total_cash_out = days.reduce((s, d) => s + d.total_cash_out, 0);
-    const net_cash = total_cash_in - total_cash_out;
+    const total_cash_in = r2(days.reduce((s, d) => s + d.total_cash_in, 0));
+    const total_cash_out = r2(days.reduce((s, d) => s + d.total_cash_out, 0));
+    const net_cash = r2(total_cash_in - total_cash_out);
+    const total_sales = r2(days.reduce((s, d) => s + (d.total_sales || 0), 0));
+    const cash_received = r2(days.reduce((s, d) => s + (d.cash_received || 0), 0));
 
-    return { days, manual_entries, total_cash_in, total_cash_out, net_cash, from_date: from, to_date: to };
+    return {
+        days,
+        manual_entries,
+        total_cash_in,
+        total_cash_out,
+        net_cash,
+        // Expected vs actual — Expected is TOTAL SALES, never a cash-only figure.
+        total_sales,
+        expected_amount: total_sales,
+        cash_received,
+        difference: r2(total_sales - cash_received),
+        from_date: from,
+        to_date: to
+    };
 }
 
 module.exports = { getDailyCashCollection, saveCashCollection, deleteCashCollection };

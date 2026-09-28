@@ -145,6 +145,12 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getEnhancedDaybook: (opts) => apiPost('/reports/enhanced-daybook', opts || {}),
         getTodaySummary: () => apiPost('/reports/today-summary'),
 
+        // Accounting core — cash/bank position, sale settlements, reconciliation
+        getCashBankPosition: (opts) => apiPost('/accounting/cash-bank', opts || {}),
+        getSaleSettlements: (opts) => apiPost('/accounting/sale-settlements', opts || {}),
+        getAccountingReconciliation: (opts) => apiPost('/accounting/reconciliation', opts || {}),
+        classifyBankRow: (row) => apiPost('/accounting/classify-bank-row', row || {}),
+
         // Statements
         getPartyStatement: (opts) => apiPost('/statements/party', opts || {}),
         getPartyAccountSummary: (opts) => apiPost('/parties/account-summary', opts || {}),

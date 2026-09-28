@@ -1050,6 +1050,28 @@ app.post('/api/reports/enhanced-daybook', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Accounting Core — cash/bank position, sale settlements, reconciliation
+// ──────────────────────────────────────────────────────────────
+app.post('/api/accounting/cash-bank', (req, res) => {
+    res.json(safeRun(() => ops.getCashBankPosition(db, req.body || {})));
+});
+
+app.post('/api/accounting/sale-settlements', (req, res) => {
+    res.json(safeRun(() => {
+        const { by_id, totals } = ops.getSaleSettlements(db, req.body || {});
+        return { sales: [...by_id.values()], totals };
+    }));
+});
+
+app.post('/api/accounting/reconciliation', (req, res) => {
+    res.json(safeRun(() => ops.getReconciliation(db, req.body || {})));
+});
+
+app.post('/api/accounting/classify-bank-row', (req, res) => {
+    res.json(safeRun(() => ({ accounting_class: ops.classifyBankRow(req.body || {}) })));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Payments
 // ──────────────────────────────────────────────────────────────
 app.post('/api/payments/save', (req, res) => {

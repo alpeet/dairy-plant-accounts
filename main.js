@@ -727,6 +727,29 @@ authHandle('db:reports:enhanced-daybook', async (event, params = {}) => {
     return safeRun(() => ops.getEnhancedDaybook(db, params));
 });
 
+// --- Accounting Core (single source of truth for the money questions) ---
+// Cash/Bank position, sale settlements from actual receipts, and the
+// cross-module reconciliation (Daybook · Ledger · Cash · Demon · Bank · Sales ·
+// Receivable · Profit & Loss).
+authHandle('db:accounting:cash-bank', async (event, params = {}) => {
+    return safeRun(() => ops.getCashBankPosition(db, params));
+});
+
+authHandle('db:accounting:sale-settlements', async (event, params = {}) => {
+    return safeRun(() => {
+        const { by_id, totals } = ops.getSaleSettlements(db, params);
+        return { sales: [...by_id.values()], totals };
+    });
+});
+
+authHandle('db:accounting:reconciliation', async (event, params = {}) => {
+    return safeRun(() => ops.getReconciliation(db, params));
+});
+
+authHandle('db:accounting:classify-bank-row', async (event, row = {}) => {
+    return safeRun(() => ({ accounting_class: ops.classifyBankRow(row) }));
+});
+
 authHandle('db:reports:sales-register', async (event, params = {}) => {
     return safeRun(() => ops.getSalesRegister(db, params));
 });

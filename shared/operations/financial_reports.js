@@ -5,6 +5,9 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const accounting = require('./accounting');
+const round2 = accounting.round2;
+
 /**
  * Profit & Loss Statement for a given date range (accrual basis).
  *
@@ -13,12 +16,24 @@
  *           Collection receipts are NOT income: they are cash movements
  *           against the same sales invoices — counting both double-counts.
  *
- * Expenses = purchases + milk collections (COGS), plus operating costs
- *           (salary, other expenses, petty cash, vehicle). Cash payments to
- *           suppliers are NOT expenses: they settle purchase liabilities
- *           already counted when the purchase was booked.
+ * Expenses = COGS + operating costs.
  *
- * Gross profit  = sales − COGS (purchases + milk collections)
+ *   COGS  = milk purchase cost (counted ONCE) + non-milk purchases.
+ *           Milk Collection is the operational source of the milk bought from
+ *           suppliers. When the Excel importer also left the milk lines inside
+ *           a Purchase bill, that bill is linked from milk_collections
+ *           (purchase_ref_id) and its milk portion is taken out of "purchases"
+ *           so the same milk is never recognised twice. See
+ *           accounting.getMilkCostSummary().
+ *
+ *   Operating = salary + other expenses + petty cash + vehicle + office
+ *           expenses paid straight from the bank (recognised once — a bank row
+ *           already represented in the Expenses register is not added again).
+ *
+ *           Cash payments to suppliers are NOT expenses: they settle purchase
+ *           liabilities already counted when the purchase was booked.
+ *
+ * Gross profit  = sales − COGS
  * Net profit    = total income − total expenses
  *
  * @param {object} db - better-sqlite3 database instance
@@ -47,46 +62,31 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         WHERE date >= ? AND date <= ? AND type = 'receipt'
     `).get(from, to);
 
-    // Milk collection value (income for farmers, but for the plant this is a cost)
-    // Actually milk collection is raw material cost, not income
-    const totalMilkCost = db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
-        FROM milk_collections WHERE date >= ? AND date <= ?
-    `).get(from, to);
-
     // ── Expense Sources ──
 
-    // Total purchases (non-milk)
-    const totalPurchases = db.prepare(`
-        SELECT COALESCE(SUM(grand_total), 0) as total,
-               COALESCE(SUM(paid_amount), 0) as paid,
-               COUNT(*) as count
-        FROM purchases WHERE date >= ? AND date <= ?
-    `).get(from, to);
+    // Milk purchase cost, recognised ONCE, together with the non-milk purchases
+    // that are left after the milk already represented by a Milk Collection is
+    // taken out of the purchase register.
+    const milkCosts = accounting.getMilkCostSummary(db, { from_date: from, to_date: to });
+    const totalMilkCost = { total: milkCosts.milk_cost, count: milkCosts.milk_collection_count };
+    const totalPurchases = {
+        total: milkCosts.non_milk_purchases,
+        count: milkCosts.purchases_count,
+        gross_total: milkCosts.purchases_total,
+        linked_milk_excluded: milkCosts.linked_to_purchase,
+        unlinked_milk_lines: milkCosts.unlinked_milk_lines
+    };
 
-    // Other expenses
-    const totalOtherExpenses = db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
-        FROM other_expenses WHERE date >= ? AND date <= ?
-    `).get(from, to);
-
-    // Petty cash
-    const totalPettyCash = db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
-        FROM petty_cash WHERE date >= ? AND date <= ?
-    `).get(from, to);
-
-    // Salary
-    const totalSalary = db.prepare(`
-        SELECT COALESCE(SUM(net_salary), 0) as total, COUNT(*) as count
-        FROM salary_records WHERE payment_date >= ? AND payment_date <= ?
-    `).get(from, to);
-
-    // Vehicle expenses
-    const totalVehicle = db.prepare(`
-        SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count
-        FROM vehicle_expenses WHERE date >= ? AND date <= ?
-    `).get(from, to);
+    // Operating expenses — each recognised once. Also picks up office expenses
+    // paid straight from the bank that never reached the Expenses register,
+    // skipping any bank row the register already carries (linked by reference,
+    // or by date + amount when there is no reference).
+    const opEx = accounting.getExpenseSummary(db, { from_date: from, to_date: to });
+    const totalOtherExpenses = { total: opEx.other_expenses, count: 0 };
+    const totalPettyCash = { total: opEx.petty_cash, count: 0 };
+    const totalSalary = { total: opEx.salary, count: 0 };
+    const totalVehicle = { total: opEx.vehicle_expenses, count: 0 };
+    const totalBankExpenses = { total: opEx.bank_expenses, count: opEx.bank_expense_rows.length };
 
     // Cash payments made (to suppliers/farmers) — reference only (cash flow),
     // NOT P&L expense: purchases are already expensed at invoice value.
@@ -97,11 +97,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     `).get(from, to);
 
     // Other income rows (category 'Income' in the Expenses register)
-    const totalOtherIncome = db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
-        FROM other_expenses
-        WHERE date >= ? AND date <= ? AND category = 'Income'
-    `).get(from, to);
+    const totalOtherIncome = { total: opEx.other_income, count: 0 };
 
     // ── Build income breakdown ──
     // Receipts are shown for reference (cash flow) but excluded from income —
@@ -116,22 +112,27 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     // Build expense breakdown (cash payments to suppliers are cash flow,
     // not P&L expense — purchases are already counted at invoice value)
     const expenses = {
+        // Milk purchase cost — Milk Collection is the source transaction, and the
+        // milk portion of any linked purchase bill is excluded from `purchases`
+        // below, so this amount is recognised exactly once.
         milk_collection: { total: totalMilkCost.total, count: totalMilkCost.count },
         purchases: { total: totalPurchases.total, count: totalPurchases.count },
-        other_expenses: { total: totalOtherExpenses.total - totalOtherIncome.total, count: totalOtherExpenses.count - totalOtherIncome.count },
+        other_expenses: { total: totalOtherExpenses.total, count: totalOtherExpenses.count },
         petty_cash: { total: totalPettyCash.total, count: totalPettyCash.count },
         salary: { total: totalSalary.total, count: totalSalary.count },
         vehicle_expenses: { total: totalVehicle.total, count: totalVehicle.count },
+        bank_expenses: { total: totalBankExpenses.total, count: totalBankExpenses.count },
         cash_payments: { total: totalCashPayments.total, count: totalCashPayments.count },
         total_expenses: totalMilkCost.total + totalPurchases.total +
-                       (totalOtherExpenses.total - totalOtherIncome.total) +
-                       totalPettyCash.total + totalSalary.total + totalVehicle.total
+                       totalOtherExpenses.total +
+                       totalPettyCash.total + totalSalary.total + totalVehicle.total +
+                       totalBankExpenses.total
     };
 
-    const cogs = (expenses.milk_collection.total || 0) + (expenses.purchases.total || 0);
-    const operatingExpenses = expenses.total_expenses - cogs;
-    const grossProfit = income.total_sales - cogs;
-    const netProfit = income.total_income - expenses.total_expenses;
+    const cogs = round2((expenses.milk_collection.total || 0) + (expenses.purchases.total || 0));
+    const operatingExpenses = round2(expenses.total_expenses - cogs);
+    const grossProfit = round2(income.total_sales - cogs);
+    const netProfit = round2(income.total_income - expenses.total_expenses);
 
     return {
         from_date: from,
@@ -143,7 +144,17 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         gross_profit: grossProfit,
         net_profit: netProfit,
         sales_count: totalSales.count,
-        milk_collection_count: totalMilkCost.count
+        milk_collection_count: totalMilkCost.count,
+        // Transparency: the gross purchase register and what was excluded from it.
+        milk_cost_basis: {
+            milk_collections: milkCosts.milk_collections,
+            linked_milk_in_purchases: milkCosts.linked_to_purchase,
+            unlinked_milk_lines: milkCosts.unlinked_milk_lines,
+            purchases_gross: milkCosts.purchases_total,
+            milk_cost: milkCosts.milk_cost,
+            non_milk_purchases: milkCosts.non_milk_purchases
+        },
+        bank_expenses: opEx.bank_expense_rows
     };
 }
 
@@ -177,6 +188,21 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
     const sales = groupSum('sales', 'date', 'grand_total').all(from, to);
     const milk = groupSum('milk_collections', 'date', 'amount').all(from, to);
     const purchases = groupSum('purchases', 'date', 'grand_total').all(from, to);
+    // Milk already represented by a Milk Collection: excluded from purchases so
+    // the milk purchase cost is recognised once (same rule as getProfitLoss).
+    const linkedMilk = db.prepare(`
+        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total
+        FROM milk_collections
+        WHERE date >= ? AND date <= ? AND purchase_ref_id IS NOT NULL
+        GROUP BY ym
+    `).all(from, to);
+    // Milk lines still sitting on purchase bills with no linked collection.
+    const unlinkedMilkLines = db.prepare(`
+        SELECT substr(p.date, 1, 7) as ym, pi.product_name, pi.amount
+        FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+        WHERE p.date >= ? AND p.date <= ?
+          AND NOT EXISTS (SELECT 1 FROM milk_collections mc WHERE mc.purchase_ref_id = p.id)
+    `).all(from, to);
     const petty = groupSum('petty_cash', 'date', 'amount').all(from, to);
     const salary = groupSum('salary_records', 'payment_date', 'net_salary').all(from, to);
     const vehicle = groupSum('vehicle_expenses', 'date', 'total_amount').all(from, to);
@@ -194,15 +220,43 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
         FROM other_expenses WHERE date >= ? AND date <= ? AND category != 'Income' GROUP BY ym
     `).all(from, to);
+    // Office expenses paid straight from the bank that never reached the
+    // Expenses register — added once, never on top of a register row.
+    const registeredRefs = new Set(
+        db.prepare(`SELECT reference_no FROM other_expenses WHERE date >= ? AND date <= ? AND COALESCE(reference_no,'') != ''`)
+            .all(from, to).map(r => String(r.reference_no).trim())
+    );
+    const registeredAmounts = new Set(
+        db.prepare(`SELECT date, amount FROM other_expenses WHERE date >= ? AND date <= ?`)
+            .all(from, to).map(r => `${r.date}|${Math.round((Number(r.amount) + Number.EPSILON) * 100) / 100}`)
+    );
+    const bankExpenseRows = accounting.listClassifiedBankRows(db, { from_date: from, to_date: to })
+        .filter(r => r.is_expense)
+        .filter(r => {
+            const amount = Math.round((Number(r.debit) + Number.EPSILON) * 100) / 100;
+            if (!(amount > 0)) return false;
+            const ref = String(r.reference_no || '').trim();
+            if (ref) return !registeredRefs.has(ref);
+            return !registeredAmounts.has(`${r.date}|${amount}`);
+        });
 
     const byMonth = {};   // ym -> component map
     const ensure = (ym) => {
         if (!byMonth[ym]) byMonth[ym] = {
             sales: 0, sales_count: 0, other_income: 0, receipts: 0, receipts_count: 0,
-            milk: 0, purchases: 0, other_expense: 0, petty: 0, salary: 0, vehicle: 0
+            milk: 0, purchases_gross: 0, linked_milk: 0, unlinked_milk_lines: 0, purchases: 0,
+            other_expense: 0, petty: 0, salary: 0, vehicle: 0, bank_expense: 0
         };
         return byMonth[ym];
     };
+    // Milk purchase cost per month = collections + any unlinked raw-milk lines;
+    // purchases per month = gross purchases − linked milk − unlinked milk lines.
+    const settleMonth = (m) => {
+        m.milk = r2(m.milk + m.unlinked_milk_lines);
+        m.purchases = Math.max(0, r2(m.purchases_gross - m.linked_milk - m.unlinked_milk_lines));
+        return m;
+    };
+    const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
     const absorb = (rows, key, countKey) => rows.forEach(r => {
         const m = ensure(r.ym);
         m[key] = r.total;
@@ -212,11 +266,22 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
     absorb(otherIncome, 'other_income');
     absorb(receipts, 'receipts', 'receipts_count');
     absorb(milk, 'milk');
-    absorb(purchases, 'purchases');
+    absorb(purchases, 'purchases_gross');
+    absorb(linkedMilk, 'linked_milk');
     absorb(otherExpense, 'other_expense');
     absorb(petty, 'petty');
     absorb(salary, 'salary');
     absorb(vehicle, 'vehicle');
+    for (const row of unlinkedMilkLines) {
+        if (row.ym && accounting.detectMilkLine(row.product_name)) {
+            ensure(row.ym).unlinked_milk_lines = r2(ensure(row.ym).unlinked_milk_lines + (Number(row.amount) || 0));
+        }
+    }
+    for (const row of bankExpenseRows) {
+        const ym = String(row.date || '').slice(0, 7);
+        if (!ym) continue;
+        ensure(ym).bank_expense = r2(ensure(ym).bank_expense + (Number(row.debit) || 0));
+    }
 
     const BS_MONTHS = ['Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin',
         'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'];
@@ -224,10 +289,11 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
     const round2 = (n) => Math.round(n * 100) / 100;
     const months = Object.keys(byMonth).sort().map(ym => {
         const m = byMonth[ym];
+        settleMonth(m);
         const income = m.sales + m.other_income;
-        const cogs = m.milk + m.purchases;
-        const opex = m.other_expense + m.petty + m.salary + m.vehicle;
-        const totalExpenses = cogs + opex;
+        const cogs = round2(m.milk + m.purchases);
+        const opex = round2(m.other_expense + m.petty + m.salary + m.vehicle + m.bank_expense);
+        const totalExpenses = round2(cogs + opex);
         const ymNum = parseInt(ym.slice(5, 7), 10);
         return {
             ym,
@@ -236,6 +302,9 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
             sales_count: m.sales_count,
             other_income: round2(m.other_income),
             total_income: round2(income),
+            milk_collection: round2(m.milk),
+            purchases: round2(m.purchases),
+            bank_expenses: round2(m.bank_expense),
             cogs: round2(cogs),
             gross_profit: round2(income - cogs),
             operating_expenses: round2(opex),
@@ -316,7 +385,16 @@ function getStockStatement(db, { category, search } = {}) {
 
 /**
  * Daybook — full transaction listing for a date range.
- * Enhanced version that also includes cash deposits.
+ *
+ * Enhanced version that also carries the money movements that touch no party
+ * account:
+ *   · cash deposits / bank-account deposits  → Bank DR · Cash CR  (a transfer,
+ *     never income, a sale or a customer payment)
+ *   · office expenses paid straight from the bank → Office Expense DR · Bank CR
+ *
+ * Customer receipts and supplier payments carried by bank rows are deliberately
+ * left out: they are already in the Daybook through the party documents, and
+ * adding them again would count the same money twice.
  */
 function getEnhancedDaybook(db, { from_date, to_date } = {}) {
     const from = from_date || new Date().toISOString().split('T')[0];
@@ -332,8 +410,12 @@ function getEnhancedDaybook(db, { from_date, to_date } = {}) {
         WHERE cd.date >= ? AND cd.date <= ? ORDER BY cd.date, cd.id
     `).all(from, to);
 
-    // Add cash deposit entries (credit from cash perspective - cash leaves)
+    const depositRefs = new Set();
+    // Add cash deposit entries — a Cash → Bank transfer (Bank DR · Cash CR)
     cashDeposits.forEach(cd => {
+        if (cd.deposit_no) depositRefs.add(String(cd.deposit_no).trim());
+        if (cd.reference_no) depositRefs.add(String(cd.reference_no).trim());
+        const m = accounting.classifyTransaction({ type: 'cash_deposit' });
         baseDaybook.entries.push({
             date: cd.date,
             ref_no: cd.deposit_no,
@@ -344,12 +426,51 @@ function getEnhancedDaybook(db, { from_date, to_date } = {}) {
             credit: cd.amount,
             type: 'cash_deposit',
             id: cd.id,
-            status: 'completed'
+            status: 'completed',
+            kind: m.kind,
+            debit_account: m.debit_account,
+            credit_account: m.credit_account,
+            is_transfer: true
+        });
+    });
+
+    // Bank statement rows that are internal transfers (cash/own-account deposits)
+    // or office expenses paid from the bank. Rows matching a cash_deposits record
+    // are skipped so the same deposit is not listed twice.
+    const bankRows = accounting.listClassifiedBankRows(db, { from_date: from, to_date: to })
+        .filter(r => r.is_transfer || r.is_expense)
+        .filter(r => !(r.reference_no && depositRefs.has(String(r.reference_no).trim())));
+
+    bankRows.forEach(r => {
+        const isTransfer = r.is_transfer;
+        const m = accounting.classifyTransaction({
+            type: 'bank',
+            accounting_class: r.accounting_class,
+            direction: (Number(r.debit) || 0) > 0 ? 'out' : 'in'
+        });
+        const amount = isTransfer ? (Number(r.credit) || 0) || (Number(r.debit) || 0) : (Number(r.debit) || 0);
+        baseDaybook.entries.push({
+            date: r.date,
+            ref_no: r.reference_no || `BNK-${r.id}`,
+            transaction_type: isTransfer ? 'Cash → Bank Transfer' : 'Expense (Bank)',
+            account: r.counterparty_name || r.bank_account || '',
+            particulars: r.description || r.counterparty_name || '',
+            // Transfer: money leaves cash (credit side). Expense: expense is a debit.
+            debit: isTransfer ? 0 : amount,
+            credit: isTransfer ? amount : 0,
+            type: isTransfer ? 'cash_transfer' : 'bank_expense',
+            id: r.id,
+            status: 'completed',
+            kind: m.kind,
+            debit_account: m.debit_account,
+            credit_account: m.credit_account,
+            is_transfer: isTransfer,
+            is_expense: !isTransfer
         });
     });
 
     // Re-sort and recalculate
-    baseDaybook.entries.sort((a, b) => a.date.localeCompare(b.date) || a.type.localeCompare(b.type));
+    baseDaybook.entries.sort((a, b) => a.date.localeCompare(b.date) || String(a.type).localeCompare(String(b.type)));
 
     const totalDebit = baseDaybook.entries.reduce((s, e) => s + e.debit, 0);
     const totalCredit = baseDaybook.entries.reduce((s, e) => s + e.credit, 0);
@@ -360,7 +481,10 @@ function getEnhancedDaybook(db, { from_date, to_date } = {}) {
         totalCredit,
         net: totalDebit - totalCredit,
         count: baseDaybook.entries.length,
-        cashDeposits: cashDeposits.length
+        cashDeposits: cashDeposits.length,
+        bankTransfers: bankRows.filter(r => r.is_transfer).length,
+        bankExpenses: bankRows.filter(r => r.is_expense).length,
+        milk: baseDaybook.milk
     };
 }
 

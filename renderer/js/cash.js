@@ -241,11 +241,16 @@ async function showAddDenomination(existingData) {
     const todayStr = today();
     const d = existingData || { date: todayStr, note_1000: 0, note_500: 0, note_100: 0, note_50: 0, note_20: 0, note_10: 0, note_5: 0, note_other: 0, note_other_value: 0, coin_5: 0, coin_2: 0, coin_1: 0, expected_cash: 0, counted_by: '', remarks: '' };
 
-    // Try to get today's expected cash from cash collection
+    // Expected cash = the day's TOTAL SALES (sales records), never a cash-only
+    // total, a bank deposit or a daybook debit. Today's cash received against
+    // those sales is shown next to it so the difference is the money not yet in.
+    let expectedInfo = null;
     if (!existingData) {
         const cashResult = await window.api.getDailyCashCollection({ from_date: todayStr, to_date: todayStr });
         if (cashResult.success && cashResult.data.days.length > 0) {
-            d.expected_cash = cashResult.data.days[0].total_cash_in;
+            const day = cashResult.data.days[0];
+            d.expected_cash = day.expected_amount != null ? day.expected_amount : (day.total_sales || 0);
+            expectedInfo = day;
         }
     }
 
@@ -290,9 +295,14 @@ async function showAddDenomination(existingData) {
                 <div class="form-group"><label>₹1 Coins</label><input type="number" class="form-control" id="dnCoin1" value="${d.coin_1}" min="0"></div>
             </div>
             <div class="form-section-title">Expected & Remarks</div>
+            ${expectedInfo ? `<div style="background:#e3f2fd;border-left:4px solid #1976d2;padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:10px">
+                <strong>Expected</strong> = total sales for the day (${formatCurrency(expectedInfo.total_sales || 0)}) |
+                <strong>Cash received</strong> ${formatCurrency(expectedInfo.cash_received || 0)} |
+                <strong>Difference</strong> ${formatCurrency(expectedInfo.difference || 0)}
+            </div>` : ''}
             <div class="form-row">
                 <div class="form-group">
-                    <label>Expected Cash (from system)</label>
+                    <label>Expected Cash — Total Sales (from system)</label>
                     <input type="number" class="form-control" id="dnExpected" value="${d.expected_cash}" step="0.01">
                 </div>
                 <div class="form-group">
