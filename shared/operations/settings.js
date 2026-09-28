@@ -17,8 +17,11 @@ function getSettings(db) {
 
 /**
  * Save multiple settings at once (upsert by key).
+ * Every changed key is recorded in the audit trail (old → new, secrets redacted
+ * by the audit layer).
  */
-function saveSettings(db, settings) {
+function saveSettings(db, settings, userId = null) {
+    const before = getSettings(db);
     const stmt = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
     const trx = db.transaction(() => {
         for (const [key, value] of Object.entries(settings)) {
@@ -26,7 +29,20 @@ function saveSettings(db, settings) {
         }
     });
     trx();
+    const after = getSettings(db);
+    // Audit only the keys that actually changed, and never record secret values
+    const changed = {};
+    for (const [key, value] of Object.entries(settings)) {
+        if (String(before[key] ?? '') !== String(value ?? '')) changed[key] = value;
+    }
+    if (Object.keys(changed).length > 0) {
+        logAudit(db, 'settings', null, 'update',
+            Object.fromEntries(Object.keys(changed).map(k => [k, before[k] ?? null])),
+            changed, userId);
+    }
     return { success: true };
 }
+
+const { logAudit } = require('./audit');
 
 module.exports = { getSettings, saveSettings };

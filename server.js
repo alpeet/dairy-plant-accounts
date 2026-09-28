@@ -31,6 +31,7 @@ const { initDatabase, safeRun } = require('./shared/db');
 
 // ── Shared modules ──
 const ops = require('./shared/operations');
+const { logAudit } = require('./shared/operations/audit');
 
 // ── Shared BS-aware Excel import engine ──
 const excelImport = require('./shared/excel-import');
@@ -58,7 +59,12 @@ const HOST = process.env.HOST || '0.0.0.0';
 // Authentication Configuration
 // ──────────────────────────────────────────────────────────────
 const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'admin123';
+// SECURITY: there is NO built-in default password. When AUTH_PASSWORD is not
+// configured the server simply has no env-credential; the first account is
+// created through the normal registration flow (open only while the database
+// has no non-admin users). Legacy installs that still carry an 'admin123'
+// hash are detected by shared/auth.js and forced to change it at login.
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || null;
 
 // In-memory token store (for single-user / small deployment)
 // Tokens expire based on the session type
@@ -183,11 +189,23 @@ try {
  * (Desktop app does NOT use this — it has a first-run setup screen.)
  */
 function ensureAdminUser() {
+    // Auto-create the env-configured admin ONLY when AUTH_PASSWORD is actually
+    // set. Without it there is no default credential to install — a fresh
+    // database stays empty and its first account is created at first login.
+    if (!AUTH_PASSWORD) {
+        try {
+            const any = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
+            if (any === 0) {
+                console.log('  → No AUTH_PASSWORD configured; create the first account at first login (open registration while the database is empty).');
+            }
+        } catch (e) { /* users table may not exist yet on a brand-new DB */ }
+        return;
+    }
     const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(AUTH_USERNAME);
     if (!existing) {
         const hashed = auth.hashPassword(AUTH_PASSWORD);
         db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')").run(AUTH_USERNAME, hashed);
-        console.log(`  → Created default user '${AUTH_USERNAME}' in database`);
+        console.log(`  → Created user '${AUTH_USERNAME}' from AUTH_PASSWORD env var`);
     }
 }
 
@@ -263,11 +281,12 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     // 1. Check env var fallback (backward compatibility)
-    //    The env credential is only accepted while the database password has not
-    //    been customized (still the default, or still matching the env password).
-    //    Once the user sets their own password, the env fallback is disabled and
-    //    the stored password becomes authoritative — the default can't be reused.
-    if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
+    //    The env credential is only accepted when AUTH_PASSWORD is actually
+    //    configured AND the database password has not been customized (still the
+    //    default, or still matching the env password). Once the user sets their
+    //    own password, the env fallback is disabled and the stored password
+    //    becomes authoritative — the default can't be reused.
+    if (AUTH_PASSWORD && username === AUTH_USERNAME && password === AUTH_PASSWORD) {
         const envUser = db.prepare("SELECT id, password_hash FROM users WHERE username = ?").get(username);
         const hashMatchesEnv = envUser ? auth.verifyPassword(AUTH_PASSWORD, envUser.password_hash) : false;
         const hashIsDefault = envUser ? auth.isDefaultPassword(envUser.password_hash) : true;
@@ -290,7 +309,7 @@ app.post('/api/auth/login', (req, res) => {
                 }
             }
             const finalHash = db.prepare("SELECT password_hash FROM users WHERE username = ?").get(username);
-            const mustChangePassword = finalHash ? auth.isDefaultPassword(finalHash.password_hash) : (AUTH_PASSWORD === 'admin123');
+            const mustChangePassword = finalHash ? auth.isDefaultPassword(finalHash.password_hash) : false;
             recordLoginAttempt(username, true);
             return res.json({
                 success: true,
@@ -434,7 +453,7 @@ app.post('/api/auth/me', (req, res) => {
     }
     // Fallback for env-var based auth (no userId in token)
     const adminUser = db.prepare("SELECT id, username, role, password_hash FROM users WHERE username = ?").get(AUTH_USERNAME);
-    const mustChangePassword = adminUser ? auth.isDefaultPassword(adminUser.password_hash) : (AUTH_PASSWORD === 'admin123');
+    const mustChangePassword = adminUser ? auth.isDefaultPassword(adminUser.password_hash) : false;
     return res.json({ success: true, data: { id: null, username: tokenData.username || 'admin', role: 'admin', mustChangePassword } });
 });
 
@@ -470,8 +489,8 @@ app.post('/api/auth/users/create', requireRole('admin'), (req, res) => {
     if (username.length < 3) {
         return res.json({ success: false, error: 'Username must be at least 3 characters' });
     }
-    if (password.length < 4) {
-        return res.json({ success: false, error: 'Password must be at least 4 characters' });
+    if (password.length < auth.MIN_PASSWORD_LENGTH) {
+        return res.json({ success: false, error: `Password must be at least ${auth.MIN_PASSWORD_LENGTH} characters` });
     }
 
     const userRole = (role === 'admin' || role === 'operator') ? role : 'operator';
@@ -510,15 +529,25 @@ app.post('/api/auth/users/delete', requireRole('admin'), (req, res) => {
         if (id == (currentUser ? currentUser.id : 1)) {
             return res.json({ success: false, error: 'Cannot delete the primary admin user' });
         }
+        const target = db.prepare("SELECT id, username FROM users WHERE id = ?").get(id);
         db.prepare("DELETE FROM users WHERE id = ?").run(id);
-        return res.json({ success: true, data: { message: 'User deleted' } });
+        // Invalidate every live session belonging to the deleted user — the
+        // token alone must never keep working after the row is gone.
+        let sessionsKilled = 0;
+        for (const [tok, td] of tokenStore.entries()) {
+            if (td.userId && String(td.userId) === String(id)) { tokenStore.delete(tok); sessionsKilled++; }
+        }
+        logAudit(db, 'users', id, 'delete', target || null, { sessions_invalidated: sessionsKilled }, req.user?.id || null);
+        return res.json({ success: true, data: { message: 'User deleted', sessions_invalidated: sessionsKilled } });
     } catch (err) {
         return res.json({ success: false, error: err.message });
     }
 });
 
 // POST /api/auth/users/change-password — Change own password
-app.post('/api/auth/users/change-password', requireRole('operator'), (req, res) => {
+// Change-own-password is self-service: ANY authenticated user may change their
+// own password (requireRole('operator') here wrongly locked out staff/agent).
+app.post('/api/auth/users/change-password', (req, res) => {
     const token = extractToken(req);
     const tokenData = tokenStore.get(token);
     if (!tokenData) {
@@ -529,8 +558,8 @@ app.post('/api/auth/users/change-password', requireRole('operator'), (req, res) 
     if (!currentPassword || !newPassword) {
         return res.json({ success: false, error: 'Current and new password are required' });
     }
-    if (newPassword.length < 4) {
-        return res.json({ success: false, error: 'New password must be at least 4 characters' });
+    if (newPassword.length < auth.MIN_PASSWORD_LENGTH) {
+        return res.json({ success: false, error: `New password must be at least ${auth.MIN_PASSWORD_LENGTH} characters` });
     }
 
     // Change the password of the *currently logged-in* user.
@@ -587,8 +616,8 @@ app.post('/api/auth/register', (req, res) => {
     if (username.length < 3) {
         return res.json({ success: false, error: 'Username must be at least 3 characters' });
     }
-    if (password.length < 4) {
-        return res.json({ success: false, error: 'Password must be at least 4 characters' });
+    if (password.length < auth.MIN_PASSWORD_LENGTH) {
+        return res.json({ success: false, error: `Password must be at least ${auth.MIN_PASSWORD_LENGTH} characters` });
     }
 
     try {
@@ -636,8 +665,8 @@ app.post('/api/auth/reset-password', (req, res) => {
     if (!username || !newPassword) {
         return res.json({ success: false, error: 'Username and new password are required' });
     }
-    if (newPassword.length < 4) {
-        return res.json({ success: false, error: 'New password must be at least 4 characters' });
+    if (newPassword.length < auth.MIN_PASSWORD_LENGTH) {
+        return res.json({ success: false, error: `New password must be at least ${auth.MIN_PASSWORD_LENGTH} characters` });
     }
 
     try {
@@ -698,7 +727,7 @@ function isForcedPasswordChange(tokenData) {
     // env-var admin token (no userId)
     const adminUser = db.prepare("SELECT password_hash FROM users WHERE username = ?").get(AUTH_USERNAME);
     if (adminUser) return auth.isDefaultPassword(adminUser.password_hash);
-    return AUTH_PASSWORD === 'admin123';
+    return false; // no default credential exists any more
 }
 
 function requireAuth(req, res, next) {
@@ -718,17 +747,35 @@ function requireAuth(req, res, next) {
     if (!isValidToken(token)) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
     }
-    // Set req.user with user info from token for audit logging
+    // Set req.user with user info from token for audit logging.
+    // SECURITY: the token's user row is re-read from the database on EVERY
+    // request. A deleted or disabled user is rejected immediately — their
+    // in-memory token alone never grants access, and there is NO fallback that
+    // turns an unknown user into an admin.
     const tokenData = tokenStore.get(token);
     if (tokenData && tokenData.userId) {
-        const user = db.prepare("SELECT id, username, role FROM users WHERE id = ?").get(tokenData.userId);
-        if (user) {
-            req.user = user;
+        const user = db.prepare("SELECT id, username, role, is_active FROM users WHERE id = ?").get(tokenData.userId);
+        if (!user) {
+            // User was deleted after this token was issued — kill the session.
+            tokenStore.delete(token);
+            return res.status(401).json({ success: false, error: 'Session invalid — this user no longer exists. Please log in again.' });
         }
+        if (user.is_active === 0) {
+            tokenStore.delete(token);
+            return res.status(401).json({ success: false, error: 'This account is disabled. Please contact your administrator.' });
+        }
+        // Role is read from the CURRENT database row, never from the old token.
+        req.user = user;
     }
-    // Fallback: no userId in token (env-var auth) — use generic admin
+    // Fallback: env-var admin token (no userId). Resolve the real user row so
+    // the role is still authoritative; without a row there is no identity.
     if (!req.user) {
-        req.user = { id: null, username: tokenData?.username || 'admin', role: 'admin' };
+        const envUser = db.prepare("SELECT id, username, role FROM users WHERE username = ?").get(tokenData?.username || AUTH_USERNAME);
+        if (envUser) {
+            req.user = envUser;
+        } else {
+            req.user = { id: null, username: tokenData?.username || AUTH_USERNAME, role: tokenData?.role || 'admin' };
+        }
     }
 
     // ── Force password change: block the app while the default credential is in use ──
@@ -755,24 +802,33 @@ function requireAuth(req, res, next) {
 function requireRole(minRole) {
     const hierarchy = { agent: 1, staff: 2, operator: 3, accountant: 4, admin: 5 };
     return (req, res, next) => {
-        // First try req.user set by requireAuth middleware
+        // req.user is set by requireAuth and always reflects the CURRENT
+        // database row (deleted users never get this far). The token fallback
+        // below only exists for routes reached without requireAuth.
         let role = req.user?.role;
-        
-        // Fallback: extract role directly from the auth token
+
         if (!role) {
             const token = extractToken(req);
-            if (token) {
-                const tokenData = tokenStore.get(token);
-                if (tokenData) {
+            const tokenData = token ? tokenStore.get(token) : null;
+            if (tokenData) {
+                if (tokenData.userId) {
+                    // Re-read the live role — a demoted user must not ride an old token
+                    const user = db.prepare("SELECT id, username, role, is_active FROM users WHERE id = ?").get(tokenData.userId);
+                    if (!user) {
+                        tokenStore.delete(token);
+                        return res.status(401).json({ success: false, error: 'Session invalid — this user no longer exists. Please log in again.' });
+                    }
+                    req.user = user;
+                    role = user.role;
+                } else {
                     role = tokenData.role;
-                    // Also set req.user so downstream handlers can use it
                     req.user = req.user || {};
                     req.user.role = role;
-                    req.user.username = tokenData.username || 'admin';
+                    req.user.username = tokenData.username || AUTH_USERNAME;
                 }
             }
         }
-        
+
         const userLevel = hierarchy[role] || 0;
         const requiredLevel = hierarchy[minRole];
         if (!requiredLevel || userLevel < requiredLevel) {
@@ -875,7 +931,7 @@ app.post('/api/parties/get', (req, res) => {
     res.json(safeRun(() => ops.getParty(db, req.body.id)));
 });
 
-app.post('/api/parties/save', (req, res) => {
+app.post('/api/parties/save', requireRole('operator'), (req, res) => {
     const validationError = validateParty(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveParty(db, req.body)));
@@ -900,7 +956,7 @@ app.post('/api/products/get', (req, res) => {
     res.json(safeRun(() => ops.getProduct(db, req.body.id)));
 });
 
-app.post('/api/products/save', (req, res) => {
+app.post('/api/products/save', requireRole('operator'), (req, res) => {
     const validationError = validateProduct(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveProduct(db, req.body)));
@@ -938,7 +994,7 @@ app.post('/api/sales/get', (req, res) => {
     res.json(safeRun(() => ops.getSale(db, req.body.id)));
 });
 
-app.post('/api/sales/save', (req, res) => {
+app.post('/api/sales/save', requireRole('operator'), (req, res) => {
     const validationError = validateSale(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveSale(db, req.body)));
@@ -959,7 +1015,7 @@ app.post('/api/purchases/get', (req, res) => {
     res.json(safeRun(() => ops.getPurchase(db, req.body.id)));
 });
 
-app.post('/api/purchases/save', (req, res) => {
+app.post('/api/purchases/save', requireRole('operator'), (req, res) => {
     const validationError = validatePurchase(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.savePurchase(db, req.body)));
@@ -980,7 +1036,7 @@ app.post('/api/milk/get', (req, res) => {
     res.json(safeRun(() => ops.getMilkCollection(db, req.body.id)));
 });
 
-app.post('/api/milk/save', (req, res) => {
+app.post('/api/milk/save', requireRole('operator'), (req, res) => {
     const validationError = validateMilkCollection(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveMilkCollection(db, req.body)));
@@ -1004,7 +1060,7 @@ app.post('/api/farmer/outstanding', (req, res) => {
 app.post('/api/farmer/bulk-pay', requireRole('operator'), (req, res) => {
     const validationError = validateBulkPayment(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
-    res.json(safeRun(() => ops.bulkPayFarmers(db, req.body)));
+    res.json(safeRun(() => ops.bulkPayFarmers(db, req.body, req.user?.id)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1074,7 +1130,7 @@ app.post('/api/accounting/classify-bank-row', (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // Payments
 // ──────────────────────────────────────────────────────────────
-app.post('/api/payments/save', (req, res) => {
+app.post('/api/payments/save', requireRole('operator'), (req, res) => {
     const validationError = validatePayment(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.savePayment(db, req.body)));
@@ -1102,7 +1158,10 @@ app.post('/api/settings/get', requireRole('admin'), (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // Data Cleanup (factory reset) — admin password + security code
 // ──────────────────────────────────────────────────────────────
-const ENV_ADMIN = { password: process.env.AUTH_PASSWORD || 'admin123' };
+// Env-var fallback credential for cleanup endpoints. When AUTH_PASSWORD is not
+// configured there is NO default — the DB admin row (real scrypt hash) is the
+// only way to authorize these operations.
+const ENV_ADMIN = { password: process.env.AUTH_PASSWORD || null };
 
 app.post('/api/cleanup/status', requireRole('admin'), (req, res) => {
     res.json(ops.getFreshStartStatus(db));
@@ -1172,11 +1231,11 @@ app.post('/api/cash/daily-collection', (req, res) => {
 });
 
 app.post('/api/cash/collection-save', requireRole('operator'), (req, res) => {
-    res.json(safeRun(() => ops.saveCashCollection(db, req.body || {})));
+    res.json(safeRun(() => ops.saveCashCollection(db, req.body || {}, req.user?.id)));
 });
 
 app.post('/api/cash/collection-delete', requireRole('operator'), (req, res) => {
-    res.json(safeRun(() => ops.deleteCashCollection(db, req.body.id)));
+    res.json(safeRun(() => ops.deleteCashCollection(db, req.body.id, req.user?.id)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1191,11 +1250,11 @@ app.post('/api/cash-deposits/get', (req, res) => {
 });
 
 app.post('/api/cash-deposits/save', requireRole('operator'), (req, res) => {
-    res.json(safeRun(() => ops.saveCashDeposit(db, req.body)));
+    res.json(safeRun(() => ops.saveCashDeposit(db, req.body, req.user?.id)));
 });
 
 app.post('/api/cash-deposits/delete', requireRole('operator'), (req, res) => {
-    res.json(safeRun(() => ops.deleteCashDeposit(db, req.body.id)));
+    res.json(safeRun(() => ops.deleteCashDeposit(db, req.body.id, req.user?.id)));
 });
 
 app.post('/api/cash-deposits/summary', (req, res) => {
@@ -1217,7 +1276,7 @@ app.post('/api/denominations/get-by-date', (req, res) => {
     res.json(safeRun(() => ops.getDenominationByDate(db, req.body.date)));
 });
 
-app.post('/api/denominations/save', (req, res) => {
+app.post('/api/denominations/save', requireRole('operator'), (req, res) => {
     const validationError = validateDenomination(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveDenomination(db, req.body)));
@@ -1238,7 +1297,7 @@ app.post('/api/petty-cash/get', (req, res) => {
     res.json(safeRun(() => ops.getPettyCash(db, req.body.id)));
 });
 
-app.post('/api/petty-cash/save', (req, res) => {
+app.post('/api/petty-cash/save', requireRole('operator'), (req, res) => {
     const validationError = validatePettyCash(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.savePettyCash(db, req.body)));
@@ -1268,7 +1327,7 @@ app.post('/api/bank/save', requireRole('operator'), (req, res) => {
 });
 
 app.post('/api/bank/delete', requireRole('operator'), (req, res) => {
-    res.json(safeRun(() => ops.deleteBankTransaction(db, req.body.id)));
+    res.json(safeRun(() => ops.deleteBankTransaction(db, req.body.id, req.user?.id)));
 });
 
 app.post('/api/bank/review-queue', (req, res) => {
@@ -1280,7 +1339,7 @@ app.post('/api/bank/statement', (req, res) => {
 });
 
 app.post('/api/bank/match', requireRole('operator'), (req, res) => {
-    res.json(safeRun(() => ops.setBankMatch(db, req.body.id, req.body)));
+    res.json(safeRun(() => ops.setBankMatch(db, req.body.id, req.body, req.user?.id)));
 });
 
 app.post('/api/bank/post', requireRole('operator'), (req, res) => {
@@ -1298,7 +1357,7 @@ app.post('/api/salary/get', (req, res) => {
     res.json(safeRun(() => ops.getSalaryRecord(db, req.body.id)));
 });
 
-app.post('/api/salary/save', (req, res) => {
+app.post('/api/salary/save', requireRole('operator'), (req, res) => {
     const validationError = validateSalary(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveSalaryRecord(db, req.body)));
@@ -1314,10 +1373,10 @@ app.post('/api/salary/summary', (req, res) => {
 app.post('/api/salary/employees', requireAuth, (req, res) => {
     res.json(safeRun(() => ops.listEmployees(db, req.body || {})));
 });
-app.post('/api/salary/employees/save', requireAuth, (req, res) => {
+app.post('/api/salary/employees/save', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.saveEmployee(db, req.body || {})));
 });
-app.post('/api/salary/employees/delete', requireAuth, (req, res) => {
+app.post('/api/salary/employees/delete', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.deleteEmployee(db, Number(req.body && req.body.id))));
 });
 
@@ -1332,7 +1391,7 @@ app.post('/api/vehicle-expenses/get', (req, res) => {
     res.json(safeRun(() => ops.getVehicleExpense(db, req.body.id)));
 });
 
-app.post('/api/vehicle-expenses/save', (req, res) => {
+app.post('/api/vehicle-expenses/save', requireRole('operator'), (req, res) => {
     const validationError = validateVehicleExpense(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveVehicleExpense(db, req.body)));
@@ -1357,7 +1416,7 @@ app.post('/api/other-expenses/get', (req, res) => {
     res.json(safeRun(() => ops.getOtherExpense(db, req.body.id)));
 });
 
-app.post('/api/other-expenses/save', (req, res) => {
+app.post('/api/other-expenses/save', requireRole('operator'), (req, res) => {
     const validationError = validateOtherExpense(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveOtherExpense(db, req.body)));
@@ -1386,7 +1445,7 @@ app.post('/api/routes/get', (req, res) => {
     res.json(safeRun(() => ops.getRoute(db, req.body.id)));
 });
 
-app.post('/api/routes/save', (req, res) => {
+app.post('/api/routes/save', requireRole('operator'), (req, res) => {
     const validationError = validateRoute(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveRoute(db, req.body)));
@@ -1411,7 +1470,7 @@ app.post('/api/rates/get', (req, res) => {
     res.json(safeRun(() => ops.getRateChart(db, req.body.id)));
 });
 
-app.post('/api/rates/save', (req, res) => {
+app.post('/api/rates/save', requireRole('operator'), (req, res) => {
     const validationError = validateRateChart(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveRateChart(db, req.body)));
@@ -1444,7 +1503,7 @@ app.post('/api/production/get', (req, res) => {
     res.json(safeRun(() => ops.getProductionBatch(db, req.body.id)));
 });
 
-app.post('/api/production/save', (req, res) => {
+app.post('/api/production/save', requireRole('operator'), (req, res) => {
     const validationError = validateProductionBatch(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
     res.json(safeRun(() => ops.saveProductionBatch(db, req.body)));
@@ -1530,7 +1589,7 @@ app.post('/api/reports/purchase-register', (req, res) => {
 app.post('/api/settings/save', requireRole('admin'), (req, res) => {
     const validationError = validateSettings(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
-    res.json(safeRun(() => ops.saveSettings(db, req.body)));
+    res.json(safeRun(() => ops.saveSettings(db, req.body, req.user?.id)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1685,7 +1744,7 @@ app.post('/api/backup/restore', requireRole('admin'), (req, res) => {
     }
 });
 
-app.post('/api/db-path', (req, res) => {
+app.post('/api/db-path', requireRole('staff'), (req, res) => {
     res.json({ success: true, data: path.join(dbDir, 'dairy-plant.db') });
 });
 
@@ -1929,7 +1988,7 @@ const server = app.listen(PORT, HOST, () => {
     console.log(`  URL:       ${url}`);
     console.log(`  Login:     ${url}/login`);
     console.log(`  Database:  ${path.join(dbDir, 'dairy-plant.db')}`);
-    console.log(`  Auth:      ${AUTH_USERNAME} / ${AUTH_PASSWORD === 'admin123' ? 'admin123 (DEFAULT — CHANGE IN .env)' : 'configured'}`);
+    console.log(`  Auth:      ${AUTH_USERNAME} / ${AUTH_PASSWORD ? 'configured via AUTH_PASSWORD env var' : 'not set (first account via registration)'}`);
     console.log('  ───────────────────────────────────────');
     console.log('');
 

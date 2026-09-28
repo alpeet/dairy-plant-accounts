@@ -7,6 +7,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * Generate a unique deposit number for a given date.
  */
@@ -43,7 +45,8 @@ function getCashDeposit(db, id) {
 /**
  * Save a cash deposit (create or update).
  */
-function saveCashDeposit(db, data) {
+function saveCashDeposit(db, data, userId = null) {
+    const oldRow = data.id ? db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(data.id) : null;
     const trx = db.transaction(() => {
         const date = data.date || new Date().toISOString().split('T')[0];
 
@@ -94,15 +97,21 @@ function saveCashDeposit(db, data) {
             return { id: result.lastInsertRowid, action: 'created', deposit_no };
         }
     });
-    return trx();
+    const result = trx();
+    logAudit(db, 'cash_deposits', result.id, oldRow ? 'update' : 'create', oldRow || null,
+        db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(result.id), userId);
+    return result;
 }
 
 /**
  * Delete a cash deposit by ID.
  */
-function deleteCashDeposit(db, id) {
+function deleteCashDeposit(db, id, userId = null) {
+    const oldRow = db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(id);
     const result = db.prepare("DELETE FROM cash_deposits WHERE id = ?").run(id);
-    return { deleted: result.changes > 0 };
+    const deleted = result.changes > 0;
+    if (deleted) logAudit(db, 'cash_deposits', id, 'delete', oldRow, null, userId);
+    return { deleted };
 }
 
 /**

@@ -315,7 +315,7 @@ function updateInvoicePreview() {
             <div style="text-align:center;border-bottom:2px solid #111;padding-bottom:10px">
                 <h1 style="margin:0;font-size:20px">${escapeHtml(settings.business_name || 'PRARAMBHA DAIRY SUPPLIERS')}</h1>
                 <div style="font-size:12px">${escapeHtml(settings.business_address || '')}</div>
-                <div style="font-size:12px">Phone: ${escapeHtml(settings.business_phone || '')} &nbsp;|&nbsp; PAN/VAT: ${escapeHtml(settings.business_pan_vat || settings.pan_vat || '152747352')}</div>
+                <div style="font-size:12px">Phone: ${escapeHtml(settings.business_phone || '')} &nbsp;|&nbsp; PAN/VAT: ${escapeHtml(settings.business_pan || settings.business_pan_vat || settings.pan_vat || '')}</div>
             </div>
             <div style="text-align:center;margin:10px 0;font-weight:700;letter-spacing:2px">TAX INVOICE</div>
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px">
@@ -388,7 +388,7 @@ function buildInvoicePrintHtml() {
         <div class="header">
             <h1>${escapeHtml(settings.business_name || 'PRARAMBHA DAIRY SUPPLIERS')}</h1>
             <p>${escapeHtml(settings.business_address || '')}</p>
-            <p>Phone: ${escapeHtml(settings.business_phone || '')} | PAN/VAT: ${escapeHtml(settings.business_pan_vat || settings.pan_vat || '152747352')}</p>
+            <p>Phone: ${escapeHtml(settings.business_phone || '')} | PAN/VAT: ${escapeHtml(settings.business_pan || settings.business_pan_vat || settings.pan_vat || '')}</p>
             <h2 style="margin-top:10px;font-size:16px;letter-spacing:2px">TAX INVOICE</h2>
         </div>
         <div style="display:flex;justify-content:space-between;margin:10px 0">
@@ -606,7 +606,7 @@ function buildInvoiceEmailHtml(settings, opts = {}) {
             <div style="text-align:center;border-bottom:2px solid #111;padding-bottom:10px">
                 <h1 style="margin:0;font-size:20px">${escapeHtml(settings.business_name || 'PRARAMBHA DAIRY SUPPLIERS')}</h1>
                 <div style="font-size:12px">${escapeHtml(settings.business_address || '')}</div>
-                <div style="font-size:12px">Phone: ${escapeHtml(settings.business_phone || '')} | PAN/VAT: ${escapeHtml(settings.business_pan_vat || settings.pan_vat || '152747352')}</div>
+                <div style="font-size:12px">Phone: ${escapeHtml(settings.business_phone || '')} | PAN/VAT: ${escapeHtml(settings.business_pan || settings.business_pan_vat || settings.pan_vat || '')}</div>
             </div>
             <div style="text-align:center;margin:10px 0;font-weight:700;letter-spacing:2px">TAX INVOICE</div>
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px">

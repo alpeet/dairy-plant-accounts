@@ -5,6 +5,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * Get all farmers with outstanding milk collection dues.
  */
@@ -37,7 +39,7 @@ function getFarmerOutstanding(db) {
  * Process bulk payments to farmers.
  * Creates payment records, ledger entries, and updates collection statuses.
  */
-function bulkPayFarmers(db, { payments, date, mode, notes }) {
+function bulkPayFarmers(db, { payments, date, mode, notes }, userId = null) {
     const trx = db.transaction(() => {
         const results = [];
         for (const payment of payments) {
@@ -76,7 +78,16 @@ function bulkPayFarmers(db, { payments, date, mode, notes }) {
         }
         return results;
     });
-    return trx();
+    const paid = trx();
+    // One audit row per payment created (action must satisfy the schema's
+    // CHECK constraint on audit_log.action). The summary context — cycle date,
+    // mode, notes — rides along in new_values so the bulk payout is still
+    // traceable as one operation.
+    for (const r of paid) {
+        logAudit(db, 'payments', r.payment_id, 'create', null,
+            { type: 'farmer_payout', date, mode, notes: notes || '', ...r }, userId);
+    }
+    return paid;
 }
 
 module.exports = { getFarmerOutstanding, bulkPayFarmers };

@@ -7,16 +7,19 @@
  * Security notes:
  *   - Passwords are hashed with Node's built-in scrypt (salted, 64-byte key).
  *   - Passwords are NEVER stored or logged in plain text.
- *   - The default admin/admin123 credential only exists for web deployments
- *     (controlled via AUTH_USERNAME / AUTH_PASSWORD env vars). The desktop app
- *     uses a first-run setup screen instead, so no default credential exists.
+ *   - There is NO built-in default credential. The desktop app uses a first-run
+ *     setup screen; the web app allows registering the first account on a fresh
+ *     (empty) database. DEFAULT_PASSWORD below is ONLY a detector for the legacy
+ *     'admin123' hashes from old installations — it is never accepted as a login
+ *     default and exists solely so those installs are forced to change it.
  */
 
 const crypto = require('crypto');
 
 const DEFAULT_USERNAME = 'admin';
+// Legacy detector ONLY — see header. Not a usable default credential.
 const DEFAULT_PASSWORD = 'admin123';
-const MIN_PASSWORD_LENGTH = 4;
+const MIN_PASSWORD_LENGTH = 8;
 
 // ============================================================
 // Password hashing (scrypt with random salt)

@@ -13,6 +13,7 @@
  */
 
 const accounting = require('./accounting');
+const { logAudit } = require('./audit');
 
 const CLASS_META = {
     cash_to_bank_transfer: {
@@ -278,6 +279,8 @@ function saveBankTransaction(db, data, userId = null) {
     const nonParty = cls === 'cash_to_bank_transfer' || cls === 'expense';
     const status = nonParty ? 'auto' : (match_status || (party_id ? 'auto' : 'review'));
 
+    const oldRow = id ? db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id) : null;
+
     if (id) {
         db.prepare(`
             UPDATE bank_transactions SET
@@ -289,6 +292,8 @@ function saveBankTransaction(db, data, userId = null) {
         `).run(date, reference_no || '', counterparty_name || '', description || '',
               debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
               txn_type || '', party_id || null, status, cls, remarks || '', id);
+        logAudit(db, 'bank_transactions', id, 'update', oldRow || null,
+            getBankTransaction(db, id), userId);
         if (nonParty) return { success: true, data: getBankTransaction(db, id), accounting_class: cls };
         return { success: true, data: getBankTransaction(db, id) };
     }
@@ -307,13 +312,14 @@ function saveBankTransaction(db, data, userId = null) {
     } else if (party_id) {
         postBankToLedger(db, newId);
     }
+    logAudit(db, 'bank_transactions', newId, 'create', null, getBankTransaction(db, newId), userId);
     return { success: true, data: getBankTransaction(db, newId), accounting_class: cls };
 }
 
 /**
  * Delete a bank transaction and, if we created its ledger entry, remove it too.
  */
-function deleteBankTransaction(db, id) {
+function deleteBankTransaction(db, id, userId = null) {
     ensureBankTable(db);
     const txn = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
     if (!txn) return { success: false, error: 'Bank transaction not found' };
@@ -328,14 +334,16 @@ function deleteBankTransaction(db, id) {
         }
     }
     db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(id);
+    logAudit(db, 'bank_transactions', id, 'delete', txn, null, userId);
     return { success: true };
 }
 
 /**
  * Manually resolve a review-queue row: set party + status, then post if requested.
  */
-function setBankMatch(db, id, { party_id, match_status, post } = {}) {
+function setBankMatch(db, id, { party_id, match_status, post } = {}, userId = null) {
     ensureBankTable(db);
+    const oldRow = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
     db.prepare(`
         UPDATE bank_transactions SET party_id = ?, match_status = ?, updated_at = datetime('now', 'localtime')
         WHERE id = ?
@@ -344,6 +352,7 @@ function setBankMatch(db, id, { party_id, match_status, post } = {}) {
     if (post && party_id) {
         result.post = postBankToLedger(db, id);
     }
+    logAudit(db, 'bank_transactions', id, 'update', oldRow || null, result.data, userId);
     return result;
 }
 

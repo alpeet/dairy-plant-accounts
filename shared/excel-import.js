@@ -58,6 +58,43 @@ function pad2(n) {
 }
 
 /**
+ * Convert a BS date string (YYYY-MM-DD) to AD (YYYY-MM-DD).
+ * Inverse of adToBS (same anchor: BS 2082-01-01 = AD 2025-04-14).
+ *
+ * Counts real BS month lengths from the calendar table (2080-2090) and offsets
+ * the anchor AD date by that many days. Outside 2080-2090 the fixed default
+ * month-length array is used — the same limitation adToBS has.
+ *
+ * @param {string} bsDateStr - 'YYYY-MM-DD' in Bikram Sambat
+ * @returns {string|null} 'YYYY-MM-DD' in AD, or null if unparseable
+ */
+function bsToAD(bsDateStr) {
+    if (!bsDateStr || typeof bsDateStr !== 'string') return null;
+    const parts = bsDateStr.split('-').map(p => parseInt(p, 10));
+    if (parts.length !== 3 || parts.some(isNaN)) return null;
+    const [bsYear, bsMonth, bsDay] = parts;
+
+    // Total BS days from 2080-01-01 up to (not including) the target date.
+    // Anchor (2082-01-01) is computed through the same walk, so both sides use
+    // identical month-length data and the difference is exact.
+    const bsDayNumber = (year, month, day) => {
+        let total = 0;
+        for (let y = 2080; y < year; y++) {
+            for (let m = 1; m <= 12; m++) total += getBSDaysInMonth(y, m);
+        }
+        for (let m = 1; m < month; m++) total += getBSDaysInMonth(year, m);
+        return total + day - 1; // day-of-month, 0-based
+    };
+
+    const anchorBS = bsDayNumber(2082, 1, 1);            // = 0 at BS 2082-01-01
+    const targetBS = bsDayNumber(bsYear, bsMonth, bsDay);
+    const anchorAD = new Date(2025, 3, 14);              // April 14, 2025
+    const result = new Date(anchorAD.getTime() + (targetBS - anchorBS) * 86400000);
+    if (isNaN(result.getTime())) return null;
+    return `${result.getFullYear()}-${pad2(result.getMonth() + 1)}-${pad2(result.getDate())}`;
+}
+
+/**
  * Convert an AD date string (YYYY-MM-DD) to BS (YYYY-MM-DD).
  * Reference: BS 2082-01-01 = AD 2025-04-14.
  */
@@ -2031,6 +2068,7 @@ module.exports = {
     ensureRequiredEmployees,
     importSalaryAdvanceSheet,
     adToBS,
+    bsToAD,
     toBSDate,
     TRANSACTIONAL_TABLES
 };

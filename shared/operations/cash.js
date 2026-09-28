@@ -7,6 +7,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * Get daily cash collection report for a given date range.
  * Aggregates: cash sales, cash receipts, cash payments, payment mode breakdown.
@@ -26,7 +28,8 @@
  * When a party_id is provided, also creates payments + ledger entries
  * so the data flows into party statements, daybook, and reports.
  */
-function saveCashCollection(db, { id, date, cash_sales, cash_receipts, cash_payments, other_receipts, payment_mode, party_id, notes, ref_no } = {}) {
+function saveCashCollection(db, { id, date, cash_sales, cash_receipts, cash_payments, other_receipts, payment_mode, party_id, notes, ref_no } = {}, userId = null) {
+    const oldRow = id ? db.prepare('SELECT * FROM cash_collections WHERE id = ?').get(id) : null;
     // Ensure the table exists with all columns
     db.exec(`
         CREATE TABLE IF NOT EXISTS cash_collections (
@@ -117,13 +120,17 @@ function saveCashCollection(db, { id, date, cash_sales, cash_receipts, cash_paym
         return { id: cashId };
     });
 
-    return saveAndCreateLedger();
+    const result = saveAndCreateLedger();
+    logAudit(db, 'cash_collections', result.id, oldRow ? 'update' : 'create', oldRow || null,
+        db.prepare('SELECT * FROM cash_collections WHERE id = ?').get(result.id), userId);
+    return result;
 }
 
 /**
  * Delete a manual cash collection record.
  */
-function deleteCashCollection(db, id) {
+function deleteCashCollection(db, id, userId = null) {
+    const oldRow = db.prepare('SELECT * FROM cash_collections WHERE id = ?').get(id);
     const del = db.transaction(() => {
         // Find related payment IDs to clean up ledger entries
         const paymentIds = db.prepare(
@@ -141,6 +148,7 @@ function deleteCashCollection(db, id) {
         db.prepare("DELETE FROM cash_collections WHERE id = ?").run(id);
     });
     del();
+    if (oldRow) logAudit(db, 'cash_collections', id, 'delete', oldRow, null, userId);
     return { success: true };
 }
 

@@ -6,6 +6,7 @@
  */
 
 const accounting = require('./accounting');
+const { adToBS } = require('../excel-import');
 
 /**
  * Attach the actual-receipts settlement (received / outstanding / status) to
@@ -430,7 +431,16 @@ function getPayables(db) {
  * Get today's summary for dashboard.
  */
 function getTodaySummary(db) {
-    const today = new Date().toISOString().split('T')[0];
+    // All business dates are stored as BS (Bikram Sambat) strings — "today"
+    // must be BS too, exactly like getDashboard. Comparing an AD date against
+    // BS-stored rows never matches and the dashboard cards read Rs 0.
+    // The local calendar date is used (not UTC) because data entry, the BS
+    // picker and audit timestamps all run on local time — in Nepal (UTC+5:45)
+    // a UTC-based "today" disagrees with them for almost 6 hours past midnight.
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const adToday = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const today = adToBS(adToday) || adToday;
 
     const todaySales = db.prepare(
         "SELECT COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(paid_amount), 0) as paid FROM sales WHERE date = ?"

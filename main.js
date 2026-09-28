@@ -690,7 +690,7 @@ authHandle('db:farmer:outstanding', async () => {
 });
 
 authHandle('db:farmer:bulk-pay', async (event, params) => {
-    return safeRun(() => ops.bulkPayFarmers(db, params));
+    return safeRun(() => ops.bulkPayFarmers(db, params, currentUser && currentUser.id));
 });
 
 // --- Payments ---
@@ -785,11 +785,11 @@ authHandle('db:cash:daily-collection', async (event, params = {}) => {
 });
 
 authHandle('db:cash:collection-save', async (event, data = {}) => {
-    return safeRun(() => ops.saveCashCollection(db, data));
+    return safeRun(() => ops.saveCashCollection(db, data, currentUser && currentUser.id));
 });
 
 authHandle('db:cash:collection-delete', async (event, id) => {
-    return safeRun(() => ops.deleteCashCollection(db, id));
+    return safeRun(() => ops.deleteCashCollection(db, id, currentUser && currentUser.id));
 });
 
 // --- Cash Deposits ---
@@ -802,11 +802,11 @@ authHandle('db:cash-deposits:get', async (event, id) => {
 });
 
 authHandle('db:cash-deposits:save', async (event, data) => {
-    return safeRun(() => ops.saveCashDeposit(db, data));
+    return safeRun(() => ops.saveCashDeposit(db, data, currentUser && currentUser.id));
 });
 
 authHandle('db:cash-deposits:delete', async (event, id) => {
-    return safeRun(() => ops.deleteCashDeposit(db, id));
+    return safeRun(() => ops.deleteCashDeposit(db, id, currentUser && currentUser.id));
 });
 
 authHandle('db:cash-deposits:summary', async (event, params = {}) => {
@@ -869,7 +869,7 @@ authHandle('db:bank:save', async (event, data) => {
 });
 
 authHandle('db:bank:delete', async (event, id) => {
-    return safeRun(() => ops.deleteBankTransaction(db, id));
+    return safeRun(() => ops.deleteBankTransaction(db, id, currentUser && currentUser.id));
 });
 
 authHandle('db:bank:review-queue', async () => {
@@ -881,7 +881,7 @@ authHandle('db:bank:statement', async (event, params = {}) => {
 });
 
 authHandle('db:bank:match', async (event, data) => {
-    return safeRun(() => ops.setBankMatch(db, data.id, data));
+    return safeRun(() => ops.setBankMatch(db, data.id, data, currentUser && currentUser.id));
 });
 
 authHandle('db:bank:post', async (event, id) => {
@@ -1072,7 +1072,7 @@ authHandle('db:settings:get', async () => {
 });
 
 authHandle('db:settings:save', async (event, settings) => {
-    return safeRun(() => ops.saveSettings(db, settings));
+    return safeRun(() => ops.saveSettings(db, settings, currentUser && currentUser.id));
 });
 
 // --- Data cleanup (Fresh Start / Handover Reset) — admin password + optional

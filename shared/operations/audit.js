@@ -7,6 +7,24 @@
  * Injects audit entries into every create/update/delete operation.
  */
 
+const { bsToAD } = require('../excel-import');
+
+// Fields that must never be written into the audit trail (secrets).
+const REDACTED_KEYS = /pass|secret|token|hash|code|pin/i;
+
+/**
+ * Strip sensitive keys from a values object before persisting it.
+ * Values are replaced with '[redacted]' so structure stays visible.
+ */
+function sanitizeValues(values) {
+    if (!values || typeof values !== 'object') return values;
+    const out = {};
+    for (const [k, v] of Object.entries(values)) {
+        out[k] = REDACTED_KEYS.test(k) ? '[redacted]' : v;
+    }
+    return out;
+}
+
 /**
  * Record an audit log entry.
  *
@@ -27,8 +45,8 @@ function logAudit(db, tableName, recordId, action, oldValues, newValues, changed
             tableName,
             recordId,
             action,
-            oldValues ? JSON.stringify(oldValues) : '',
-            newValues ? JSON.stringify(newValues) : '',
+            oldValues ? JSON.stringify(sanitizeValues(oldValues)) : '',
+            newValues ? JSON.stringify(sanitizeValues(newValues)) : '',
             changedBy || null
         );
     } catch (err) {
@@ -39,17 +57,41 @@ function logAudit(db, tableName, recordId, action, oldValues, newValues, changed
 
 /**
  * Query audit logs with filters.
+ *
+ * Date filters arrive as BS (Bikram Sambat) 'YYYY-MM-DD' strings from the UI,
+ * but `audit_log.changed_at` stores an AD datetime — so BS filters are converted
+ * to an AD range BEFORE querying (never the other way round; the stored data is
+ * authoritative). to_date is inclusive to the end of that BS day.
+ *
+ * The result also always carries `username` (same value as `changed_by_name`)
+ * because the renderer historically reads `log.username`.
  */
 function getAuditLogs(db, { table_name, from_date, to_date, action } = {}) {
     let query = `SELECT al.*, u.username as changed_by_name 
                  FROM audit_log al LEFT JOIN users u ON al.changed_by = u.id WHERE 1=1`;
     const params = [];
+
+    // BS → AD range conversion for the changed_at filter (changed_at is AD).
+    const fromAD = from_date ? bsToAD(String(from_date).slice(0, 10)) : null;
+    let toAD = null;
+    if (to_date) {
+        const bsDayStart = bsToAD(String(to_date).slice(0, 10));
+        if (bsDayStart) {
+            // Next day, computed in UTC so local timezone offsets (Nepal is
+            // UTC+5:45) cannot shift the boundary back a day.
+            const [y, m, dd] = bsDayStart.split('-').map(Number);
+            const next = new Date(Date.UTC(y, m - 1, dd + 1));
+            toAD = next.toISOString().slice(0, 10);
+        }
+    }
+
     if (table_name) { query += " AND al.table_name = ?"; params.push(table_name); }
     if (action) { query += " AND al.action = ?"; params.push(action); }
-    if (from_date) { query += " AND al.changed_at >= ?"; params.push(from_date); }
-    if (to_date) { query += " AND al.changed_at <= ?"; params.push(to_date); }
+    if (fromAD) { query += " AND al.changed_at >= ?"; params.push(fromAD); }
+    if (toAD) { query += " AND al.changed_at < ?"; params.push(toAD); }
     query += " ORDER BY al.changed_at DESC LIMIT 200";
-    return db.prepare(query).all(...params);
+    const rows = db.prepare(query).all(...params);
+    return rows.map(r => ({ ...r, username: r.changed_by_name || null }));
 }
 
 module.exports = { logAudit, getAuditLogs };
