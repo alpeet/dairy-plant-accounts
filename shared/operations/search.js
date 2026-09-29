@@ -235,6 +235,32 @@ function globalSearch(db, opts = {}) {
         });
     }
 
+    // ── Post-dated cheques (PDC register) ──
+    {
+        const base = `FROM pdc_cheques pc LEFT JOIN parties pp ON pp.id = pc.party_id WHERE (
+            pc.cheque_no LIKE ? ESCAPE '\\' OR pc.pdc_no LIKE ? ESCAPE '\\' OR pc.reference_no LIKE ? ESCAPE '\\'
+            OR pc.bank_name LIKE ? ESCAPE '\\' OR COALESCE(pp.name, '') LIKE ? ESCAPE '\\'
+            OR CAST(pc.amount AS TEXT) LIKE ? ESCAPE '\\')`;
+        const params = [like, like, like, like, like, like];
+        try {
+            const { total, rows } = countAndRows(db, base,
+                `SELECT pc.id, pc.date, pc.txn_date, pc.pdc_no, pc.pdc_type, pc.cheque_no, pc.cheque_date,
+                        pc.bank_name, pc.amount, pc.status, pp.name AS party_name ${base}
+                 ORDER BY pc.txn_date DESC, pc.id DESC LIMIT ${perType}`, params);
+            groups.push({
+                type: 'pdc', label: '🏛 Cheque Register (PDC)', page: 'pdc', total,
+                rows: rows.map(r => ({
+                    id: r.id,
+                    title: `Cheque ${r.cheque_no} — ${r.party_name || ''}`,
+                    subtitle: `${r.pdc_type === 'received' ? 'Received' : 'Issued'} · ${r.cheque_date} · ${r.bank_name || 'no bank'} · ${r.status}`,
+                    amount: r.amount,
+                    date: r.txn_date,
+                    status: r.status
+                }))
+            });
+        } catch (e) { /* older database without the PDC register */ }
+    }
+
     // ── Production batches ──
     {
         const base = `FROM production_batches pb WHERE (pb.batch_no LIKE ? ESCAPE '\\' OR pb.process_type LIKE ? ESCAPE '\\'

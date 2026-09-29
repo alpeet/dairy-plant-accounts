@@ -888,6 +888,55 @@ authHandle('db:bank:post', async (event, id) => {
     return safeRun(() => ops.postBankToLedger(db, id));
 });
 
+// --- Post-Dated Cheques (PDC register) ---
+// The live role is passed into every write, so the pdc.* permissions are
+// enforced in the operations layer for the desktop app too (not just in the UI).
+authHandle('db:pdc:list', async (event, params = {}) => {
+    return safeRun(() => ops.listPdcCheques(db, params));
+});
+
+authHandle('db:pdc:get', async (event, id) => {
+    return safeRun(() => ops.getPdcCheque(db, id));
+});
+
+authHandle('db:pdc:position', async () => {
+    return safeRun(() => ops.getPdcPosition(db));
+});
+
+authHandle('db:pdc:open-documents', async (event, params = {}) => {
+    return safeRun(() => ops.listPdcOpenDocuments(db, params));
+});
+
+authHandle('db:pdc:save', async (event, data) => {
+    return safeRun(() => ops.savePdcCheque(db, data, currentUser && currentUser.id, currentUser && currentUser.role));
+});
+
+authHandle('db:pdc:allocate', async (event, data) => {
+    return safeRun(() => ops.allocatePdc(db, data, currentUser && currentUser.id, currentUser && currentUser.role));
+});
+
+for (const action of ['deposit', 'clear', 'bounce', 'cancel']) {
+    authHandle(`db:pdc:${action}`, async (event, data = {}) => {
+        return safeRun(() => ops.setPdcStatus(db, { ...data, action }, currentUser && currentUser.id, currentUser && currentUser.role));
+    });
+}
+
+authHandle('db:pdc:delete', async (event, id) => {
+    return safeRun(() => ops.deletePdcCheque(db, id, currentUser && currentUser.id, currentUser && currentUser.role));
+});
+
+authHandle('db:pdc:register-report', async (event, params = {}) => {
+    return safeRun(() => ops.getPdcRegisterReport(db, params));
+});
+
+authHandle('db:pdc:due-report', async (event, params = {}) => {
+    return safeRun(() => ops.getPdcDueReport(db, params));
+});
+
+authHandle('db:pdc:bounced-report', async (event, params = {}) => {
+    return safeRun(() => ops.getPdcBouncedReport(db, params));
+});
+
 // --- Salary ---
 authHandle('db:salary:list', async (event, params = {}) => {
     return safeRun(() => ops.listSalaryRecords(db, params));

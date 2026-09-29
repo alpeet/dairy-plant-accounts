@@ -230,6 +230,93 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
         }
     } catch (e) { /* payments table shape difference — skip enrichment */ }
 
+    // ── Post-Dated Cheques (PDC) ──
+    // A held cheque is a promise, not money. It is shown as a ZERO-AMOUNT memo
+    // line so the statement never implies the invoice was paid while the cheque
+    // is still Held, and a cleared cheque's ledger row is relabelled as
+    // "PDC … Cleared" so it is never read as an ordinary cash/bank receipt. The
+    // receivable itself keeps coming from the ledger, so no amount is invented
+    // and no balance is adjusted for a cheque that has not cleared.
+    let pdcSummary = { received_held: 0, received_held_count: 0, issued_held: 0, issued_held_count: 0, cleared: 0, bounced: 0 };
+    try {
+        const pdc = require('./pdc');
+        pdc.ensurePdcTables(db);
+        const pdcRows = db.prepare('SELECT * FROM pdc_cheques WHERE party_id = ? ORDER BY id').all(party_id);
+        if (pdcRows.length) {
+            // ledger payment row id → the cheque whose clearance it represents
+            const chequeByPayment = new Map();
+            for (const link of db.prepare('SELECT pdc_id, payment_id FROM pdc_allocations WHERE payment_id IS NOT NULL').all()) {
+                const c = pdcRows.find(x => Number(x.id) === Number(link.pdc_id));
+                if (c) chequeByPayment.set(Number(link.payment_id), c);
+            }
+            for (const c of pdcRows) if (c.payment_id) chequeByPayment.set(Number(c.payment_id), c);
+
+            const label = c => `PDC ${c.pdc_type === 'received' ? 'Received' : 'Issued'}`;
+
+            for (const c of pdcRows) {
+                const amount = Number(c.amount) || 0;
+                if (c.status === 'CLEARED') pdcSummary.cleared += amount;
+                if (c.status === 'BOUNCED') pdcSummary.bounced += amount;
+                if (c.status === 'HELD' || c.status === 'DEPOSITED') {
+                    if (c.pdc_type === 'received') { pdcSummary.received_held += amount; pdcSummary.received_held_count++; }
+                    else { pdcSummary.issued_held += amount; pdcSummary.issued_held_count++; }
+                }
+            }
+
+            // Relabel the ledger rows the clearance produced.
+            for (const e of entries) {
+                if (e.reference_type !== 'payment_received' && e.reference_type !== 'payment_made') continue;
+                const c = chequeByPayment.get(Number(e.reference_id));
+                if (!c) continue;
+                e.is_pdc = true;
+                e.pdc_status = c.status;
+                e.cheque_no = c.cheque_no;
+                e.pdc_type = c.pdc_type;
+                e.description = `${label(c)} — Cleared`;
+                e.payment_mode = 'cheque';
+                e.payment_notes = `Cheque ${c.cheque_no}${c.bank_name ? ' · ' + c.bank_name : ''}`;
+            }
+
+            // Memo lines: everything that has not (yet) moved money.
+            for (const c of pdcRows) {
+                if (c.status === 'CLEARED') continue;
+                const memoDate = c.status === 'BOUNCED' ? (c.bounce_date || c.txn_date)
+                    : c.status === 'CANCELLED' ? (c.cancel_date || c.txn_date)
+                        : c.txn_date;
+                if (!memoDate || memoDate < from || memoDate > to) continue;
+                const statusText = c.status === 'HELD' ? 'Held (not yet banked)'
+                    : c.status === 'DEPOSITED' ? 'Deposited (presented, not cleared)'
+                        : c.status === 'BOUNCED' ? `Bounced${c.bounce_reason ? ' — ' + c.bounce_reason : ''}`
+                            : 'Cancelled';
+                entries.push({
+                    id: null,
+                    party_id,
+                    date: memoDate,
+                    reference_type: 'pdc',
+                    reference_id: c.id,
+                    reference_no: `CHQ-${c.cheque_no}`,
+                    description: `${label(c)} — Cheque ${c.cheque_no}${c.bank_name ? ' (' + c.bank_name + ')' : ''} — ${statusText}`,
+                    debit: 0,
+                    credit: 0,
+                    balance: 0,
+                    is_memo: true,
+                    is_pdc: true,
+                    pdc_status: c.status,
+                    pdc_type: c.pdc_type,
+                    cheque_no: c.cheque_no,
+                    pdc_no: c.pdc_no,
+                    pdc_amount: Number(c.amount) || 0,
+                    payment_mode: '',
+                    payment_notes: ''
+                });
+            }
+            entries.sort((a, b) => {
+                if (a.date === b.date) return (a.id || 0) - (b.id || 0);
+                return a.date < b.date ? -1 : 1;
+            });
+        }
+    } catch (e) { /* no PDC register on this database — statement is unaffected */ }
+
     // Calculate running balance
     let runningBalance = openingBalance;
     const entriesWithBalance = entries.map(entry => {
@@ -316,7 +403,17 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
         total_debit: totalDebit,
         total_credit: totalCredit,
         closing_balance: closingBalance,
-        totals
+        totals,
+        // Post-dated cheques are shown separately: what is still expected through
+        // a cheque and is therefore NOT part of the closing balance yet.
+        pdc: {
+            received_held: round2(pdcSummary.received_held),
+            received_held_count: pdcSummary.received_held_count,
+            issued_held: round2(pdcSummary.issued_held),
+            issued_held_count: pdcSummary.issued_held_count,
+            cleared: round2(pdcSummary.cleared),
+            bounced: round2(pdcSummary.bounced)
+        }
     };
 }
 

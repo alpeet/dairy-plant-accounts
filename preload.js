@@ -158,6 +158,22 @@ contextBridge.exposeInMainWorld('api', {
     getPartnerStatement: (opts) => ipcRenderer.invoke('db:partners:statement', opts),
     getPartnersWithBalance: () => ipcRenderer.invoke('db:partners:with-balance'),
 
+    // Post-Dated Cheques (PDC register)
+    getPdcList: (opts) => ipcRenderer.invoke('db:pdc:list', opts),
+    getPdcCheque: (id) => ipcRenderer.invoke('db:pdc:get', id),
+    getPdcPosition: () => ipcRenderer.invoke('db:pdc:position'),
+    getPdcOpenDocuments: (opts) => ipcRenderer.invoke('db:pdc:open-documents', opts),
+    savePdcCheque: (data) => ipcRenderer.invoke('db:pdc:save', data),
+    allocatePdc: (data) => ipcRenderer.invoke('db:pdc:allocate', data),
+    depositPdc: (data) => ipcRenderer.invoke('db:pdc:deposit', data),
+    clearPdc: (data) => ipcRenderer.invoke('db:pdc:clear', data),
+    bouncePdc: (data) => ipcRenderer.invoke('db:pdc:bounce', data),
+    cancelPdc: (data) => ipcRenderer.invoke('db:pdc:cancel', data),
+    deletePdcCheque: (id) => ipcRenderer.invoke('db:pdc:delete', id),
+    getPdcRegisterReport: (opts) => ipcRenderer.invoke('db:pdc:register-report', opts),
+    getPdcDueReport: (opts) => ipcRenderer.invoke('db:pdc:due-report', opts),
+    getPdcBouncedReport: (opts) => ipcRenderer.invoke('db:pdc:bounced-report', opts),
+
     // Audit
     getAuditLogs: (opts) => ipcRenderer.invoke('db:audit:logs', opts),
 

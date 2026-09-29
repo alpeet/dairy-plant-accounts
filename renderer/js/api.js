@@ -240,6 +240,22 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getPartnerStatement: (opts) => apiPost('/partners/statement', opts || {}),
         getPartnersWithBalance: () => apiPost('/partners/with-balance'),
 
+        // Post-Dated Cheques (PDC register)
+        getPdcList: (opts) => apiPost('/pdc/list', opts || {}),
+        getPdcCheque: (id) => apiPost('/pdc/get', { id }),
+        getPdcPosition: () => apiPost('/pdc/position'),
+        getPdcOpenDocuments: (opts) => apiPost('/pdc/open-documents', opts || {}),
+        savePdcCheque: (data) => apiPost('/pdc/save', data),
+        allocatePdc: (data) => apiPost('/pdc/allocate', data),
+        depositPdc: (data) => apiPost('/pdc/deposit', data),
+        clearPdc: (data) => apiPost('/pdc/clear', data),
+        bouncePdc: (data) => apiPost('/pdc/bounce', data),
+        cancelPdc: (data) => apiPost('/pdc/cancel', data),
+        deletePdcCheque: (id) => apiPost('/pdc/delete', { id }),
+        getPdcRegisterReport: (opts) => apiPost('/pdc/register-report', opts || {}),
+        getPdcDueReport: (opts) => apiPost('/pdc/due-report', opts || {}),
+        getPdcBouncedReport: (opts) => apiPost('/pdc/bounced-report', opts || {}),
+
         // Audit
         getAuditLogs: (opts) => apiPost('/audit/logs', opts || {}),
 

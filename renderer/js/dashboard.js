@@ -28,6 +28,11 @@ async function renderDashboard() {
     const ps = d.profitSnapshot || { total_income: 0, total_expenses: 0, net_profit: 0 };
     const totalReceivable = d.receivables?.total || 0;
     const totalPayable = d.payables?.total || 0;
+    // Post-dated cheque position — deliberately NOT part of cash/bank above:
+    // a cheque that is still held has moved no money. Shown only when the
+    // register has something to say, so existing dashboards stay uncluttered.
+    const pdc = d.pdc || null;
+    const pdcAlert = pdc && (pdc.pdc_receivable > 0 || pdc.pdc_payable > 0 || (pdc.overdue && pdc.overdue.count > 0));
 
     container.innerHTML = `
         <!-- Global Search -->
@@ -61,6 +66,26 @@ async function renderDashboard() {
                 <span class="sub">Income: ${formatCurrency(ps.total_income)} | Expenses: ${formatCurrency(ps.total_expenses)}</span>
             </div>
         </div>
+
+        ${pdcAlert ? `
+        <!-- Post-Dated Cheques (never mixed into cash/bank) -->
+        <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin:8px 0">
+            <div class="summary-card card-primary" style="margin:0;cursor:pointer" onclick="pdcOpenWithFilter({pdc_type:'received'})" title="Open the cheque register">
+                <span class="label">🏛 PDC Receivable (expected)</span>
+                <span class="value" style="font-size:22px">${formatCurrency(pdc.pdc_receivable)}</span>
+                <span class="sub">${pdc.pdc_receivable_count} cheque(s) held — not yet in the bank</span>
+            </div>
+            <div class="summary-card card-warning" style="margin:0;cursor:pointer" onclick="pdcOpenWithFilter({pdc_type:'issued'})" title="Open the cheque register">
+                <span class="label">🏛 PDC Payable (to pay)</span>
+                <span class="value" style="font-size:22px">${formatCurrency(pdc.pdc_payable)}</span>
+                <span class="sub">${pdc.pdc_payable_count} cheque(s) issued</span>
+            </div>
+            <div class="summary-card ${pdc.overdue && pdc.overdue.count ? 'card-danger' : 'card-info'}" style="margin:0;cursor:pointer" onclick="pdcOpenWithFilter({due:'overdue'})" title="Open the cheque register">
+                <span class="label">🏛 PDC Due / Overdue</span>
+                <span class="value" style="font-size:22px">${formatCurrency((pdc.due_today ? pdc.due_today.amount : 0))}</span>
+                <span class="sub">Due today: ${pdc.due_today ? pdc.due_today.count : 0} | Overdue: ${pdc.overdue ? pdc.overdue.count : 0}</span>
+            </div>
+        </div>` : ''}
 
         <!-- Core Summary Cards -->
         <div class="summary-cards">

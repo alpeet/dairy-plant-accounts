@@ -143,6 +143,11 @@ async function renderUserManual() {
                     ['Record when depositing cash to bank', 'Select correct bank and account', 'Deposit mode matches how you deposited', 'Reference number helps reconciliation'],
                     ['Cash Deposit Summary', 'Bank Reconciliation']
                 )}
+                ${renderModuleCard('pdc', '🏛', 'Cheque Register (PDC)', 'occasional',
+                    "Post-dated cheques received from customers and issued to suppliers. A cheque is a promise, not money: while it is Held or Deposited it changes no bank balance, and only clearing it posts the receipt or payment. The register shows what is expected, what is due today, and what has bounced.",
+                    ['Record the cheque with its BS cheque date so due-date alerts work', 'Allocate it to one or more invoices, or leave it On Account', 'Deposit → Clear when the bank confirms the money; Bounce if it is returned', 'Held cheques are NOT part of the bank balance or the party balance'],
+                    ['Cash / Bank position (only after clearing)', 'Party Statements (PDC lines shown separately)', 'Daybook (memo lines)', 'Receivable / Payable']
+                )}
                 ${renderModuleCard('rate-charts', '📊', 'Milk Rate Chart', 'occasional',
                     'Manage milk pricing formulas. Set FAT and SNF multipliers that determine milk collection rates. Rates can be formula-based or fixed. Changes take effect from the specified date.',
                     ['Update when milk pricing changes', 'Can use formula or fixed rate', 'New rates apply from effective date', 'Previous rates are preserved for history'],

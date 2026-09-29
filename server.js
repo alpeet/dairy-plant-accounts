@@ -48,7 +48,8 @@ const {
     validateBulkPayment, validateSettings,
     validateDenomination, validatePettyCash, validateSalary,
     validateVehicleExpense, validateOtherExpense,
-    validateRoute, validateRateChart, validateProductionBatch, validatePartnerCapital
+    validateRoute, validateRateChart, validateProductionBatch, validatePartnerCapital,
+    validatePdcCheque, validatePdcAction, validatePdcAllocation
 } = require('./shared/validate');
 
 const app = express();
@@ -1344,6 +1345,82 @@ app.post('/api/bank/match', requireRole('operator'), (req, res) => {
 
 app.post('/api/bank/post', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.postBankToLedger(db, req.body.id)));
+});
+
+// ──────────────────────────────────────────────────────────────
+// Post-Dated Cheques (PDC register)
+// ──────────────────────────────────────────────────────────────
+// A PDC is an instrument, not money: nothing is posted while it is Held or
+// Deposited; clearing writes a normal receipt/payment exactly once, and
+// bouncing a cleared cheque reverses that row. The named pdc.* permissions are
+// enforced HERE (route role) and again inside shared/operations/pdc.js with the
+// live role, so neither the UI nor a stale token can widen access.
+app.post('/api/pdc/list', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.listPdcCheques(db, req.body || {})));
+});
+
+app.post('/api/pdc/get', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.getPdcCheque(db, req.body.id)));
+});
+
+app.post('/api/pdc/position', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.getPdcPosition(db)));
+});
+
+app.post('/api/pdc/open-documents', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.listPdcOpenDocuments(db, req.body || {})));
+});
+
+app.post('/api/pdc/save', requireRole('operator'), (req, res) => {
+    const validationError = validatePdcCheque(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.savePdcCheque(db, req.body, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/allocate', requireRole('operator'), (req, res) => {
+    const validationError = validatePdcAllocation(req.body);
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.allocatePdc(db, req.body, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/deposit', requireRole('operator'), (req, res) => {
+    const validationError = validatePdcAction({ ...(req.body || {}), action: 'deposit' });
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.setPdcStatus(db, { ...(req.body || {}), action: 'deposit' }, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/clear', requireRole('accountant'), (req, res) => {
+    const validationError = validatePdcAction({ ...(req.body || {}), action: 'clear' });
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.setPdcStatus(db, { ...(req.body || {}), action: 'clear' }, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/bounce', requireRole('accountant'), (req, res) => {
+    const validationError = validatePdcAction({ ...(req.body || {}), action: 'bounce' });
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.setPdcStatus(db, { ...(req.body || {}), action: 'bounce' }, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/cancel', requireRole('accountant'), (req, res) => {
+    const validationError = validatePdcAction({ ...(req.body || {}), action: 'cancel' });
+    if (validationError) return res.json({ success: false, error: validationError });
+    res.json(safeRun(() => ops.setPdcStatus(db, { ...(req.body || {}), action: 'cancel' }, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/delete', requireRole('admin'), (req, res) => {
+    res.json(safeRun(() => ops.deletePdcCheque(db, req.body.id, req.user?.id, req.user?.role)));
+});
+
+app.post('/api/pdc/register-report', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.getPdcRegisterReport(db, req.body || {})));
+});
+
+app.post('/api/pdc/due-report', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.getPdcDueReport(db, req.body || {})));
+});
+
+app.post('/api/pdc/bounced-report', requireRole('staff'), (req, res) => {
+    res.json(safeRun(() => ops.getPdcBouncedReport(db, req.body || {})));
 });
 
 // ──────────────────────────────────────────────────────────────

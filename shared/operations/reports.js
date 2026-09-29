@@ -296,6 +296,81 @@ function getDaybook(db, { from_date, to_date } = {}) {
         }, { type: 'vehicle' }));
     });
 
+    // ── Post-Dated Cheques (PDC) ──
+    // A post-dated cheque is an instrument, not money. While it is Held or
+    // Deposited it moves no cash and no bank balance, so it enters the Daybook
+    // as a ZERO-AMOUNT memo row: visible to the office, never summed into the
+    // day's debits/credits, and never read as a bank receipt. Once a cheque has
+    // cleared, the money is already the receipt/payment row created by
+    // pdc.setPdcStatus() (mode 'cheque') — that row is relabelled here with its
+    // cheque so it reads "PDC Cleared" and is not mistaken for a second, cash
+    // receipt. A bounced/reversed cheque simply has no money row left.
+    let pdcMemo = [];
+    try {
+        const pdc = require('./pdc');
+        pdc.ensurePdcTables(db);
+        const pdcRows = db.prepare(
+            `SELECT c.*, p.name AS party_name FROM pdc_cheques c
+              LEFT JOIN parties p ON p.id = c.party_id`
+        ).all();
+
+        // payment row id → the cheque whose clearance it represents
+        const chequeByPayment = new Map();
+        for (const link of db.prepare(
+            'SELECT pdc_id, payment_id FROM pdc_allocations WHERE payment_id IS NOT NULL'
+        ).all()) {
+            const c = pdcRows.find(x => Number(x.id) === Number(link.pdc_id));
+            if (c) chequeByPayment.set(Number(link.payment_id), c);
+        }
+        for (const c of pdcRows) if (c.payment_id) chequeByPayment.set(Number(c.payment_id), c);
+
+        const pdcLabel = c => `PDC ${c.pdc_type === 'received' ? 'Received' : 'Issued'} — Cheque ${c.cheque_no}${c.bank_name ? ' (' + c.bank_name + ')' : ''}`;
+
+        for (const e of entries) {
+            if ((e.type !== 'receipt' && e.type !== 'payment') || !chequeByPayment.has(Number(e.id))) continue;
+            const c = chequeByPayment.get(Number(e.id));
+            e.transaction_type = 'PDC Cleared';
+            e.particulars = `${pdcLabel(c)} — Cleared`;
+            e.memo = false;
+            e.pdc = { id: c.id, pdc_no: c.pdc_no, cheque_no: c.cheque_no, status: c.status, pdc_type: c.pdc_type, bank_name: c.bank_name };
+        }
+
+        for (const c of pdcRows) {
+            if (c.status === 'CLEARED') continue;   // its money row is shown above
+            const memoDate = c.status === 'BOUNCED' ? (c.bounce_date || c.txn_date)
+                : c.status === 'CANCELLED' ? (c.cancel_date || c.txn_date)
+                    : c.txn_date;
+            if (!memoDate || memoDate < from || memoDate > to) continue;
+            const charge = Number(c.bounce_charge) || 0;
+            const suffix = c.status === 'HELD' ? 'Held'
+                : c.status === 'DEPOSITED' ? 'Deposited / presented'
+                    : c.status === 'BOUNCED'
+                        ? `Bounced${c.bounce_reason ? ' — ' + c.bounce_reason : ''}${charge ? ' · charge ' + charge.toFixed(2) : ''}`
+                        : 'Cancelled';
+            pdcMemo.push({
+                date: memoDate,
+                ref_no: c.pdc_no || ('CHQ-' + c.cheque_no),
+                transaction_type: c.status === 'BOUNCED' ? 'PDC Bounced' : 'PDC Received',
+                account: c.party_name || '',
+                particulars: `${pdcLabel(c)} — ${suffix}`,
+                debit: 0,
+                credit: 0,
+                type: 'pdc',
+                id: c.id,
+                status: String(c.status || '').toLowerCase(),
+                kind: 'pdc_memo',
+                debit_account: '',
+                credit_account: '',
+                memo: true,
+                amount: accounting.round2(c.amount),
+                pdc: { id: c.id, pdc_no: c.pdc_no, cheque_no: c.cheque_no, status: c.status, pdc_type: c.pdc_type, bank_name: c.bank_name }
+            });
+        }
+        entries.push(...pdcMemo);
+    } catch (e) {
+        // Older database without the PDC register — the Daybook is unaffected.
+    }
+
     // Sort by date, then type
     entries.sort((a, b) => a.date.localeCompare(b.date) || String(a.type).localeCompare(String(b.type)));
 
@@ -329,7 +404,13 @@ function getDaybook(db, { from_date, to_date } = {}) {
             purchase: 'Purchase (non-milk) DR → Supplier / Payable CR',
             milk_collection: 'Milk Purchase (COGS) DR → Farmer / Payable CR',
             cash_deposit: 'Bank DR → Cash CR (transfer — not income)',
-            expense: 'Office / Operating Expense DR → Cash / Bank / Payable CR'
+            expense: 'Office / Operating Expense DR → Cash / Bank / Payable CR',
+            pdc: 'Post-dated cheque (memo only — no money moves until Cleared)'
+        },
+        pdc: {
+            memo_count: pdcMemo.length,
+            memo_amount: accounting.round2(pdcMemo.reduce((s, m) => s + (Number(m.amount) || 0), 0)),
+            cleared_count: entries.filter(e => e.transaction_type === 'PDC Cleared').length
         },
         milk: {
             collections: milkCollections.length,

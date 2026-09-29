@@ -512,6 +512,80 @@ function validatePartnerCapital(data) {
     return null;
 }
 
+/**
+ * Validate a post-dated cheque (PDC) save payload.
+ * The business rules that need the database (duplicate cheque, allocation
+ * totals, transitions) live in shared/operations/pdc.js — this is the cheap
+ * shape check that runs on every API call.
+ */
+function validatePdcCheque(data) {
+    if (!data || typeof data !== 'object') return 'PDC data is required';
+
+    if (!isEnum(String(data.pdc_type || '').toLowerCase(), ['received', 'issued'])) {
+        return 'PDC type must be received or issued';
+    }
+    if (!isValidId(data.party_id)) return 'Valid party is required';
+    if (!isString(data.cheque_no, 40)) return 'Cheque number is required (max 40 characters)';
+    if (!isValidDate(data.cheque_date)) return 'Invalid cheque date (YYYY-MM-DD required)';
+    if (data.txn_date && !isValidDate(data.txn_date)) return 'Invalid received/issued date (YYYY-MM-DD required)';
+    if (!isPositiveNumber(data.amount)) return 'Cheque amount must be greater than 0';
+    if (data.bank_name && String(data.bank_name).length > 100) return 'Bank name is too long (max 100 characters)';
+    if (data.bank_account_no && String(data.bank_account_no).length > 50) return 'Bank account number is too long';
+    if (data.reference_no && String(data.reference_no).length > 100) return 'Reference is too long (max 100 characters)';
+    if (data.remarks && String(data.remarks).length > 500) return 'Remarks is too long (max 500 characters)';
+
+    if (data.allocations !== undefined && data.allocations !== null) {
+        if (!Array.isArray(data.allocations)) return 'Allocations must be a list';
+        for (let i = 0; i < data.allocations.length; i++) {
+            const a = data.allocations[i] || {};
+            if (!isEnum(a.invoice_type, ['sale', 'purchase'])) {
+                return `Allocation #${i + 1}: invoice type must be sale or purchase`;
+            }
+            if (!isValidId(a.invoice_id)) return `Allocation #${i + 1}: a valid invoice/bill is required`;
+            const value = a.amount !== undefined ? a.amount : a.allocated_amount;
+            if (!isPositiveNumber(value)) return `Allocation #${i + 1}: amount must be greater than 0`;
+        }
+    }
+    return null;
+}
+
+/**
+ * Validate a PDC lifecycle action (deposit / clear / bounce / cancel).
+ */
+function validatePdcAction(data) {
+    if (!data || typeof data !== 'object') return 'PDC action data is required';
+    if (!isValidId(data.id)) return 'Valid PDC is required';
+    const action = String(data.action || '').toLowerCase();
+    if (!isEnum(action, ['deposit', 'clear', 'bounce', 'cancel'])) {
+        return 'Action must be deposit, clear, bounce or cancel';
+    }
+    if (data.date && !isValidDate(data.date)) return 'Invalid date (YYYY-MM-DD required)';
+    if (action === 'bounce' && !isString(data.reason, 300)) return 'A bounce reason is required (max 300 characters)';
+    if (action === 'cancel' && !isString(data.reason, 300)) return 'A cancellation reason is required (max 300 characters)';
+    if (data.charge !== undefined && data.charge !== null && data.charge !== '' && !isNonNegativeNumber(data.charge)) {
+        return 'Bounce charge must be a non-negative number';
+    }
+    return null;
+}
+
+/** Validate a PDC allocation replace payload. */
+function validatePdcAllocation(data) {
+    if (!data || typeof data !== 'object') return 'Allocation data is required';
+    if (!isValidId(data.id)) return 'Valid PDC is required';
+    const allocations = data.allocations || [];
+    if (!Array.isArray(allocations)) return 'Allocations must be a list';
+    for (let i = 0; i < allocations.length; i++) {
+        const a = allocations[i] || {};
+        if (!isEnum(a.invoice_type, ['sale', 'purchase'])) {
+            return `Allocation #${i + 1}: invoice type must be sale or purchase`;
+        }
+        if (!isValidId(a.invoice_id)) return `Allocation #${i + 1}: a valid invoice/bill is required`;
+        const value = a.amount !== undefined ? a.amount : a.allocated_amount;
+        if (!isPositiveNumber(value)) return `Allocation #${i + 1}: amount must be greater than 0`;
+    }
+    return null;
+}
+
 module.exports = {
     validateParty,
     validateProduct,
@@ -533,4 +607,7 @@ module.exports = {
     validateRateChart,
     validateProductionBatch,
     validatePartnerCapital,
+    validatePdcCheque,
+    validatePdcAction,
+    validatePdcAllocation,
 };

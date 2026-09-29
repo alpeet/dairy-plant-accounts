@@ -113,6 +113,15 @@ const {
 // ── Accounting core (money precision, account mapping, settlement, reconcile) ──
 const accounting = require('./accounting');
 
+// ── Post-Dated Cheques (PDC register + lifecycle) ──
+const {
+    listPdcCheques, getPdcCheque, listPdcOpenDocuments, getPdcPosition,
+    getPdcRegisterReport, getPdcDueReport, getPdcBouncedReport,
+    savePdcCheque, allocatePdc, setPdcStatus, deletePdcCheque,
+    ensurePdcTables, newPdcDefaults, PDC_STATUSES, PDC_TYPES,
+    PDC_TRANSITIONS, PDC_PERMISSIONS, PDC_ACTIONS
+} = require('./pdc');
+
 module.exports = {
     // Dashboard
     getDashboard,
@@ -252,4 +261,13 @@ module.exports = {
     getCashBankPosition: accounting.getCashBankPosition,
     getExpenseSummary: accounting.getExpenseSummary,
     getReconciliation: accounting.getReconciliation,
+
+    // Post-Dated Cheques — an instrument, not money: nothing is posted while a
+    // cheque is HELD/DEPOSITED; clearing posts one normal receipt/payment, and
+    // bouncing a cleared cheque reverses exactly that row.
+    listPdcCheques, getPdcCheque, listPdcOpenDocuments, getPdcPosition,
+    getPdcRegisterReport, getPdcDueReport, getPdcBouncedReport,
+    savePdcCheque, allocatePdc, setPdcStatus, deletePdcCheque,
+    ensurePdcTables, newPdcDefaults,
+    PDC_STATUSES, PDC_TYPES, PDC_TRANSITIONS, PDC_PERMISSIONS, PDC_ACTIONS
 };

@@ -584,6 +584,74 @@ function runMigrations(db) {
         console.log('Migration 21 (milk/production backfill) skipped:', e21.message);
     }
 
+    // Migration 22: post-dated cheque (PDC) register. A PDC is an instrument,
+    // not money: while HELD/DEPOSITED it posts nothing, so the bank balance and
+    // the receivable/payable stay untouched. Clearing it writes a normal
+    // receipt/payment row (mode 'cheque') exactly once; bouncing a cleared
+    // cheque removes it again. Idempotent — safe on every existing database.
+    // (Same DDL as database/schema.sql, kept here so an existing production DB
+    // picks the tables up without a schema rewrite.)
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS pdc_cheques (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pdc_no TEXT DEFAULT '',
+                pdc_type TEXT NOT NULL CHECK(pdc_type IN ('received', 'issued')),
+                party_id INTEGER NOT NULL,
+                cheque_no TEXT NOT NULL,
+                cheque_date TEXT NOT NULL,
+                txn_date TEXT NOT NULL,
+                bank_name TEXT DEFAULT '',
+                bank_account_no TEXT DEFAULT '',
+                amount REAL NOT NULL DEFAULT 0.0,
+                status TEXT NOT NULL DEFAULT 'HELD' CHECK(status IN ('HELD', 'DEPOSITED', 'CLEARED', 'BOUNCED', 'CANCELLED')),
+                reference_no TEXT DEFAULT '',
+                remarks TEXT DEFAULT '',
+                deposit_date TEXT DEFAULT NULL,
+                deposit_bank TEXT DEFAULT '',
+                deposit_remarks TEXT DEFAULT '',
+                clearance_date TEXT DEFAULT NULL,
+                clearance_bank TEXT DEFAULT '',
+                clearance_ref TEXT DEFAULT '',
+                clearance_remarks TEXT DEFAULT '',
+                bounce_date TEXT DEFAULT NULL,
+                bounce_reason TEXT DEFAULT '',
+                bounce_charge REAL DEFAULT 0.0,
+                cancel_date TEXT DEFAULT NULL,
+                cancel_reason TEXT DEFAULT '',
+                payment_id INTEGER DEFAULT NULL,
+                created_by INTEGER DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_by INTEGER DEFAULT NULL,
+                updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (party_id) REFERENCES parties(id),
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS pdc_allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pdc_id INTEGER NOT NULL,
+                invoice_type TEXT DEFAULT 'on_account' CHECK(invoice_type IN ('sale', 'purchase', 'on_account')),
+                invoice_id INTEGER DEFAULT NULL,
+                allocated_amount REAL NOT NULL DEFAULT 0.0,
+                payment_id INTEGER DEFAULT NULL,
+                created_by INTEGER DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (pdc_id) REFERENCES pdc_cheques(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_pdc_cheques_party ON pdc_cheques(party_id);
+            CREATE INDEX IF NOT EXISTS idx_pdc_cheques_status ON pdc_cheques(status);
+            CREATE INDEX IF NOT EXISTS idx_pdc_cheques_cheque_date ON pdc_cheques(cheque_date);
+            CREATE INDEX IF NOT EXISTS idx_pdc_cheques_txn_date ON pdc_cheques(txn_date);
+            CREATE INDEX IF NOT EXISTS idx_pdc_allocations_pdc ON pdc_allocations(pdc_id);
+            CREATE INDEX IF NOT EXISTS idx_pdc_allocations_invoice ON pdc_allocations(invoice_type, invoice_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pdc_active_cheque
+                ON pdc_cheques(pdc_type, cheque_no, bank_name, party_id)
+                WHERE status IN ('HELD', 'DEPOSITED', 'CLEARED');
+        `);
+    } catch (e22) {
+        console.log('Migration 22 (PDC register) skipped:', e22.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

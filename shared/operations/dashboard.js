@@ -7,6 +7,8 @@
 
 // Exact AD → BS conversion (the whole ledger uses BS dates)
 const { adToBS } = require('../excel-import');
+// Post-dated cheque position (read-only — a held cheque moves no money)
+const pdcOps = require('./pdc');
 
 /**
  * Get all dashboard summary data.
@@ -130,6 +132,18 @@ function getDashboard(db) {
         "SELECT p.name, COALESCE(SUM(pr.grand_total), 0) as total FROM purchases pr JOIN parties p ON pr.party_id = p.id GROUP BY pr.party_id ORDER BY total DESC LIMIT 1"
     ).get();
 
+    // ── Post-Dated Cheques (PDC) ──
+    // Kept deliberately SEPARATE from the cash/bank figures above: a cheque that
+    // is still held has moved no money, so it must never be added to the bank
+    // balance. It is reported as what it is — money expected through a cheque
+    // (PDC receivable) and money we expect to pay out (PDC payable).
+    let pdc = null;
+    try {
+        pdc = pdcOps.getPdcPosition(db);
+    } catch (e) {
+        pdc = null; // older database without the PDC register
+    }
+
     return {
         todaySales,
         todayPurchases,
@@ -169,7 +183,9 @@ function getDashboard(db) {
         monthlyPurchases,
         lowStock: lowStock || [],
         topCustomer: topCustomer || { name: 'N/A', total: 0 },
-        topSupplier: topSupplier || { name: 'N/A', total: 0 }
+        topSupplier: topSupplier || { name: 'N/A', total: 0 },
+        // PDC position — never mixed into cash/bank, receivable or payable.
+        pdc
     };
 }
 

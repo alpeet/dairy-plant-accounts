@@ -1,6 +1,6 @@
 {
   "name": "prarambha-account-stock",
-  "version": "1.4.14",
+  "version": "1.4.15",
   "description": "Prarambha Account & Stock Management (Desktop + Web)",
   "homepage": "https://github.com/alpeet/dairy-plant-accounts",
   "main": "main.js",
@@ -27,7 +27,7 @@
   "build": {
     "appId": "com.prarambha.accountstock",
     "productName": "Prarambha Account & Stock Management",
-    "copyright": "Copyright © $(year) Prarambha",
+    "copyright": "Copyright \u00a9 $(year) Prarambha",
     "directories": {
       "output": "dist",
       "buildResources": "assets"

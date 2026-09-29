@@ -30,9 +30,15 @@
 --   stock_movements
 --   → Inventory movement tracking (inward/outward/balance)
 --
--- 💵 CASH & BANKING (3 tables)
---   denomination_counts, petty_cash, cash_deposits
---   → Cash counting, small expenses, bank deposits
+-- 💵 CASH & BANKING (5 tables)
+--   denomination_counts, petty_cash, cash_deposits, pdc_cheques, pdc_allocations
+--   → Cash counting, small expenses, bank deposits, post-dated cheque register
+--
+--   NOTE (post-dated cheques): a PDC is an INSTRUMENT, not money. While it is
+--   HELD/DEPOSITED it posts nothing — no payments row, no ledger row, so the
+--   bank balance and the receivable/payable are untouched. Clearing it writes a
+--   normal receipt/payment (mode 'cheque') exactly once; bouncing a cleared
+--   cheque removes that row again. See shared/operations/pdc.js.
 --
 -- 💸 FINANCIAL (4 tables)
 --   salary_records, vehicle_expenses, other_expenses, partner_capital
@@ -319,6 +325,74 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_party ON bank_transactions(party_id);
+
+-- ============================================================
+-- POST-DATED CHEQUES (PDC register)
+-- ============================================================
+-- A post-dated cheque received from a customer or issued to a supplier, tracked
+-- from receipt through deposit/clearance, with bounce and cancellation as
+-- terminal states. Money only moves at CLEARED (a real receipt/payment row is
+-- written then), so a Held cheque never inflates the bank balance.
+CREATE TABLE IF NOT EXISTS pdc_cheques (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pdc_no TEXT DEFAULT '',
+    pdc_type TEXT NOT NULL CHECK(pdc_type IN ('received', 'issued')),
+    party_id INTEGER NOT NULL,
+    cheque_no TEXT NOT NULL,
+    cheque_date TEXT NOT NULL,
+    txn_date TEXT NOT NULL,
+    bank_name TEXT DEFAULT '',
+    bank_account_no TEXT DEFAULT '',
+    amount REAL NOT NULL DEFAULT 0.0,
+    status TEXT NOT NULL DEFAULT 'HELD' CHECK(status IN ('HELD', 'DEPOSITED', 'CLEARED', 'BOUNCED', 'CANCELLED')),
+    reference_no TEXT DEFAULT '',
+    remarks TEXT DEFAULT '',
+    deposit_date TEXT DEFAULT NULL,
+    deposit_bank TEXT DEFAULT '',
+    deposit_remarks TEXT DEFAULT '',
+    clearance_date TEXT DEFAULT NULL,
+    clearance_bank TEXT DEFAULT '',
+    clearance_ref TEXT DEFAULT '',
+    clearance_remarks TEXT DEFAULT '',
+    bounce_date TEXT DEFAULT NULL,
+    bounce_reason TEXT DEFAULT '',
+    bounce_charge REAL DEFAULT 0.0,
+    cancel_date TEXT DEFAULT NULL,
+    cancel_reason TEXT DEFAULT '',
+    payment_id INTEGER DEFAULT NULL,
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_by INTEGER DEFAULT NULL,
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (party_id) REFERENCES parties(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Invoice-level allocation of one cheque (never a comma-separated list of ids).
+-- invoice_type = 'sale' (received PDC) | 'purchase' (issued PDC) | 'on_account'.
+CREATE TABLE IF NOT EXISTS pdc_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pdc_id INTEGER NOT NULL,
+    invoice_type TEXT DEFAULT 'on_account' CHECK(invoice_type IN ('sale', 'purchase', 'on_account')),
+    invoice_id INTEGER DEFAULT NULL,
+    allocated_amount REAL NOT NULL DEFAULT 0.0,
+    payment_id INTEGER DEFAULT NULL,
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (pdc_id) REFERENCES pdc_cheques(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pdc_cheques_party ON pdc_cheques(party_id);
+CREATE INDEX IF NOT EXISTS idx_pdc_cheques_status ON pdc_cheques(status);
+CREATE INDEX IF NOT EXISTS idx_pdc_cheques_cheque_date ON pdc_cheques(cheque_date);
+CREATE INDEX IF NOT EXISTS idx_pdc_cheques_txn_date ON pdc_cheques(txn_date);
+CREATE INDEX IF NOT EXISTS idx_pdc_allocations_pdc ON pdc_allocations(pdc_id);
+CREATE INDEX IF NOT EXISTS idx_pdc_allocations_invoice ON pdc_allocations(invoice_type, invoice_id);
+-- Duplicate-cheque backstop: only one LIVE cheque per (type, cheque no, bank,
+-- party). Cancelled/bounced cheques drop out so they can be re-registered.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pdc_active_cheque
+    ON pdc_cheques(pdc_type, cheque_no, bank_name, party_id)
+    WHERE status IN ('HELD', 'DEPOSITED', 'CLEARED');
 
 -- ============================================================
 -- PRODUCTION BATCHES (processing: raw milk → products)

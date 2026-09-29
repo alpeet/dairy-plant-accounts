@@ -174,13 +174,13 @@ async function generateStatement() {
                         <td class="text-right">${formatCurrency(data.opening_balance)}</td>
                     </tr>
                     ${data.entries.map(e => `
-                        <tr>
+                        <tr style="${e.is_pdc ? 'background:#fbfcfe' : ''}">
                             <td>${formatDate(e.date)}</td>
                             <td>${escapeHtml(e.reference_no || '')}</td>
-                            <td>${e.reference_type}</td>
-                            <td>${escapeHtml(e.description)}</td>
-                            <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : ''}</td>
-                            <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : ''}</td>
+                            <td>${e.reference_type}${e.is_pdc ? ' 🏛' : ''}</td>
+                            <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
+                            <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
+                            <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
                             <td class="text-right"><strong>${formatCurrency(e.running_balance)}</strong></td>
                         </tr>
                     `).join('')}
@@ -197,6 +197,24 @@ async function generateStatement() {
             </table>
         </div>
     `;
+}
+
+/**
+ * Status badge for a post-dated cheque line. A held cheque is explicitly
+ * labelled so a promise is never mistaken for money already received.
+ */
+function statementPdcBadge(e) {
+    if (!e || !e.is_pdc) return '';
+    const map = {
+        HELD: ['Held — not yet banked', '#8a6d00', '#fff4cc'],
+        DEPOSITED: ['Deposited — awaiting clearance', '#0b5394', '#dbeafe'],
+        CLEARED: ['Cleared', '#155724', '#d4edda'],
+        BOUNCED: ['Bounced', '#721c24', '#f8d7da'],
+        CANCELLED: ['Cancelled', '#4a4a4a', '#e9ecef']
+    };
+    const m = map[String(e.pdc_status || '').toUpperCase()];
+    if (!m) return '';
+    return ` <span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:600;color:${m[1]};background:${m[2]};border:1px solid ${m[1]}33">${m[0]}</span>`;
 }
 
 function showCustomerStatements() {
@@ -224,6 +242,12 @@ function buildStatementHtml(data, settings) {
             <div class="value-card"><div class="value-label">Total Credit</div><div class="value-number">${formatCurrency(data.total_credit)}</div></div>
             <div class="value-card"><div class="value-label">Closing Balance</div><div class="value-number">${formatCurrency(data.closing_balance)}</div></div>
         </div>
+        ${data.pdc && (data.pdc.received_held || data.pdc.issued_held) ? `
+        <div class="notes-section">
+            Post-dated cheques not yet cleared (NOT included in the closing balance above):
+            ${data.pdc.received_held ? ` Received ${formatCurrency(data.pdc.received_held)} (${data.pdc.received_held_count} cheque(s));` : ''}
+            ${data.pdc.issued_held ? ` Issued ${formatCurrency(data.pdc.issued_held)} (${data.pdc.issued_held_count} cheque(s));` : ''}
+        </div>` : ''}
         <table>
             <thead><tr><th>Date</th><th>Ref No</th><th>Type</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th></tr></thead>
             <tbody>

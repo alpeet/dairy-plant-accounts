@@ -21,7 +21,19 @@ const AUDIT_FIELD_LABELS = {
     mode: 'Mode', fat: 'FAT', snf: 'SNF', remarks: 'Remarks', notes: 'Notes',
     reference_no: 'Reference No', deposit_no: 'Deposit No', ref_no: 'Reference No',
     party_id: 'Party ID', product_id: 'Product ID', bank_account: 'Bank Account',
-    match_status: 'Match Status', accounting_class: 'Row Class'
+    match_status: 'Match Status', accounting_class: 'Row Class',
+    // Post-dated cheque register
+    pdc_no: 'PDC No', pdc_type: 'PDC Type', cheque_no: 'Cheque No',
+    cheque_date: 'Cheque Date', txn_date: 'Received / Issued', bank_name: 'Bank',
+    bank_account_no: 'Bank Account No', deposit_date: 'Deposit Date',
+    deposit_bank: 'Deposit Bank', clearance_date: 'Clearance Date',
+    clearance_bank: 'Clearance Bank', clearance_ref: 'Bank Reference',
+    bounce_date: 'Bounce Date', bounce_reason: 'Bounce Reason',
+    bounce_charge: 'Bounce Charge', cancel_date: 'Cancellation Date',
+    cancel_reason: 'Cancellation Reason', operation: 'Action',
+    from_status: 'From Status', to_status: 'To Status', allocated_total: 'Allocated',
+    on_account: 'On Account', invoice_type: 'Document Type', allocated_amount: 'Allocated',
+    invoice_id: 'Invoice / Bill', pdc_id: 'PDC', is_active: 'Active'
 };
 
 const AUDIT_STATUS_LABELS = { unpaid: 'Unpaid', partial: 'Partial', paid: 'Paid' };
@@ -148,6 +160,7 @@ async function renderAuditLog(filters = null) {
                         <option value="bank_transactions">Bank Transactions</option>
                         <option value="cash_deposits">Cash Deposits</option>
                         <option value="cash_collections">Cash Collection</option>
+                        <option value="pdc_cheques">Cheque Register (PDC)</option>
                         <option value="ledger_entries">Ledger Entries</option>
                         <option value="production_batches">Production</option>
                         <option value="partner_capital">Partner Capital</option>

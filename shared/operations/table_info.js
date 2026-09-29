@@ -45,8 +45,8 @@ const TABLE_CLASSIFICATION = [
     {
         category: '💵 Cash & Banking',
         icon: 'bank',
-        description: 'Cash counting, small expenses, and bank deposits',
-        tables: ['denomination_counts', 'petty_cash', 'cash_deposits']
+        description: 'Cash counting, small expenses, bank deposits and the post-dated cheque register',
+        tables: ['denomination_counts', 'petty_cash', 'cash_deposits', 'pdc_cheques', 'pdc_allocations']
     },
     {
         category: '💸 Financial',
