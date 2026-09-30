@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS sales (
     paid_amount REAL DEFAULT 0.0,
     payment_mode TEXT DEFAULT 'cash' CHECK(payment_mode IN ('cash', 'credit', 'bank', 'upi')),
     status TEXT DEFAULT 'paid' CHECK(status IN ('paid', 'unpaid', 'partial')),
+    lot_cogs REAL DEFAULT 0.0,
     notes TEXT DEFAULT '',
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
@@ -413,6 +414,13 @@ CREATE TABLE IF NOT EXISTS production_batches (
     wastage_reason TEXT DEFAULT '',
     operator_name TEXT DEFAULT '',
     remarks TEXT DEFAULT '',
+    input_cost REAL DEFAULT 0.0,
+    processing_cost REAL DEFAULT 0.0,
+    total_cost REAL DEFAULT 0.0,
+    cost_allocation TEXT DEFAULT 'single',
+    cost_approximate INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'posted' CHECK(status IN ('posted', 'reversed')),
+    yield_note TEXT DEFAULT '',
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
@@ -450,6 +458,90 @@ CREATE TABLE IF NOT EXISTS production_outputs (
     FOREIGN KEY (batch_id) REFERENCES production_batches(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
+
+-- ============================================================
+-- MILK LOTS (raw milk cost layers — one per collection, FIFO consumed)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS milk_lots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL,
+    milk_type TEXT NOT NULL DEFAULT 'cow' CHECK(milk_type IN ('cow', 'buffalo', 'mixed')),
+    party_id INTEGER DEFAULT NULL,
+    date TEXT NOT NULL,
+    shift TEXT DEFAULT 'morning',
+    quantity REAL NOT NULL DEFAULT 0.0,
+    fat_percent REAL DEFAULT 0.0,
+    snf_percent REAL DEFAULT 0.0,
+    unit_cost REAL NOT NULL DEFAULT 0.0,
+    total_cost REAL NOT NULL DEFAULT 0.0,
+    qty_remaining REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (collection_id) REFERENCES milk_collections(id)
+);
+CREATE INDEX IF NOT EXISTS idx_milk_lots_remaining ON milk_lots(milk_type, qty_remaining);
+CREATE INDEX IF NOT EXISTS idx_milk_lots_date ON milk_lots(date);
+
+-- ============================================================
+-- STOCK LOTS (finished-goods cost layers — one per production output,
+-- plus estimated opening lots at the lot-tracking cutover date)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS stock_lots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER DEFAULT NULL,
+    product_id INTEGER NOT NULL,
+    produced_date TEXT NOT NULL,
+    expires_date TEXT DEFAULT NULL,
+    quantity REAL NOT NULL DEFAULT 0.0,
+    qty_remaining REAL NOT NULL DEFAULT 0.0,
+    unit_cost REAL NOT NULL DEFAULT 0.0,
+    estimated_opening_cost INTEGER NOT NULL DEFAULT 0,
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (batch_id) REFERENCES production_batches(id),
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_lots_remaining ON stock_lots(product_id, qty_remaining);
+CREATE INDEX IF NOT EXISTS idx_stock_lots_batch ON stock_lots(batch_id);
+CREATE INDEX IF NOT EXISTS idx_stock_lots_expiry ON stock_lots(expires_date);
+
+-- ============================================================
+-- LOT CONSUMPTIONS (FIFO audit trail: which lot fed which document)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lot_consumptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lot_type TEXT NOT NULL CHECK(lot_type IN ('milk', 'stock')),
+    lot_id INTEGER NOT NULL,
+    reference_type TEXT NOT NULL,
+    reference_id INTEGER DEFAULT NULL,
+    date TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0.0,
+    unit_cost REAL NOT NULL DEFAULT 0.0,
+    total_cost REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_lot_consumptions_lot ON lot_consumptions(lot_type, lot_id);
+CREATE INDEX IF NOT EXISTS idx_lot_consumptions_ref ON lot_consumptions(reference_type, reference_id);
+
+-- ============================================================
+-- WASTAGE RECORDS (expiry/write-offs at actual lot cost)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS wastage_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lot_type TEXT NOT NULL CHECK(lot_type IN ('milk', 'stock')),
+    lot_id INTEGER DEFAULT NULL,
+    product_id INTEGER DEFAULT NULL,
+    date TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0.0,
+    unit_cost REAL NOT NULL DEFAULT 0.0,
+    total_cost REAL NOT NULL DEFAULT 0.0,
+    reason TEXT DEFAULT '',
+    reference_type TEXT DEFAULT 'wastage',
+    reference_id INTEGER DEFAULT NULL,
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_wastage_date ON wastage_records(date);
+CREATE INDEX IF NOT EXISTS idx_wastage_lot ON wastage_records(lot_type, lot_id);
 
 -- ============================================================
 -- PARTNER CAPITAL TRANSACTIONS

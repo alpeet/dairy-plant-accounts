@@ -319,6 +319,143 @@ function exportToDailyAccountExcel(db, outputPath) {
         ];
         XLSX.utils.book_append_sheet(wb, wsLedger, 'Party_Ledger');
 
+        // ── Routes ────────────────────────────────────────────
+        try {
+            const routes = db.prepare('SELECT name, area, assigned_vehicle, assigned_staff, notes FROM routes ORDER BY name').all();
+            if (routes.length) {
+                const rows = [['Route', 'Area', 'Vehicle', 'Staff', 'Notes']];
+                for (const r of routes) rows.push([r.name || '', r.area || '', r.assigned_vehicle || '', r.assigned_staff || '', r.notes || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 30 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Routes');
+            }
+        } catch (e) { /* routes table may not exist in old schemas */ }
+
+        // ── Milk_Rate_Chart ───────────────────────────────────
+        try {
+            const rates = db.prepare('SELECT effective_from, rate_type, fat_multiplier, snf_multiplier, extra_per_unit, fixed_rate, notes FROM milk_rate_chart ORDER BY effective_from').all();
+            if (rates.length) {
+                const rows = [['Effective From', 'Type', 'Fat Multiplier', 'SNF Multiplier', 'Extra Per Unit', 'Fixed Rate', 'Notes']];
+                for (const r of rates) rows.push([r.effective_from || '', r.rate_type || 'formula', r.fat_multiplier || 0, r.snf_multiplier || 0, r.extra_per_unit || 0, r.fixed_rate || 0, r.notes || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 30 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Milk_Rate_Chart');
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Vehicle_Expenses ──────────────────────────────────
+        try {
+            const rows0 = db.prepare('SELECT date, vehicle_name, driver_name, expense_type, fuel_amount, repair_amount, maintenance_amount, toll_parking_amount, other_amount, total_amount, remarks FROM vehicle_expenses ORDER BY date').all();
+            if (rows0.length) {
+                const rows = [['Date', 'Vehicle', 'Driver', 'Type', 'Fuel', 'Repair', 'Maintenance', 'Toll/Parking', 'Other', 'Total', 'Remarks']];
+                for (const r of rows0) rows.push([dateStr(r.date), r.vehicle_name || '', r.driver_name || '', r.expense_type || '', r.fuel_amount || 0, r.repair_amount || 0, r.maintenance_amount || 0, r.toll_parking_amount || 0, r.other_amount || 0, r.total_amount || 0, r.remarks || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 24 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Vehicle_Expenses');
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Other_Expenses ────────────────────────────────────
+        try {
+            const rows0 = db.prepare('SELECT date, category, expense_head, description, amount, paid_to, payment_mode, reference_no, remarks FROM other_expenses ORDER BY date').all();
+            if (rows0.length) {
+                const rows = [['Date', 'Category', 'Expense Head', 'Description', 'Amount', 'Paid To', 'Mode', 'Reference', 'Remarks']];
+                for (const r of rows0) rows.push([dateStr(r.date), r.category || '', r.expense_head || '', r.description || '', r.amount || 0, r.paid_to || '', r.payment_mode || '', r.reference_no || '', r.remarks || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 26 }, { wch: 12 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 24 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Other_Expenses');
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Cash_Deposits ─────────────────────────────────────
+        try {
+            const rows0 = db.prepare('SELECT date, bank_name, branch, account_no, amount, cash_source, deposit_mode, reference_no, remarks, deposited_by FROM cash_deposits ORDER BY date').all();
+            if (rows0.length) {
+                const rows = [['Date', 'Bank', 'Branch', 'Account', 'Amount', 'Source', 'Mode', 'Reference', 'Remarks', 'Deposited By']];
+                for (const r of rows0) rows.push([dateStr(r.date), r.bank_name || '', r.branch || '', r.account_no || '', r.amount || 0, r.cash_source || '', r.deposit_mode || '', r.reference_no || '', r.remarks || '', r.deposited_by || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 12 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 24 }, { wch: 14 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Cash_Deposits');
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Partner_Capital ───────────────────────────────────
+        try {
+            const rows0 = db.prepare('SELECT pc.date, p.name as partner, pc.type, pc.amount, pc.mode, pc.reference_no, pc.notes FROM partner_capital pc LEFT JOIN parties p ON pc.party_id = p.id ORDER BY pc.date').all();
+            if (rows0.length) {
+                const rows = [['Date', 'Partner', 'Type', 'Amount', 'Mode', 'Reference', 'Notes']];
+                for (const r of rows0) rows.push([dateStr(r.date), r.partner || '', r.type || '', r.amount || 0, r.mode || '', r.reference_no || '', r.notes || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 26 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Partner_Capital');
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Salary_Records ────────────────────────────────────
+        try {
+            const rows0 = db.prepare('SELECT employee_name, position, month, basic_salary, allowance, advance, deduction, net_salary, payment_mode, remarks, voucher_no FROM salary_records ORDER BY month, employee_name').all();
+            if (rows0.length) {
+                const rows = [['Employee', 'Position', 'Month', 'Basic', 'Allowance', 'Advance', 'Deduction', 'Net', 'Mode', 'Voucher', 'Remarks']];
+                for (const r of rows0) rows.push([r.employee_name || '', r.position || '', r.month || '', r.basic_salary || 0, r.allowance || 0, r.advance || 0, r.deduction || 0, r.net_salary || 0, r.payment_mode || '', r.voucher_no || '', r.remarks || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 22 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Salary_Records');
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Production_Batches (with inputs/outputs drill sheets) ─
+        try {
+            const batches = db.prepare('SELECT id, batch_no, date, process_type, total_cost, yield_note, status FROM production_batches ORDER BY date, batch_no').all();
+            if (batches.length) {
+                const rows = [['Batch No', 'Date', 'Process Type', 'Total Cost', 'Yield Note', 'Status']];
+                for (const b of batches) rows.push([b.batch_no || '', dateStr(b.date), b.process_type || '', b.total_cost || 0, b.yield_note || '', b.status || '']);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 28 }, { wch: 10 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Production_Batches');
+
+                const inputs = db.prepare(`
+                    SELECT pb.batch_no, pi.product_name, pi.quantity, pi.unit, pi.rate, pi.amount
+                    FROM production_inputs pi JOIN production_batches pb ON pi.batch_id = pb.id
+                    ORDER BY pb.date, pb.batch_no`).all();
+                if (inputs.length) {
+                    const irows = [['Batch No', 'Input Product', 'Quantity', 'Unit', 'Rate', 'Amount']];
+                    for (const r of inputs) irows.push([r.batch_no || '', r.product_name || '', r.quantity || 0, r.unit || '', r.rate || 0, r.amount || 0]);
+                    const iws = XLSX.utils.aoa_to_sheet(irows);
+                    iws['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 14 }];
+                    XLSX.utils.book_append_sheet(wb, iws, 'Production_Inputs');
+                }
+
+                const outputs = db.prepare(`
+                    SELECT pb.batch_no, po.product_name, po.quantity, po.unit, po.rate, po.amount
+                    FROM production_outputs po JOIN production_batches pb ON po.batch_id = pb.id
+                    ORDER BY pb.date, pb.batch_no`).all();
+                if (outputs.length) {
+                    const orows = [['Batch No', 'Output Product', 'Quantity', 'Unit', 'Rate', 'Amount']];
+                    for (const r of outputs) orows.push([r.batch_no || '', r.product_name || '', r.quantity || 0, r.unit || '', r.rate || 0, r.amount || 0]);
+                    const ows = XLSX.utils.aoa_to_sheet(orows);
+                    ows['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 14 }];
+                    XLSX.utils.book_append_sheet(wb, ows, 'Production_Outputs');
+                }
+            }
+        } catch (e) { /* old schema */ }
+
+        // ── Stock_Lots (finished goods, FIFO source of truth) ─
+        try {
+            const lots = db.prepare(`
+                SELECT sl.produced_date, sl.expires_date, sl.quantity, sl.qty_remaining, sl.unit_cost,
+                       pr.name as product
+                FROM stock_lots sl JOIN products pr ON sl.product_id = pr.id
+                WHERE sl.qty_remaining > 0
+                ORDER BY sl.produced_date, pr.name`).all();
+            if (lots.length) {
+                const rows = [['Produced Date', 'Expires Date', 'Product', 'Quantity', 'Qty Remaining', 'Unit Cost', 'Total Cost']];
+                for (const l of lots) rows.push([dateStr(l.produced_date), dateStr(l.expires_date), l.product || '', l.quantity || 0, l.qty_remaining || 0, l.unit_cost || 0, (l.qty_remaining || 0) * (l.unit_cost || 0)]);
+                const ws = XLSX.utils.aoa_to_sheet(rows);
+                ws['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 14 }];
+                XLSX.utils.book_append_sheet(wb, ws, 'Stock_Lots');
+            }
+        } catch (e) { /* old schema */ }
+
         // ── Write workbook ────────────────────────────────────
         // Ensure the output directory exists
         const dir = path.dirname(outputPath);

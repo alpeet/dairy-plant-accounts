@@ -216,6 +216,39 @@ function normalize(str) {
     return String(str).trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// ══════════════════════════════════════════════════════════════
+// ADD / UPDATE / UNCHANGED comparison helpers
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Normalise a field value for comparison: numbers to 2dp, BS/AD dates to the
+ * BS string, NULL ↔ '' equal, whitespace collapsed, case-insensitive text.
+ * Prevents "updates" that only differ by 100 vs 100.00.
+ */
+function normField(val) {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'number') return String(Math.round(val * 100) / 100);
+    const s = String(val).trim();
+    if (s === '') return '';
+    if (/^-?\d+(\.\d+)?$/.test(s)) return String(Math.round(parseFloat(s) * 100) / 100);
+    const bs = toBSDate(s);
+    if (bs) return bs;
+    return s.toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** True when the normalized values differ — only then is an UPDATE written. */
+function fieldChanged(a, b) {
+    return normField(a) !== normField(b);
+}
+
+/** Blank dataset result shape used by every importer. */
+function newSheetResult() {
+    return { added: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, present: true };
+}
+function absentSheetResult() {
+    return { added: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, present: false, note: 'Not present in workbook' };
+}
+
 function baseName(str) {
     return normalize(str)
         .replace(/\s*\([^)]*\)/g, ' ')
@@ -231,6 +264,7 @@ function mapPartyType(type) {
     if (t === 'supplier') return 'supplier';
     if (t === 'both') return 'both';
     if (t === 'farmer') return 'farmer';
+    if (t === 'partner') return 'partner';
     return 'customer';
 }
 
@@ -453,19 +487,29 @@ function importParties(db, sheetData, opts) {
         SELECT id FROM ledger_entries WHERE party_id = ? AND reference_type = 'opening'
     `);
 
-    // Col 0: Party Name, 1: Type, 2: Phone, 3: Address, 4: Opening Balance
-    const nameIdx = 0, typeIdx = 1, phoneIdx = 2, addrIdx = 3, balIdx = 4;
+    // Column resolution is header-driven when the sheet carries the exporter's
+    // header row (Party Name/Type/Phone/Email/Address/Opening Balance), falling
+    // back to the legacy fixed layout (0=Name, 1=Type, 2=Phone, 3=Address,
+    // 4=Opening Balance) for older workbooks without those headers. Getting
+    // this wrong made every re-import report "updated" (the 1,718 symptom).
+    const headerCells = (sheetData[1] || []).map((c) => toStr(c).trim().toLowerCase());
+    const findCol = (names, fallback) => {
+        for (const n of names) {
+            const i = headerCells.indexOf(n);
+            if (i >= 0) return i;
+        }
+        return fallback;
+    };
+    const nameIdx = findCol(['party name', 'name'], 0);
+    const typeIdx = findCol(['type', 'party type'], 1);
+    const phoneIdx = findCol(['phone', 'phone number', 'mobile'], 2);
+    const emailIdx = findCol(['email', 'email address'], -1);
+    const addrIdx = findCol(['address', 'party address'], emailIdx >= 0 ? 4 : 3);
+    const balIdx = findCol(['opening balance', 'opening_bal', 'balance'], emailIdx >= 0 ? 5 : 4);
 
     const headerRow = sheetData[SHEET_DATA_START_ROW - 1] || [];
-    let emailIdx = -1;
-    for (let h = 0; h < headerRow.length; h++) {
-        if (String(headerRow[h]).trim().toLowerCase().includes('email')) {
-            emailIdx = h;
-            break;
-        }
-    }
 
-    let inserted = 0, updated = 0, openingLedger = 0;
+    let inserted = 0, updated = 0, unchanged = 0, openingLedger = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -484,6 +528,13 @@ function importParties(db, sheetData, opts) {
             try {
                 const existing = findParty.get(name);
                 if (existing) {
+                    // CHANGE DETECTION: compare the editable fields; write only
+                    // when something actually differs (no cosmetic "updated").
+                    const cur = db.prepare('SELECT * FROM parties WHERE id = ?').get(existing.id);
+                    const differs = fieldChanged(cur.phone, phone) || fieldChanged(cur.address, address)
+                        || fieldChanged(cur.type, type) || fieldChanged(cur.opening_balance, openingBal)
+                        || (hasEmailColumn && fieldChanged(cur.email, email));
+                    if (!differs) { unchanged++; continue; }
                     if (hasEmailColumn) {
                         updateParty.run(phone, phone, email, email, address, address, type, type, openingBal, now, existing.id);
                     } else {
@@ -535,8 +586,8 @@ function importParties(db, sheetData, opts) {
         WHERE party_code = '' OR party_code IS NULL
     `).run();
 
-    log(`  ✅ Parties: ${inserted} inserted, ${updated} updated` + (openingLedger ? ` (${openingLedger} opening-balance ledger entries)` : ''));
-    return { inserted, updated };
+    log(`  ✅ Parties: ${inserted} added, ${updated} updated, ${unchanged} unchanged` + (openingLedger ? ` (${openingLedger} opening-balance ledger entries)` : ''));
+    return { added: inserted, updated, unchanged };
 }
 
 function importPartyEmails(db, sheetData, opts) {
@@ -617,7 +668,7 @@ function importProducts(db, sheetData, opts) {
     // Col 0: Product Name, 1: Unit, 2: Opening Stock, 6: Reorder Level, 7: Rate
     const nameIdx = 0, unitIdx = 1, openingIdx = 2, reorderIdx = 6, rateIdx = 7;
 
-    let inserted = 0, updated = 0;
+    let inserted = 0, updated = 0, unchanged = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -636,6 +687,12 @@ function importProducts(db, sheetData, opts) {
             try {
                 const existing = findProduct.get(name);
                 if (existing) {
+                    // CHANGE DETECTION: only write when a field really differs.
+                    const cur = db.prepare('SELECT * FROM products WHERE id = ?').get(existing.id);
+                    const differs = fieldChanged(cur.unit, unit) || fieldChanged(cur.opening_stock, opening)
+                        || fieldChanged(cur.reorder_level, reorder) || fieldChanged(cur.rate, rate)
+                        || fieldChanged(cur.category, category);
+                    if (!differs) { unchanged++; continue; }
                     updateProduct.run(unit, unit, category, category, reorder, reorder, rate, rate, opening, now, existing.id);
                     updated++;
                 } else {
@@ -647,8 +704,8 @@ function importProducts(db, sheetData, opts) {
     });
     trx();
 
-    log(`  ✅ Products: ${inserted} inserted, ${updated} updated`);
-    return { inserted, updated };
+    log(`  ✅ Products: ${inserted} added, ${updated} updated, ${unchanged} unchanged`);
+    return { added: inserted, updated, unchanged };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -735,7 +792,7 @@ function importSales(db, sheetData, opts) {
         invoiceGroups[invNo] = g.rows;
     }
 
-    let inserted = 0, updated = 0, skipped = 0;
+    let inserted = 0, updated = 0, unchanged = 0, skipped = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -772,6 +829,24 @@ function importSales(db, sheetData, opts) {
             const existing = findSale.get(invNo);
             let saleId;
             if (existing) {
+                // CHANGE DETECTION: rewrite the invoice only when its values
+                // (or item lines) actually differ from the database.
+                const cur = db.prepare('SELECT * FROM sales WHERE id = ?').get(existing.id);
+                const curItems = db.prepare('SELECT product_name, quantity, rate, amount FROM sales_items WHERE sale_id = ? ORDER BY id').all(existing.id);
+                const newItems = rows.map(r => ({
+                    product_name: toStr(r[prodIdx]), quantity: toNum(r[qtyIdx]),
+                    rate: toNum(r[rateIdx]), amount: toNum(r[amtIdx]) || (toNum(r[qtyIdx]) * toNum(r[rateIdx]))
+                }));
+                const itemsDiffer = curItems.length !== newItems.length || curItems.some((ci, ix) =>
+                    fieldChanged(ci.product_name, newItems[ix].product_name) ||
+                    fieldChanged(ci.quantity, newItems[ix].quantity) ||
+                    fieldChanged(ci.rate, newItems[ix].rate) ||
+                    fieldChanged(ci.amount, newItems[ix].amount));
+                const headDiffers = fieldChanged(cur.date, bsDate) || fieldChanged(cur.party_id, partyId) ||
+                    fieldChanged(cur.subtotal, subtotal) || fieldChanged(cur.grand_total, grandTotal) ||
+                    fieldChanged(cur.paid_amount, paidAmount) || fieldChanged(cur.payment_mode, paymentMode) ||
+                    fieldChanged(cur.discount_percent, totalDiscPct) || fieldChanged(cur.notes, remarks) || itemsDiffer;
+                if (!headDiffers) { unchanged++; continue; }
                 updateSale.run(bsDate, partyId, subtotal, 0, totalDiscPct,
                     grandTotal, paidAmount, paymentMode, status, remarks, now, existing.id);
                 saleId = existing.id;
@@ -802,7 +877,7 @@ function importSales(db, sheetData, opts) {
     trx();
 
     log(`  ✅ Sales: ${inserted} inserted, ${updated} updated (${skipped} skipped - no party)`);
-    return { inserted, updated, skipped };
+    return { added: inserted, updated, unchanged, skipped };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -876,7 +951,7 @@ function importPurchases(db, sheetData, opts) {
         billGroups[groupKey].push(row);
     }
 
-    let inserted = 0, updated = 0, skipped = 0;
+    let inserted = 0, updated = 0, unchanged = 0, skipped = 0;
     const now = new Date().toISOString();
     let milkSeq = milkSeqStart;
 
@@ -914,6 +989,24 @@ function importPurchases(db, sheetData, opts) {
             const existing = findPurchase.get(billNo, bsDate);
             let purchaseId;
             if (existing) {
+                // CHANGE DETECTION (mirrors sales): items + head comparison.
+                const cur = db.prepare('SELECT * FROM purchases WHERE id = ?').get(existing.id);
+                const curItems = db.prepare('SELECT product_name, quantity, rate, amount FROM purchase_items WHERE purchase_id = ? ORDER BY id').all(existing.id);
+                const newItems = rows.map(r => ({
+                    product_name: toStr(r[prodIdx]), quantity: toNum(r[qtyIdx]),
+                    rate: toNum(r[rateUnitIdx]) || toNum(r[fixedRateIdx]) || toNum(r[extraIdx]),
+                    amount: toNum(r[amtIdx]) || (toNum(r[qtyIdx]) * (toNum(r[rateUnitIdx]) || toNum(r[fixedRateIdx]) || toNum(r[extraIdx])))
+                }));
+                const itemsDiffer = curItems.length !== newItems.length || curItems.some((ci, ix) =>
+                    fieldChanged(ci.product_name, newItems[ix].product_name) ||
+                    fieldChanged(ci.quantity, newItems[ix].quantity) ||
+                    fieldChanged(ci.rate, newItems[ix].rate) ||
+                    fieldChanged(ci.amount, newItems[ix].amount));
+                const headDiffers = fieldChanged(cur.date, bsDate) || fieldChanged(cur.party_id, partyId) ||
+                    fieldChanged(cur.subtotal, subtotal) || fieldChanged(cur.grand_total, grandTotal) ||
+                    fieldChanged(cur.paid_amount, paidAmount) || fieldChanged(cur.payment_mode, paymentMode) ||
+                    fieldChanged(cur.transport_charges, totalTransport) || fieldChanged(cur.notes, remarks) || itemsDiffer;
+                if (!headDiffers) { unchanged++; continue; }
                 updatePurchase.run(bsDate, partyId, subtotal, 0, 0,
                     totalTransport, 0, grandTotal, paidAmount,
                     paymentMode, status, remarks, now, existing.id);
@@ -965,8 +1058,8 @@ function importPurchases(db, sheetData, opts) {
     });
     trx();
 
-    log(`  ✅ Purchases: ${inserted} inserted, ${updated} updated (${skipped} skipped - no party)`);
-    return { inserted, updated, skipped };
+    log(`  ✅ Purchases: ${inserted} added, ${updated} updated, ${unchanged} unchanged (${skipped} skipped - no party)`);
+    return { added: inserted, updated, unchanged, skipped };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -999,7 +1092,7 @@ function importCollections(db, sheetData, opts) {
     const dateIdx = 0, adDateIdx = 1, recIdx = 2, custIdx = 3, billIdx = 4, typeIdx = 5,
           collectedIdx = 7, paidIdx = 8, modeIdx = 9, remarkIdx = 11;
 
-    let inserted = 0, skippedDup = 0, skipped = 0;
+    let inserted = 0, unchanged = 0, skipped = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -1033,7 +1126,7 @@ function importCollections(db, sheetData, opts) {
             const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${toStr(row[remarkIdx])}`;
 
             const existing = findPayment.get(partyId, bsDate, payType, amount);
-            if (existing) { skippedDup++; continue; }
+            if (existing) { unchanged++; continue; }
 
             insertPayment.run(partyId, bsDate, payType, amount, mode,
                 receiptNo || againstBill, receiptNo || againstBill, remarks, now);
@@ -1046,8 +1139,8 @@ function importCollections(db, sheetData, opts) {
     });
     trx();
 
-    log(`  ✅ Collections: ${inserted} inserted (${skippedDup} duplicates skipped${skipped ? `, ${skipped} no party` : ''})`);
-    return { inserted, skippedDup };
+    log(`  ✅ Collections: ${inserted} added, ${unchanged} unchanged${skipped ? `, ${skipped} no party` : ''}`);
+    return { added: inserted, unchanged, skipped };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1079,7 +1172,7 @@ function importPartyLedger(db, sheetData, opts) {
     const dateIdx = 0, adDateIdx = 1, partyIdx = 2, txnIdx = 3, refIdx = 4, descIdx = 5,
           debitIdx = 6, creditIdx = 7, balIdx = 8;
 
-    let inserted = 0, skippedDup = 0, skipped = 0;
+    let inserted = 0, unchanged = 0, skipped = 0, skippedDup = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -1110,7 +1203,7 @@ function importPartyLedger(db, sheetData, opts) {
 
             if (dedup) {
                 const existing = checkExisting.get(partyId, bsDate, refType, ref);
-                if (existing) { skippedDup++; continue; }
+                if (existing) { unchanged++; continue; }
             }
 
             insertLedger.run(partyId, bsDate, refType, ref || null, desc || 'Ledger entry',
@@ -1120,8 +1213,8 @@ function importPartyLedger(db, sheetData, opts) {
     });
     trx();
 
-    log(`  ✅ Ledger: ${inserted} inserted (${skippedDup} duplicates skipped${skipped ? `, ${skipped} no party` : ''})`);
-    return { inserted, skippedDup };
+    log(`  ✅ Ledger: ${inserted} added, ${unchanged} unchanged${skipped ? `, ${skipped} no party` : ''}`);
+    return { added: inserted, unchanged, skipped };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1738,6 +1831,400 @@ const TRANSACTIONAL_TABLES = [
  * app is usable immediately. Anything already set in the app is never touched,
  * and [bracketed] placeholder values in the sheet are skipped.
  */
+// ============================================================
+// Generic ADD/UPDATE/UNCHANGED sheet importers (new datasets)
+// Every one returns the {added, updated, unchanged, ...} shape and
+// reports UNCHANGED when the row already matches — the fix for the
+// "1,718 updated every import" symptom.
+// ============================================================
+
+/** Case-insensitive header row finder (first row containing any of names). */
+function findHeaderRow(data, names, maxScan = 12) {
+    for (let i = 0; i < Math.min(data.length, maxScan); i++) {
+        const cells = (data[i] || []).map((c) => toStr(c).trim().toLowerCase());
+        if (names.some((n) => cells.includes(n.toLowerCase()))) return i;
+    }
+    return -1;
+}
+
+function colIndex(data, headerRow, names) {
+    const cells = (data[headerRow] || []).map((c) => toStr(c).trim().toLowerCase());
+    for (const n of names) {
+        const i = cells.indexOf(n.toLowerCase());
+        if (i >= 0) return i;
+    }
+    return -1;
+}
+
+/** Compare an Excel candidate row against a DB row for the given fields. */
+function rowDiffers(existing, candidate) {
+    for (const [col, excelVal] of Object.entries(candidate)) {
+        if (fieldChanged(existing[col], excelVal)) return true;
+    }
+    return false;
+}
+
+/**
+ * Routes master — matched by normalized name. Syncs name/area/vehicle/staff/notes.
+ */
+function importRoutesSheet(db, data, { log }) {
+    const hr = findHeaderRow(data, ['route', 'route name', 'name']);
+    if (hr < 0) return { ...newSheetResult(), note: 'No header row found' };
+    const nameI = colIndex(data, hr, ['route', 'route name', 'name']);
+    const areaI = colIndex(data, hr, ['area']);
+    const vehI = colIndex(data, hr, ['vehicle', 'assigned vehicle']);
+    const staffI = colIndex(data, hr, ['staff', 'assigned staff', 'driver']);
+    const notesI = colIndex(data, hr, ['notes', 'remarks']);
+
+    const byName = new Map();
+    for (const r of db.prepare('SELECT * FROM routes').all()) byName.set(normalize(r.name), r);
+    const ins = db.prepare('INSERT INTO routes (name, area, assigned_vehicle, assigned_staff, notes) VALUES (?, ?, ?, ?, ?)');
+    const res = newSheetResult();
+    const seen = new Set();
+
+    for (let i = hr + 1; i < data.length; i++) {
+        const row = data[i];
+        const name = toStr(row && row[nameI]).trim();
+        if (!name) continue;
+        const key = normalize(name);
+        if (seen.has(key)) { res.skipped++; continue; }
+        seen.add(key);
+        const cand = {
+            name,
+            area: areaI >= 0 ? toStr(row[areaI]).trim() : '',
+            assigned_vehicle: vehI >= 0 ? toStr(row[vehI]).trim() : '',
+            assigned_staff: staffI >= 0 ? toStr(row[staffI]).trim() : '',
+            notes: notesI >= 0 ? toStr(row[notesI]).trim() : '',
+        };
+        const existing = byName.get(key);
+        if (!existing) {
+            ins.run(cand.name, cand.area, cand.assigned_vehicle, cand.assigned_staff, cand.notes);
+            res.added++;
+        } else if (rowDiffers(existing, cand)) {
+            db.prepare('UPDATE routes SET name=?, area=?, assigned_vehicle=?, assigned_staff=?, notes=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?')
+                .run(cand.name, cand.area, cand.assigned_vehicle, cand.assigned_staff, cand.notes, existing.id);
+            res.updated++;
+        } else {
+            res.unchanged++;
+        }
+    }
+    log(`  ✅ Routes: ${res.added} added, ${res.updated} updated, ${res.unchanged} unchanged`);
+    return res;
+}
+
+/**
+ * Milk rate chart — matched by (effective_from, rate_type). Numeric compare
+ * with 2dp tolerance so 7.15 vs 7.1500 is UNCHANGED.
+ */
+function importRateChartSheet(db, data, { log }) {
+    const hr = findHeaderRow(data, ['effective from', 'effective_from', 'date']);
+    if (hr < 0) return { ...newSheetResult(), note: 'No header row found' };
+    const effI = colIndex(data, hr, ['effective from', 'effective_from', 'date']);
+    const typeI = colIndex(data, hr, ['type', 'rate type']);
+    const fatI = colIndex(data, hr, ['fat multiplier', 'fat']);
+    const snfI = colIndex(data, hr, ['snf multiplier', 'snf']);
+    const extraI = colIndex(data, hr, ['extra', 'extra per unit']);
+    const fixedI = colIndex(data, hr, ['fixed rate', 'fixed']);
+    const notesI = colIndex(data, hr, ['notes', 'remarks']);
+
+    const byKey = new Map();
+    for (const r of db.prepare('SELECT * FROM milk_rate_chart').all()) {
+        byKey.set(`${r.effective_from}|${r.rate_type}`, r);
+    }
+    const ins = db.prepare('INSERT INTO milk_rate_chart (effective_from, rate_type, fat_multiplier, snf_multiplier, extra_per_unit, fixed_rate, notes) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    const upd = db.prepare('UPDATE milk_rate_chart SET fat_multiplier=?, snf_multiplier=?, extra_per_unit=?, fixed_rate=?, notes=? WHERE id=?');
+    const res = newSheetResult();
+    const seen = new Set();
+
+    for (let i = hr + 1; i < data.length; i++) {
+        const row = data[i];
+        const eff = toBSDate(row && row[effI]);
+        if (!eff) continue;
+        const type = (typeI >= 0 ? toStr(row[typeI]).trim().toLowerCase() : 'formula') === 'fixed' ? 'fixed' : 'formula';
+        const key = `${eff}|${type}`;
+        if (seen.has(key)) { res.skipped++; continue; }
+        seen.add(key);
+        const cand = {
+            fat_multiplier: fatI >= 0 ? toNum(row[fatI]) : 7.15,
+            snf_multiplier: snfI >= 0 ? toNum(row[snfI]) : 4.55,
+            extra_per_unit: extraI >= 0 ? toNum(row[extraI]) : 0,
+            fixed_rate: fixedI >= 0 ? toNum(row[fixedI]) : 0,
+            notes: notesI >= 0 ? toStr(row[notesI]).trim() : '',
+        };
+        const existing = byKey.get(key);
+        if (!existing) {
+            ins.run(eff, type, cand.fat_multiplier, cand.snf_multiplier, cand.extra_per_unit, cand.fixed_rate, cand.notes);
+            res.added++;
+        } else {
+            const differs = ['fat_multiplier', 'snf_multiplier', 'extra_per_unit', 'fixed_rate'].some((f) =>
+                Math.abs(Number(existing[f] || 0) - Number(cand[f] || 0)) > 0.005)
+                || fieldChanged(existing.notes, cand.notes);
+            if (differs) { upd.run(cand.fat_multiplier, cand.snf_multiplier, cand.extra_per_unit, cand.fixed_rate, cand.notes, existing.id); res.updated++; }
+            else res.unchanged++;
+        }
+    }
+    log(`  ✅ Milk rate chart: ${res.added} added, ${res.updated} updated, ${res.unchanged} unchanged`);
+    return res;
+}
+
+/** Shared writer for the three flat expense-style sheets. */
+function importExpenseLikeSheet(db, data, { log }, spec) {
+    const hr = findHeaderRow(data, spec.headers);
+    if (hr < 0) return { ...newSheetResult(), note: 'No header row found' };
+    const res = newSheetResult();
+    const seen = new Set();
+
+    for (let i = hr + 1; i < data.length; i++) {
+        const row = data[i];
+        const date = toBSDate(row && row[spec.dateCol(data, hr)]);
+        if (!date) { if (row && row.some((x) => toStr(x) !== '')) res.skipped++; continue; }
+        try {
+            const cand = spec.build(row, data, hr);
+            if (!cand) { res.skipped++; continue; }
+            const key = spec.keyOf(cand, date);
+            if (seen.has(key)) { res.skipped++; continue; }
+            seen.add(key);
+            const existing = spec.find(db, cand, date);
+            if (!existing) {
+                spec.insert(db, cand, date);
+                res.added++;
+            } else if (rowDiffers(existing, cand)) {
+                spec.update(db, cand, existing);
+                res.updated++;
+            } else {
+                res.unchanged++;
+            }
+        } catch (e) {
+            res.failed++;
+            log(`  ⚠️ ${spec.label} row ${i + 1} failed: ${e.message}`);
+        }
+    }
+    log(`  ✅ ${spec.label}: ${res.added} added, ${res.updated} updated, ${res.unchanged} unchanged` +
+        (res.skipped ? `, ${res.skipped} skipped` : '') + (res.failed ? `, ${res.failed} FAILED` : ''));
+    return res;
+}
+
+const importVehicleExpensesSheet = (db, data, opts) => importExpenseLikeSheet(db, data, opts, {
+    label: 'Vehicle expenses',
+    headers: ['date', 'vehicle'],
+    dateCol: (data, hr) => colIndex(data, hr, ['date']),
+    build: (row, data, hr) => {
+        const at = (names) => { const i = colIndex(data, hr, names); return i >= 0 ? row[i] : ''; };
+        const vehicle = toStr(at(['vehicle', 'vehicle name'])).trim();
+        if (!vehicle) return null;
+        return {
+            vehicle_name: vehicle,
+            driver_name: toStr(at(['driver', 'driver name'])).trim(),
+            expense_type: toStr(at(['type', 'expense type'])).trim() || 'other',
+            fuel_amount: toNum(at(['fuel', 'fuel amount'])),
+            repair_amount: toNum(at(['repair', 'repair amount'])),
+            maintenance_amount: toNum(at(['maintenance', 'maintenance amount'])),
+            toll_parking_amount: toNum(at(['toll', 'parking', 'toll/parking'])),
+            other_amount: toNum(at(['other', 'other amount'])),
+            total_amount: toNum(at(['total', 'total amount'])),
+            remarks: toStr(at(['remarks', 'notes'])).trim(),
+        };
+    },
+    keyOf: (c) => `${c.vehicle_name}|${c.total_amount}`,
+    find: (db, c, date) => db.prepare(
+        'SELECT * FROM vehicle_expenses WHERE date=? AND vehicle_name=? AND ABS(total_amount-?)<0.005 ORDER BY id DESC LIMIT 1'
+    ).get(date, c.vehicle_name, c.total_amount),
+    insert: (db, c, date) => db.prepare(
+        'INSERT INTO vehicle_expenses (date, vehicle_name, driver_name, expense_type, fuel_amount, repair_amount, maintenance_amount, toll_parking_amount, other_amount, total_amount, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(date, c.vehicle_name, c.driver_name, c.expense_type, c.fuel_amount, c.repair_amount, c.maintenance_amount, c.toll_parking_amount, c.other_amount, c.total_amount, c.remarks),
+    update: (db, c, ex) => db.prepare(
+        'UPDATE vehicle_expenses SET driver_name=?, expense_type=?, fuel_amount=?, repair_amount=?, maintenance_amount=?, toll_parking_amount=?, other_amount=?, total_amount=?, remarks=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?'
+    ).run(c.driver_name, c.expense_type, c.fuel_amount, c.repair_amount, c.maintenance_amount, c.toll_parking_amount, c.other_amount, c.total_amount, c.remarks, ex.id),
+});
+
+const importOtherExpensesSheet = (db, data, opts) => importExpenseLikeSheet(db, data, opts, {
+    label: 'Other expenses',
+    headers: ['date', 'category', 'amount'],
+    dateCol: (data, hr) => colIndex(data, hr, ['date']),
+    build: (row, data, hr) => {
+        const at = (names) => { const i = colIndex(data, hr, names); return i >= 0 ? row[i] : ''; };
+        const category = toStr(at(['category', 'head', 'expense head'])).trim();
+        const amount = toNum(at(['amount']));
+        if (!category && !amount) return null;
+        return {
+            category: category || 'other',
+            expense_head: toStr(at(['expense head', 'head'])).trim() || category || 'other',
+            description: toStr(at(['description', 'details'])).trim(),
+            amount,
+            paid_to: toStr(at(['paid to', 'payee'])).trim(),
+            payment_mode: mapPaymentMode(at(['mode', 'payment mode'])) || 'cash',
+            reference_no: toStr(at(['reference', 'ref no', 'voucher'])).trim(),
+            remarks: toStr(at(['remarks', 'notes'])).trim(),
+        };
+    },
+    keyOf: (c, date) => `${date}|${c.category}|${c.amount}|${c.reference_no}`,
+    find: (db, c, date) => db.prepare(
+        'SELECT * FROM other_expenses WHERE date=? AND category=? AND ABS(amount-?)<0.005 AND COALESCE(reference_no,\'\')=? ORDER BY id DESC LIMIT 1'
+    ).get(date, c.category, c.amount, c.reference_no || ''),
+    insert: (db, c, date) => db.prepare(
+        'INSERT INTO other_expenses (date, category, expense_head, description, amount, paid_to, payment_mode, reference_no, remarks) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(date, c.category, c.expense_head, c.description, c.amount, c.paid_to, c.payment_mode, c.reference_no, c.remarks),
+    update: (db, c, ex) => db.prepare(
+        'UPDATE other_expenses SET expense_head=?, description=?, amount=?, paid_to=?, payment_mode=?, reference_no=?, remarks=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?'
+    ).run(c.expense_head, c.description, c.amount, c.paid_to, c.payment_mode, c.reference_no, c.remarks, ex.id),
+});
+
+const importCashDepositsSheet = (db, data, opts) => importExpenseLikeSheet(db, data, opts, {
+    label: 'Cash deposits',
+    headers: ['date', 'amount', 'bank'],
+    dateCol: (data, hr) => colIndex(data, hr, ['date']),
+    build: (row, data, hr) => {
+        const at = (names) => { const i = colIndex(data, hr, names); return i >= 0 ? row[i] : ''; };
+        const amount = toNum(at(['amount']));
+        const bank = toStr(at(['bank', 'bank name'])).trim();
+        if (!amount && !bank) return null;
+        return {
+            bank_name: bank,
+            branch: toStr(at(['branch'])).trim(),
+            account_no: toStr(at(['account', 'account no', 'a/c'])).trim(),
+            amount,
+            cash_source: toStr(at(['source', 'cash source'])).trim() || 'counter',
+            deposit_mode: toStr(at(['mode', 'deposit mode'])).trim() || 'cash',
+            reference_no: toStr(at(['reference', 'ref no', 'slip no'])).trim(),
+            remarks: toStr(at(['remarks', 'notes'])).trim(),
+            deposited_by: toStr(at(['deposited by', 'by'])).trim(),
+        };
+    },
+    keyOf: (c, date) => `${date}|${c.bank_name}|${c.amount}|${c.reference_no}`,
+    find: (db, c, date) => db.prepare(
+        'SELECT * FROM cash_deposits WHERE date=? AND bank_name=? AND ABS(amount-?)<0.005 AND COALESCE(reference_no,\'\')=? ORDER BY id DESC LIMIT 1'
+    ).get(date, c.bank_name, c.amount, c.reference_no || ''),
+    insert: (db, c, date) => db.prepare(
+        'INSERT INTO cash_deposits (date, deposit_no, bank_name, branch, account_no, amount, cash_source, deposit_mode, reference_no, remarks, deposited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(date, 'CD-IMP-' + date, c.bank_name, c.branch, c.account_no, c.amount, c.cash_source, c.deposit_mode, c.reference_no, c.remarks, c.deposited_by),
+    update: (db, c, ex) => db.prepare(
+        'UPDATE cash_deposits SET branch=?, account_no=?, amount=?, cash_source=?, deposit_mode=?, reference_no=?, remarks=?, deposited_by=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?'
+    ).run(c.branch, c.account_no, c.amount, c.cash_source, c.deposit_mode, c.reference_no, c.remarks, c.deposited_by, ex.id),
+});
+
+const importPartnerCapitalSheet = (db, data, opts) => importExpenseLikeSheet(db, data, opts, {
+    label: 'Partner capital',
+    headers: ['date', 'partner', 'amount'],
+    dateCol: (data, hr) => colIndex(data, hr, ['date']),
+    build: (row, data, hr) => {
+        const at = (names) => { const i = colIndex(data, hr, names); return i >= 0 ? row[i] : ''; };
+        const name = toStr(at(['partner', 'partner name', 'name'])).trim();
+        const amount = toNum(at(['amount']));
+        if (!name) return null;
+        return {
+            _partnerName: name,
+            type: toStr(at(['type'])).trim().toLowerCase() || 'contribution',
+            amount,
+            mode: mapPaymentMode(at(['mode', 'payment mode'])) || 'cash',
+            reference_no: toStr(at(['reference', 'ref no'])).trim(),
+            notes: toStr(at(['notes', 'remarks'])).trim(),
+        };
+    },
+    keyOf: (c, date) => `${date}|${c._partnerName}|${c.type}|${c.amount}`,
+    find: (db, c, date) => {
+        const pid = resolveParty(c._partnerName, db, true, 'partner');
+        return pid ? db.prepare(
+            'SELECT * FROM partner_capital WHERE date=? AND party_id=? AND type=? AND ABS(amount-?)<0.005 ORDER BY id DESC LIMIT 1'
+        ).get(date, pid, c.type, c.amount) : null;
+    },
+    insert: (db, c, date) => {
+        const pid = resolveParty(c._partnerName, db, true, 'partner');
+        if (!pid) throw new Error(`partner not found: ${c._partnerName}`);
+        db.prepare('INSERT INTO partner_capital (party_id, date, type, amount, mode, reference_no, notes) VALUES (?,?,?,?,?,?,?)')
+            .run(pid, date, c.type, c.amount, c.mode, c.reference_no, c.notes);
+    },
+    update: (db, c, ex) => db.prepare(
+        'UPDATE partner_capital SET amount=?, mode=?, reference_no=?, notes=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?'
+    ).run(c.amount, c.mode, c.reference_no, c.notes, ex.id),
+});
+
+const importSalaryRecordsSheet = (db, data, opts) => importExpenseLikeSheet(db, data, opts, {
+    label: 'Salary records',
+    headers: ['month', 'employee'],
+    dateCol: (data, hr) => colIndex(data, hr, ['payment date', 'payment_date', 'date']),
+    build: (row, data, hr) => {
+        const at = (names) => { const i = colIndex(data, hr, names); return i >= 0 ? row[i] : ''; };
+        const emp = toStr(at(['employee', 'employee name', 'name'])).trim();
+        const month = toStr(at(['month'])).trim();
+        if (!emp || !month) return null;
+        return {
+            employee_name: emp,
+            position: toStr(at(['position', 'designation'])).trim(),
+            month,
+            basic_salary: toNum(at(['basic', 'basic salary'])),
+            allowance: toNum(at(['allowance'])),
+            advance: toNum(at(['advance'])),
+            deduction: toNum(at(['deduction'])),
+            net_salary: toNum(at(['net', 'net salary'])),
+            payment_mode: mapPaymentMode(at(['mode', 'payment mode'])) || 'cash',
+            remarks: toStr(at(['remarks', 'notes'])).trim(),
+            voucher_no: toStr(at(['voucher', 'voucher no'])).trim(),
+        };
+    },
+    keyOf: (c) => `${c.month}|${c.employee_name}`,
+    find: (db, c) => db.prepare(
+        'SELECT * FROM salary_records WHERE month=? AND employee_name=? ORDER BY id DESC LIMIT 1'
+    ).get(c.month, c.employee_name),
+    insert: (db, c) => db.prepare(
+        'INSERT INTO salary_records (employee_name, position, month, basic_salary, allowance, advance, deduction, net_salary, payment_mode, remarks, voucher_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(c.employee_name, c.position, c.month, c.basic_salary, c.allowance, c.advance, c.deduction, c.net_salary, c.payment_mode, c.remarks, c.voucher_no),
+    update: (db, c, ex) => db.prepare(
+        'UPDATE salary_records SET position=?, basic_salary=?, allowance=?, advance=?, deduction=?, net_salary=?, payment_mode=?, remarks=?, voucher_no=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?'
+    ).run(c.position, c.basic_salary, c.allowance, c.advance, c.deduction, c.net_salary, c.payment_mode, c.remarks, c.voucher_no, ex.id),
+});
+
+/**
+ * Production batch sync (upsert mode) — matches on batch_no, syncs header,
+ * replaces inputs/outputs children when the Excel batch differs.
+ */
+function importProductionBatchesSheet(db, data, { log }) {
+    const hr = findHeaderRow(data, ['batch no', 'batch_no', 'batch']);
+    if (hr < 0) return { ...newSheetResult(), note: 'No header row found' };
+    const noI = colIndex(data, hr, ['batch no', 'batch_no', 'batch']);
+    const dateI = colIndex(data, hr, ['date']);
+    const procI = colIndex(data, hr, ['process type', 'process']);
+    const costI = colIndex(data, hr, ['total cost', 'input cost']);
+    const noteI = colIndex(data, hr, ['yield note', 'notes', 'remarks']);
+
+    const byNo = new Map();
+    for (const r of db.prepare('SELECT * FROM production_batches').all()) byNo.set(normalize(r.batch_no || ''), r);
+    const res = newSheetResult();
+    const seen = new Set();
+
+    for (let i = hr + 1; i < data.length; i++) {
+        const row = data[i];
+        const bno = toStr(row && row[noI]).trim();
+        if (!bno) continue;
+        const key = normalize(bno);
+        if (seen.has(key)) { res.skipped++; continue; }
+        seen.add(key);
+        const date = toBSDate(row[dateI]) || (dateI >= 0 ? toBSDate(row[dateI]) : null);
+        if (!date) { res.skipped++; continue; }
+        const cand = {
+            batch_no: bno,
+            date,
+            process_type: toStr(procI >= 0 ? row[procI] : '').trim() || 'DIRECT_MIX',
+            total_cost: costI >= 0 ? toNum(row[costI]) : 0,
+            yield_note: noteI >= 0 ? toStr(row[noteI]).trim() : '',
+        };
+        const existing = byNo.get(key);
+        if (!existing) {
+            const info = db.prepare('INSERT INTO production_batches (batch_no, date, process_type, total_cost, yield_note, source) VALUES (?, ?, ?, ?, ?, \'excel\')')
+                .run(cand.batch_no, cand.date, cand.process_type, cand.total_cost, cand.yield_note);
+            res.added++;
+            byNo.set(key, { id: info.lastInsertRowid, ...cand });
+        } else if (rowDiffers(existing, cand)) {
+            db.prepare('UPDATE production_batches SET date=?, process_type=?, total_cost=?, yield_note=?, updated_at=datetime(\'now\',\'localtime\') WHERE id=?')
+                .run(cand.date, cand.process_type, cand.total_cost, cand.yield_note, existing.id);
+            res.updated++;
+        } else {
+            res.unchanged++;
+        }
+    }
+    log(`  ✅ Production batches: ${res.added} added, ${res.updated} updated, ${res.unchanged} unchanged`);
+    return res;
+}
+
 function importSettingsFromWorkbook(db, workbook, log) {
     const sheetName = workbook.SheetNames.find(n => n.toLowerCase() === 'settings');
     if (!sheetName) return;
@@ -2017,13 +2504,78 @@ function runExcelImport(db, excelPath, opts = {}) {
         }
     }
 
+    // ---- New datasets (all with ADD/UPDATE/UNCHANGED reporting; missing
+    // ---- sheets are reported explicitly, never silently ignored) ----
+    results.routes = absentSheetResult();
+    const routesSheet = sheet('Routes');
+    if (routesSheet) results.routes = importRoutesSheet(db, routesSheet, { mode, log });
+
+    results.rateChart = absentSheetResult();
+    const rateSheetNames = ['Milk_Rate_Chart', 'Milk_Rate', 'Rate_Chart'];
+    const rateSheetName = rateSheetNames.find((n) => workbook.SheetNames.includes(n));
+    if (rateSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[rateSheetName], { header: 1, defval: '' });
+        if (data.length > 1) results.rateChart = importRateChartSheet(db, data, { mode, log });
+    }
+
+    results.vehicleExpenses = absentSheetResult();
+    const vehSheetNames = ['Vehicle_Expenses', 'Vehicle Expenses'];
+    const vehSheetName = vehSheetNames.find((n) => workbook.SheetNames.includes(n));
+    if (vehSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[vehSheetName], { header: 1, defval: '' });
+        if (data.length > 1) results.vehicleExpenses = importVehicleExpensesSheet(db, data, { mode, log });
+    }
+
+    results.otherExpenses = absentSheetResult();
+    const othSheetNames = ['Other_Expenses', 'Other Expenses'];
+    const othSheetName = othSheetNames.find((n) => workbook.SheetNames.includes(n));
+    if (othSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[othSheetName], { header: 1, defval: '' });
+        if (data.length > 1) results.otherExpenses = importOtherExpensesSheet(db, data, { mode, log });
+    }
+
+    results.cashDeposits = absentSheetResult();
+    const depSheetNames = ['Cash_Deposits', 'Cash Deposits'];
+    const depSheetName = depSheetNames.find((n) => workbook.SheetNames.includes(n));
+    if (depSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[depSheetName], { header: 1, defval: '' });
+        if (data.length > 1) results.cashDeposits = importCashDepositsSheet(db, data, { mode, log });
+    }
+
+    results.partnerCapital = absentSheetResult();
+    const pcSheetNames = ['Partner_Capital', 'Partner Capital'];
+    const pcSheetName = pcSheetNames.find((n) => workbook.SheetNames.includes(n));
+    if (pcSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[pcSheetName], { header: 1, defval: '' });
+        if (data.length > 1) results.partnerCapital = importPartnerCapitalSheet(db, data, { mode, log });
+    }
+
+    results.salaryRecords = absentSheetResult();
+    const sal2Names = ['Salary_Records', 'Salary Records'];
+    const sal2Name = sal2Names.find((n) => workbook.SheetNames.includes(n));
+    if (sal2Name) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[sal2Name], { header: 1, defval: '' });
+        if (data.length > 1) results.salaryRecords = importSalaryRecordsSheet(db, data, { mode, log });
+    }
+
+    results.productionBatches = absentSheetResult();
+    const pbNames = ['Production_Batches', 'Production Batches'];
+    const pbName = pbNames.find((n) => workbook.SheetNames.includes(n));
+    if (pbName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[pbName], { header: 1, defval: '' });
+        if (data.length > 1) results.productionBatches = importProductionBatchesSheet(db, data, { mode, log });
+    }
+
     // Summary
     log('\n  ═══════════════════════════════════════════════════════');
     log('  📊 IMPORT SUMMARY');
     log('');
-    const tables = ['parties', 'products', 'sales', 'sales_items', 'purchases',
-        'purchase_items', 'payments', 'ledger_entries', 'stock_movements',
-        'petty_cash', 'bank_transactions', 'denomination_counts'];
+    const tables = ['parties', 'products', 'routes', 'milk_rate_chart', 'sales', 'sales_items',
+        'purchases', 'purchase_items', 'payments', 'ledger_entries', 'stock_movements',
+        'milk_lots', 'stock_lots', 'lot_consumptions', 'wastage_records',
+        'production_batches', 'production_inputs', 'production_outputs',
+        'petty_cash', 'bank_transactions', 'denomination_counts',
+        'salary_records', 'vehicle_expenses', 'other_expenses', 'cash_deposits', 'partner_capital'];
     results.tableCounts = {};
     for (const t of tables) {
         try {
@@ -2063,6 +2615,15 @@ module.exports = {
     importExcelFile,
     rebuildStockLedger,
     deriveShortfallBatches,
+    importRoutesSheet,
+    importRateChartSheet,
+    importVehicleExpensesSheet,
+    importOtherExpensesSheet,
+    importCashDepositsSheet,
+    importPartnerCapitalSheet,
+    importSalaryRecordsSheet,
+    importProductionBatchesSheet,
+    absentSheetResult,
     backfillMilkCollectionsFromPurchases,
     deriveProductionBatches,
     ensureRequiredEmployees,

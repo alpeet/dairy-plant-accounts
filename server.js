@@ -1595,6 +1595,70 @@ app.post('/api/production/process-types', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Production Costing — lots, FIFO COGS, NRV allocation, wastage,
+// reconciliation, batch margin. Reads are open to any signed-in
+// role; mutations need operator+. All guarded by lotTracked.
+// ──────────────────────────────────────────────────────────────
+app.post('/api/costing/lot-cutover', (req, res) => {
+    if (req.body && req.body.date) {
+        return res.json(safeRun(() => ops.setLotCutover(db, req.body.date)));
+    }
+    res.json(safeRun(() => ops.getLotCutover(db)));
+});
+
+app.post('/api/costing/milk-lots', (req, res) => {
+    res.json(safeRun(() => ops.getMilkLots(db, req.body || {})));
+});
+
+app.post('/api/costing/stock-lots', (req, res) => {
+    res.json(safeRun(() => ops.getStockLots(db, req.body || {})));
+});
+
+app.post('/api/costing/suggest-consumption', (req, res) => {
+    res.json(safeRun(() => ops.suggestMilkConsumption(db, req.body || {})));
+});
+
+app.post('/api/costing/preview-batch', (req, res) => {
+    res.json(safeRun(() => ops.previewBatchCosting(db, req.body || {})));
+});
+
+app.post('/api/costing/post-batch', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.postProductionBatch(db, req.body || {}, req.user?.id)));
+});
+
+app.post('/api/costing/reverse-batch', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.reverseProductionBatch(db, req.body.id, { reason: req.body.reason, userId: req.user?.id })));
+});
+
+app.post('/api/costing/expired-lots', (req, res) => {
+    res.json(safeRun(() => ops.getExpiredLots(db, req.body || {})));
+});
+
+app.post('/api/costing/write-off-expired', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.writeOffExpiredStock(db, { asOf: req.body?.asOf, reason: req.body?.reason, userId: req.user?.id })));
+});
+
+app.post('/api/costing/record-wastage', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.recordWastage(db, { ...req.body, userId: req.user?.id })));
+});
+
+app.post('/api/costing/wastage-report', (req, res) => {
+    res.json(safeRun(() => ops.getWastageReport(db, req.body || {})));
+});
+
+app.post('/api/costing/daily-reconciliation', (req, res) => {
+    res.json(safeRun(() => ops.getDailyReconciliation(db, req.body || {})));
+});
+
+app.post('/api/costing/batch-margin', (req, res) => {
+    res.json(safeRun(() => ops.getBatchMargin(db, req.body || {})));
+});
+
+app.post('/api/costing/opening-lots', requireRole('admin'), (req, res) => {
+    res.json(safeRun(() => ops.createOpeningStockLots(db, req.body || {}, req.user?.id)));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Partner Capital (accountant+ only — sensitive financial data)
 // ──────────────────────────────────────────────────────────────
 app.post('/api/partners/capital-list', requireRole('accountant'), (req, res) => {

@@ -130,6 +130,24 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     };
 
     const cogs = round2((expenses.milk_collection.total || 0) + (expenses.purchases.total || 0));
+    // Lot-basis COGS (FIFO actual cost of sold finished goods + wastage) is
+    // reported alongside the purchase-basis COGS once lot tracking has begun.
+    // It never changes the legacy figures — both bases stay visible.
+    let lotCogs = 0; let lotCogsAvailable = false;
+    try {
+        const costing = require('./production_costing');
+        const cut = costing.getLotCutover(db);
+        if (cut && cut <= to) {
+            const soldCogs = db.prepare(
+                "SELECT COALESCE(SUM(lc.total_cost), 0) c FROM lot_consumptions lc WHERE lc.reference_type = 'sale' AND lc.date BETWEEN ? AND ?"
+            ).get(cut > from ? cut : from, to).c;
+            const wastageCogs = db.prepare(
+                'SELECT COALESCE(SUM(total_cost), 0) c FROM wastage_records WHERE date BETWEEN ? AND ?'
+            ).get(cut > from ? cut : from, to).c;
+            lotCogs = round2(soldCogs + wastageCogs);
+            lotCogsAvailable = true;
+        }
+    } catch (e) { /* costing module not present */ }
     const operatingExpenses = round2(expenses.total_expenses - cogs);
     const grossProfit = round2(income.total_sales - cogs);
     const netProfit = round2(income.total_income - expenses.total_expenses);
@@ -140,8 +158,11 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         income,
         expenses,
         cogs,
+        lot_cogs: lotCogs,
+        lot_cogs_available: lotCogsAvailable,
         operating_expenses: operatingExpenses,
         gross_profit: grossProfit,
+        gross_profit_lot_basis: lotCogsAvailable ? round2(income.total_sales - lotCogs) : null,
         net_profit: netProfit,
         sales_count: totalSales.count,
         milk_collection_count: totalMilkCost.count,

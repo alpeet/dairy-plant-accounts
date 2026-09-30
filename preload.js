@@ -150,6 +150,23 @@ contextBridge.exposeInMainWorld('api', {
     deleteProductionBatch: (id) => ipcRenderer.invoke('db:production:delete', id),
     getProcessTypes: () => ipcRenderer.invoke('db:production:process-types'),
 
+    // Production Costing — lots, FIFO COGS, NRV, wastage, reconciliation
+    getLotCutover: () => ipcRenderer.invoke('db:costing:lot-cutover'),
+    setLotCutover: (date) => ipcRenderer.invoke('db:costing:lot-cutover', { date }),
+    getMilkLots: (opts) => ipcRenderer.invoke('db:costing:milk-lots', opts),
+    getStockLots: (opts) => ipcRenderer.invoke('db:costing:stock-lots', opts),
+    suggestMilkConsumption: (params) => ipcRenderer.invoke('db:costing:suggest-consumption', params),
+    previewBatchCosting: (data) => ipcRenderer.invoke('db:costing:preview-batch', data),
+    postProductionBatchCosted: (data) => ipcRenderer.invoke('db:costing:post-batch', data),
+    reverseProductionBatch: (id, reason) => ipcRenderer.invoke('db:costing:reverse-batch', { id, reason }),
+    getExpiredLots: (params) => ipcRenderer.invoke('db:costing:expired-lots', params),
+    writeOffExpiredStock: (params) => ipcRenderer.invoke('db:costing:write-off-expired', params),
+    recordWastage: (data) => ipcRenderer.invoke('db:costing:record-wastage', data),
+    getWastageReport: (opts) => ipcRenderer.invoke('db:costing:wastage-report', opts),
+    getDailyReconciliation: (opts) => ipcRenderer.invoke('db:costing:daily-reconciliation', opts),
+    getBatchMargin: (opts) => ipcRenderer.invoke('db:costing:batch-margin', opts),
+    createOpeningStockLots: (data) => ipcRenderer.invoke('db:costing:opening-lots', data),
+
     // Partner Capital
     getPartnerCapitalList: (opts) => ipcRenderer.invoke('db:partners:capital-list', opts),
     getPartnerCapital: (id) => ipcRenderer.invoke('db:partners:capital-get', id),

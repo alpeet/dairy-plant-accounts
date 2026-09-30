@@ -1085,6 +1085,63 @@ authHandle('db:production:process-types', async () => {
     return safeRun(() => ops.getProcessTypes(db));
 });
 
+// --- Production Costing (lots, FIFO COGS, NRV, wastage, reconciliation) ---
+authHandle('db:costing:lot-cutover', async (event, args = {}) => {
+    return safeRun(() => args && args.date ? ops.setLotCutover(db, args.date) : ops.getLotCutover(db));
+});
+
+authHandle('db:costing:milk-lots', async (event, params = {}) => {
+    return safeRun(() => ops.getMilkLots(db, params));
+});
+
+authHandle('db:costing:stock-lots', async (event, params = {}) => {
+    return safeRun(() => ops.getStockLots(db, params));
+});
+
+authHandle('db:costing:suggest-consumption', async (event, params = {}) => {
+    return safeRun(() => ops.suggestMilkConsumption(db, params));
+});
+
+authHandle('db:costing:preview-batch', async (event, data = {}) => {
+    return safeRun(() => ops.previewBatchCosting(db, data));
+});
+
+authHandle('db:costing:post-batch', async (event, data = {}) => {
+    return safeRun(() => ops.postProductionBatch(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:costing:reverse-batch', async (event, { id, reason } = {}) => {
+    return safeRun(() => ops.reverseProductionBatch(db, id, { reason, userId: currentUser && currentUser.id }));
+});
+
+authHandle('db:costing:expired-lots', async (event, params = {}) => {
+    return safeRun(() => ops.getExpiredLots(db, params));
+});
+
+authHandle('db:costing:write-off-expired', async (event, params = {}) => {
+    return safeRun(() => ops.writeOffExpiredStock(db, { ...params, userId: currentUser && currentUser.id }));
+});
+
+authHandle('db:costing:record-wastage', async (event, data = {}) => {
+    return safeRun(() => ops.recordWastage(db, { ...data, userId: currentUser && currentUser.id }));
+});
+
+authHandle('db:costing:wastage-report', async (event, params = {}) => {
+    return safeRun(() => ops.getWastageReport(db, params));
+});
+
+authHandle('db:costing:daily-reconciliation', async (event, params = {}) => {
+    return safeRun(() => ops.getDailyReconciliation(db, params));
+});
+
+authHandle('db:costing:batch-margin', async (event, params = {}) => {
+    return safeRun(() => ops.getBatchMargin(db, params));
+});
+
+authHandle('db:costing:opening-lots', async (event, data = {}) => {
+    return safeRun(() => ops.createOpeningStockLots(db, data, currentUser && currentUser.id));
+});
+
 // --- Partner Capital ---
 authHandle('db:partners:capital-list', async (event, params = {}) => {
     return safeRun(() => ops.listPartnerCapital(db, params));

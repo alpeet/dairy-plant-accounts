@@ -102,6 +102,9 @@ const { listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffecti
 const { listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes } = require('./production');
 const { listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance } = require('./partners');
 
+// ── Production Costing — lots, FIFO, NRV, real COGS ──
+const costing = require('./production_costing');
+
 // ── Bank Transactions ──
 const {
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
@@ -234,6 +237,28 @@ module.exports = {
 
     // Production
     listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes,
+
+    // Production Costing — raw-milk lots, finished-goods lots, FIFO COGS,
+    // NRV allocation, expiry/wastage, daily reconciliation, batch margin.
+    // lotTracked guards every entry point; before cutover it is all no-op/pass-through.
+    getLotCutover: costing.getLotCutover,
+    setLotCutover: costing.setLotCutover,
+    lotTracked: costing.lotTracked,
+    getMilkLots: costing.getMilkLots,
+    getStockLots: costing.getStockLots,
+    suggestMilkConsumption: costing.suggestMilkConsumption,
+    postProductionBatch: costing.postProductionBatch,
+    previewBatchCosting: costing.previewBatchCosting,
+    reverseProductionBatch: costing.reverseProductionBatch,
+    costSaleItem: costing.costSaleItem,
+    reverseSaleCosting: costing.reverseSaleCosting,
+    getExpiredLots: costing.getExpiredLots,
+    writeOffExpiredStock: costing.writeOffExpiredStock,
+    recordWastage: costing.recordWastage,
+    getWastageReport: costing.getWastageReport,
+    getDailyReconciliation: costing.getDailyReconciliation,
+    getBatchMargin: costing.getBatchMargin,
+    createOpeningStockLots: costing.createOpeningStockLots,
 
     // Partner Capital
     listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance,

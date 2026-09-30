@@ -10,6 +10,14 @@
 
 const { logAudit } = require('./audit');
 const { getSaleSettlements, paymentStatus, round2 } = require('./accounting');
+// Lot costing is optional at runtime (tables may pre-date migration 23).
+let _costing = null;
+function lotCosting() {
+    if (!_costing) {
+        try { _costing = require('./production_costing'); } catch (e) { _costing = null; }
+    }
+    return _costing;
+}
 
 /** Money modes a receipt can be recorded under. */
 const RECEIPT_MODES = ['cash', 'bank', 'upi', 'cheque'];
@@ -120,6 +128,12 @@ function saveSale(db, saleData) {
             const oldSale = db.prepare("SELECT * FROM sales WHERE id = ?").get(id);
             const oldItems = db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id);
 
+            // Restore the FIFO lot consumptions made by the old sale.
+            const costing = lotCosting();
+            if (costing && oldSale) {
+                try { costing.reverseSaleCosting(db, id); } catch (e) { /* pre-migration DB */ }
+            }
+
             // Reverse stock for old items (manual items without stock tracking are skipped)
             for (const item of oldItems) {
                 if (!item.product_id) continue;
@@ -174,8 +188,25 @@ function saveSale(db, saleData) {
             _clearSaleReceipts(db, id);
             _postSaleReceipt(db, id, { party_id, date, amount: paid_amount, mode: payment_mode, invoice_no });
 
+            // FIFO lot consumption for the new items (real COGS, oldest lots first).
+            let lotCogs = 0;
+            const costingUpd = lotCosting();
+            if (costingUpd) {
+                for (const item of items) {
+                    if (!item.product_id) continue;
+                    try {
+                        const c = costingUpd.costSaleItem(db, { saleId: id, product_id: item.product_id, quantity: item.quantity, date });
+                        lotCogs = round2(lotCogs + c.cogs);
+                    } catch (e) {
+                        if (/Insufficient lot stock|phantom stock/.test(e.message)) throw e;
+                        // pre-migration DB without lots: sale proceeds, cogs stays 0
+                    }
+                }
+                db.prepare('UPDATE sales SET lot_cogs = ? WHERE id = ?').run(lotCogs, id);
+            }
+
             logAudit(db, 'sales', id, 'update', oldSale, saleData, saleData.created_by);
-            return { id };
+            return { id, lot_cogs: lotCogs };
         } else {
             // ── New sale ──
             const result = db.prepare(
@@ -214,8 +245,24 @@ function saveSale(db, saleData) {
             // payment status is derived from transactions, not from a flag.
             _postSaleReceipt(db, saleId, { party_id, date, amount: paid_amount, mode: payment_mode, invoice_no });
 
+            // FIFO lot consumption (real COGS, oldest lots first).
+            let lotCogs = 0;
+            const costing = lotCosting();
+            if (costing) {
+                for (const item of items) {
+                    if (!item.product_id) continue;
+                    try {
+                        const c = costing.costSaleItem(db, { saleId, product_id: item.product_id, quantity: item.quantity, date });
+                        lotCogs = round2(lotCogs + c.cogs);
+                    } catch (e) {
+                        if (/Insufficient lot stock|phantom stock/.test(e.message)) throw e;
+                    }
+                }
+                db.prepare('UPDATE sales SET lot_cogs = ? WHERE id = ?').run(lotCogs, saleId);
+            }
+
             logAudit(db, 'sales', saleId, 'create', null, saleData, saleData.created_by);
-            return { id: saleId };
+            return { id: saleId, lot_cogs: lotCogs };
         }
     });
     return trx();
@@ -228,6 +275,12 @@ function deleteSale(db, id, changedBy = null) {
     const trx = db.transaction(() => {
         const sale = db.prepare("SELECT * FROM sales WHERE id = ?").get(id);
         const items = db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id);
+
+        // Restore FIFO lot consumptions before the stock movements are undone.
+        const costing = lotCosting();
+        if (costing && sale) {
+            try { costing.reverseSaleCosting(db, id); } catch (e) { /* pre-migration DB */ }
+        }
 
         // Reverse stock (manual items without stock tracking are skipped)
         for (const item of items) {

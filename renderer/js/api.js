@@ -232,6 +232,23 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         deleteProductionBatch: (id) => apiPost('/production/delete', { id }),
         getProcessTypes: () => apiPost('/production/process-types'),
 
+        // Production Costing — lots, FIFO COGS, NRV, wastage, reconciliation
+        getLotCutover: () => apiPost('/costing/lot-cutover'),
+        setLotCutover: (date) => apiPost('/costing/lot-cutover', { date }),
+        getMilkLots: (opts) => apiPost('/costing/milk-lots', opts || {}),
+        getStockLots: (opts) => apiPost('/costing/stock-lots', opts || {}),
+        suggestMilkConsumption: (params) => apiPost('/costing/suggest-consumption', params || {}),
+        previewBatchCosting: (data) => apiPost('/costing/preview-batch', data || {}),
+        postProductionBatchCosted: (data) => apiPost('/costing/post-batch', data || {}),
+        reverseProductionBatch: (id, reason) => apiPost('/costing/reverse-batch', { id, reason }),
+        getExpiredLots: (params) => apiPost('/costing/expired-lots', params || {}),
+        writeOffExpiredStock: (params) => apiPost('/costing/write-off-expired', params || {}),
+        recordWastage: (data) => apiPost('/costing/record-wastage', data || {}),
+        getWastageReport: (opts) => apiPost('/costing/wastage-report', opts || {}),
+        getDailyReconciliation: (opts) => apiPost('/costing/daily-reconciliation', opts || {}),
+        getBatchMargin: (opts) => apiPost('/costing/batch-margin', opts || {}),
+        createOpeningStockLots: (data) => apiPost('/costing/opening-lots', data || {}),
+
         // Partner Capital
         getPartnerCapitalList: (opts) => apiPost('/partners/capital-list', opts || {}),
         getPartnerCapital: (id) => apiPost('/partners/capital-get', { id }),

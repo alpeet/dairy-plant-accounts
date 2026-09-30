@@ -21,7 +21,7 @@ function getOrCreateRawMilkProduct(db, milkType) {
 
     // 1. Exact name match (case-insensitive), most stock history first
     const exact = db.prepare(
-        `SELECT id, rate FROM products
+        `SELECT id, name, rate FROM products
          WHERE LOWER(name) = LOWER(?)
          ORDER BY (SELECT COUNT(*) FROM stock_movements sm WHERE sm.product_id = products.id) DESC
          LIMIT 1`
@@ -38,12 +38,12 @@ function getOrCreateRawMilkProduct(db, milkType) {
          ORDER BY (SELECT COUNT(*) FROM stock_movements sm WHERE sm.product_id = products.id) DESC`
     ).all();
     const candidate = all.find(p => typePattern.test(String(p.name || '').toLowerCase()));
-    if (candidate) return { id: candidate.id, rate: candidate.rate };
+    if (candidate) return { id: candidate.id, name: candidate.name, rate: candidate.rate };
 
     // 3. Legacy fuzzy match for old generic raw-milk rows (untyped only)
     if (!isTyped) {
         const legacy = all.find(p => /raw\s*milk|milk\s*\(raw\)/.test(String(p.name || '').toLowerCase()));
-        if (legacy) return { id: legacy.id, rate: legacy.rate };
+        if (legacy) return { id: legacy.id, name: legacy.name, rate: legacy.rate };
     }
 
     // 4. Create the typed product
@@ -54,7 +54,7 @@ function getOrCreateRawMilkProduct(db, milkType) {
         "INSERT INTO products (name, unit, category, opening_stock, reorder_level, rate, notes) VALUES (?, 'liter', 'Milk', 0, 0, 60, ?)"
     ).run(productName, notes);
 
-    return { id: result.lastInsertRowid, rate: 60 };
+    return { id: result.lastInsertRowid, name: productName, rate: 60 };
 }
 
 /**
@@ -158,6 +158,13 @@ function saveMilkCollection(db, data) {
                 ).run(rawMilkProduct.id, date, newLiters, newBalance, rawMilkProduct.rate, collection_no, id);
             }
 
+            // Keep the raw-milk lot in step (lot layer ignores pre-cutover dates).
+            try {
+                const costing = require('./production_costing');
+                if (oldCollection) costing.deleteMilkLotByCollection(db, oldCollection.id);
+                costing.createMilkLot(db, db.prepare('SELECT * FROM milk_collections WHERE id = ?').get(id));
+            } catch (e) { /* lot tables not migrated yet or already consumed */ }
+
             logAudit(db, 'milk_collections', id, 'update', oldCollection, data, data.created_by);
             return { id };
         } else {
@@ -194,6 +201,11 @@ function saveMilkCollection(db, data) {
                 ).run(rawMilkProduct.id, date, newLiters, newBalance, rawMilkProduct.rate, collection_no, newId);
             }
 
+            // Raw-milk lot for FIFO costing (no-op before the lot cutover date).
+            try {
+                require('./production_costing').createMilkLot(db, db.prepare('SELECT * FROM milk_collections WHERE id = ?').get(newId));
+            } catch (e) { /* lot tables not migrated yet */ }
+
             logAudit(db, 'milk_collections', newId, 'create', null, data, data.created_by);
             return { id: newId };
         }
@@ -210,6 +222,11 @@ function deleteMilkCollection(db, id, changedBy = null) {
 
         // Remove ledger entry
         db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'milk_collection' AND reference_id = ?").run(id);
+
+        // Remove the lot (refuses if a batch already consumed it).
+        try { require('./production_costing').deleteMilkLotByCollection(db, id); } catch (e) {
+            throw new Error('Cannot delete this collection: ' + e.message);
+        }
 
         // Reverse stock
         if (collection && collection.quantity_liters > 0) {
