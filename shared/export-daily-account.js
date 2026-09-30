@@ -255,32 +255,35 @@ function exportToDailyAccountExcel(db, outputPath) {
         // ── Collection ────────────────────────────────────────
         const payments = db.prepare(`
             SELECT pm.date, pm.party_id, p.name as party_name, pm.type,
-                   pm.amount, pm.mode, pm.reference_type, pm.reference_id, pm.notes
+                   pm.transaction_type, pm.amount, pm.mode, pm.reference_type, pm.reference_id, pm.notes
             FROM payments pm
             LEFT JOIN parties p ON pm.party_id = p.id
             ORDER BY pm.date
         `).all();
 
         const collRows = [
-            ['', '', '', '', '', '', '', '', '', '', '', ''],
-            ['Date', '', 'Receipt No', 'Customer Name', 'Against Bill', 'Type', 'Opening Due', 'Collected', 'Paid', 'Payment Mode', 'Closing Due', 'REMARKS'],
+            ['', '', '', '', '', '', '', '', '', '', '', '', ''],
+            ['Date', '', 'Receipt No', 'Customer Name', 'Against Bill', 'Type', 'Opening Due', 'Collected', 'Paid', 'Payment Mode', 'Closing Due', 'Transaction Type', 'REMARKS'],
         ];
         for (const pm of payments) {
             const payType = pm.type === 'receipt' ? 'Collection' : pm.type === 'payment' ? 'Payment' : 'Advance';
-            const collected = pm.type === 'receipt' ? pm.amount : 0;
+            const collected = (pm.type === 'receipt' || pm.type === 'advance') && pm.transaction_type !== 'loan_received' ? pm.amount : 0;
             const paid = pm.type === 'payment' ? pm.amount : 0;
+            // Loan received brings money in — show it in the Collected column
+            // with its type so readers see it is NOT income.
+            const collectedFinal = pm.transaction_type === 'loan_received' ? pm.amount : collected;
             collRows.push([
                 dateStr(pm.date), '',
                 pm.reference_id || '', pm.party_name || '',
-                pm.reference_type || '', payType, '', collected, paid,
-                pm.mode || 'cash', '', pm.notes || ''
+                pm.reference_type || '', payType, '', collectedFinal, paid,
+                pm.mode || 'cash', '', pm.transaction_type || '', pm.notes || ''
             ]);
         }
         // Add total row
-        const totalCollected = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
+        const totalCollected = payments.filter(p => p.type === 'receipt' || p.transaction_type === 'loan_received').reduce((s, p) => s + (p.amount || 0), 0);
         const totalPaid = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
-        collRows.push(['', '', '', '', '', '', '', '', '', '', '', '']);
-        collRows.push(['', '', '', 'TOTALS', '', '0', '', totalCollected, totalPaid, '', '', '']);
+        collRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '']);
+        collRows.push(['', '', '', 'TOTALS', '', '0', '', totalCollected, totalPaid, '', '', '', '']);
 
         const wsCollection = XLSX.utils.aoa_to_sheet(collRows);
         wsCollection['!cols'] = [

@@ -44,7 +44,8 @@ const {
 } = require('./farmer');
 
 const {
-    savePayment, listPayments, deletePayment, updatePayment
+    savePayment, listPayments, deletePayment, updatePayment,
+    postPaymentLedger, normalizeTransactionType
 } = require('./payments');
 
 const {
@@ -160,6 +161,7 @@ module.exports = {
 
     // Payments
     savePayment, listPayments, deletePayment, updatePayment,
+    postPaymentLedger, normalizeTransactionType,
 
     // Reports
     getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,
@@ -289,6 +291,9 @@ module.exports = {
     getCashBankPosition: accounting.getCashBankPosition,
     getExpenseSummary: accounting.getExpenseSummary,
     getReconciliation: accounting.getReconciliation,
+    getPaymentPostingRule: accounting.getPaymentPostingRule,
+    getLoanAdvanceBalances: accounting.getLoanAdvanceBalances,
+    TRANSACTION_TYPES: accounting.TRANSACTION_TYPES,
 
     // Bulk (date-wise) entry — Mode B data entry. Every row reuses
     // saveMilkCollection/savePurchase/saveSale, so validation, ledger, stock,

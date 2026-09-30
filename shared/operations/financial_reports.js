@@ -87,6 +87,9 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     const totalSalary = { total: opEx.salary, count: 0 };
     const totalVehicle = { total: opEx.vehicle_expenses, count: 0 };
     const totalBankExpenses = { total: opEx.bank_expenses, count: opEx.bank_expense_rows.length };
+    // Typed payments that ARE genuine expenses (actual_expense +
+    // advance_adjustment). Advances/loans/repayments never appear here.
+    const totalTypedExpenses = { total: opEx.typed_payment_expenses || 0, count: opEx.typed_payment_expense_count || 0 };
 
     // Cash payments made (to suppliers/farmers) — reference only (cash flow),
     // NOT P&L expense: purchases are already expensed at invoice value.
@@ -98,6 +101,21 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
 
     // Other income rows (category 'Income' in the Expenses register)
     const totalOtherIncome = { total: opEx.other_income, count: 0 };
+
+    // Balance-sheet movements (advances, loans, repayments) — NEVER P&L.
+    // Reported for cash-flow transparency only, exactly like supplier cash
+    // payments above. Actual expenses typed at entry DO reach the expense
+    // summary below; these lines can never reach income or expense totals.
+    const bsMovements = db.prepare(`
+        SELECT transaction_type, type,
+               COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM payments
+        WHERE date >= ? AND date <= ?
+          AND transaction_type IN ('advance', 'loan_given', 'loan_received', 'loan_repayment')
+        GROUP BY transaction_type, type
+    `).all(from, to);
+    const bsTotal = (tt) => round2(bsMovements.filter(r => r.transaction_type === tt).reduce((s, r) => s + (Number(r.total) || 0), 0));
+    const bsCount = (tt) => bsMovements.filter(r => r.transaction_type === tt).reduce((s, r) => s + (Number(r.count) || 0), 0);
 
     // ── Build income breakdown ──
     // Receipts are shown for reference (cash flow) but excluded from income —
@@ -123,10 +141,19 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         vehicle_expenses: { total: totalVehicle.total, count: totalVehicle.count },
         bank_expenses: { total: totalBankExpenses.total, count: totalBankExpenses.count },
         cash_payments: { total: totalCashPayments.total, count: totalCashPayments.count },
+        typed_payment_expenses: totalTypedExpenses,
         total_expenses: totalMilkCost.total + totalPurchases.total +
                        totalOtherExpenses.total +
                        totalPettyCash.total + totalSalary.total + totalVehicle.total +
-                       totalBankExpenses.total
+                       totalBankExpenses.total + totalTypedExpenses.total
+    };
+
+    // Balance-sheet movements — reference only, outside every P&L total.
+    const balance_sheet_movements = {
+        advances_paid: { total: bsTotal('advance'), count: bsCount('advance') },
+        loans_given: { total: bsTotal('loan_given'), count: bsCount('loan_given') },
+        loans_received: { total: bsTotal('loan_received'), count: bsCount('loan_received') },
+        loan_repayments: { total: bsTotal('loan_repayment'), count: bsCount('loan_repayment') }
     };
 
     const cogs = round2((expenses.milk_collection.total || 0) + (expenses.purchases.total || 0));
@@ -157,6 +184,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         to_date: to,
         income,
         expenses,
+        balance_sheet_movements,
         cogs,
         lot_cogs: lotCogs,
         lot_cogs_available: lotCogsAvailable,

@@ -97,8 +97,28 @@ const ACCOUNT = {
     MILK_PURCHASE: 'Milk Purchase (COGS)',
     EXPENSE: 'Office / Operating Expense',
     ADJUSTMENT: 'Opening / Adjustment',
-    SUSPENSE: 'Suspense / Unclassified'
+    SUSPENSE: 'Suspense / Unclassified',
+    ADVANCE_RECEIVABLE: 'Advance Receivable',
+    LOAN_RECEIVABLE: 'Loan / Sapati Receivable',
+    LOAN_PAYABLE: 'Loan / Sapati Payable'
 };
+
+/**
+ * Payment transaction types (payments.transaction_type).
+ * Payment does not automatically mean expense — the type decides whether the
+ * money is a P&L event or a balance-sheet (receivable/payable) movement.
+ */
+const TRANSACTION_TYPES = {
+    ACTUAL_EXPENSE: 'actual_expense',
+    ADVANCE: 'advance',
+    LOAN_GIVEN: 'loan_given',
+    LOAN_RECEIVED: 'loan_received',
+    LOAN_REPAYMENT: 'loan_repayment',
+    ADVANCE_ADJUSTMENT: 'advance_adjustment',
+    SETTLEMENT: 'settlement',
+    OTHER: 'other'
+};
+const TRANSACTION_TYPE_VALUES = Object.values(TRANSACTION_TYPES);
 
 /**
  * Map a document/transaction to its double-entry accounts.
@@ -723,8 +743,18 @@ function getExpenseSummary(db, opts = {}) {
     }
     const bankExpenseTotal = round2(extraBankExpenses.reduce((s, r) => s + r.amount, 0));
 
+    // Typed payments that ARE genuine P&L expenses: actual_expense (rent,
+    // salary, electricity paid as a payment) and advance_adjustment (an
+    // advance consumed by a real expense). Advances and loans never count —
+    // payment does not automatically mean expense.
+    const typedExpenses = db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM payments
+        WHERE date >= ? AND date <= ? AND transaction_type IN ('actual_expense', 'advance_adjustment')
+    `).get(...p);
+
     const operating = round2(
         (otherExpenses.total - otherIncome.total) + petty.total + salary.total + vehicle.total + bankExpenseTotal
+        + typedExpenses.total
     );
 
     return {
@@ -734,6 +764,8 @@ function getExpenseSummary(db, opts = {}) {
         salary: round2(salary.total),
         vehicle_expenses: round2(vehicle.total),
         bank_expenses: bankExpenseTotal,
+        typed_payment_expenses: round2(typedExpenses.total),
+        typed_payment_expense_count: typedExpenses.count,
         bank_expense_rows: extraBankExpenses.map(r => ({
             id: r.id, date: r.date, reference_no: r.reference_no, description: r.description, amount: r.amount
         })),
@@ -876,11 +908,84 @@ function getReconciliation(db, opts = {}) {
     };
 }
 
+/**
+ * Double-entry rule for a payment row by transaction_type.
+ * Returns null for legacy/untyped rows — they keep their historical
+ * settlement treatment (receipt→receivable, payment→payable).
+ *
+ * Rules (master spec):
+ *   advance            Cash/Bank CR, Advance Receivable DR — never P&L
+ *   loan_given         Cash/Bank CR, Loan Receivable DR — never P&L
+ *   loan_received      Cash/Bank DR, Loan Payable CR — never income
+ *   loan_repayment     receiving: Cash DR / Loan Receivable CR;
+ *                      repaying:  Loan Payable DR / Cash-Bank CR — never P&L
+ *   advance_adjustment Advance Receivable CR / (Expense or Purchase) DR —
+ *                      only the underlying expense/purchase hits P&L
+ *   actual_expense     Expense DR / Cash-Bank CR
+ */
+function getPaymentPostingRule(t = {}) {
+    const tt = String(t.transaction_type || '').toLowerCase();
+    const money = String(t.mode || '').toLowerCase() === 'cash' ? ACCOUNT.CASH : ACCOUNT.BANK;
+    switch (tt) {
+        case TRANSACTION_TYPES.ACTUAL_EXPENSE:
+            return { kind: 'expense', debit_account: ACCOUNT.EXPENSE, credit_account: money, pnl: 'expense' };
+        case TRANSACTION_TYPES.ADVANCE:
+            return { kind: 'advance_receivable', debit_account: ACCOUNT.ADVANCE_RECEIVABLE, credit_account: money, pnl: null };
+        case TRANSACTION_TYPES.LOAN_GIVEN:
+            return { kind: 'loan_receivable', debit_account: ACCOUNT.LOAN_RECEIVABLE, credit_account: money, pnl: null };
+        case TRANSACTION_TYPES.LOAN_RECEIVED:
+            return { kind: 'loan_payable', debit_account: money, credit_account: ACCOUNT.LOAN_PAYABLE, pnl: null };
+        case TRANSACTION_TYPES.LOAN_REPAYMENT:
+            // direction 'in' = we receive repayment; 'out' (default) = we repay
+            return String(t.direction).toLowerCase() === 'in'
+                ? { kind: 'loan_receive_repayment', debit_account: money, credit_account: ACCOUNT.LOAN_RECEIVABLE, pnl: null }
+                : { kind: 'loan_repay', debit_account: ACCOUNT.LOAN_PAYABLE, credit_account: money, pnl: null };
+        case TRANSACTION_TYPES.ADVANCE_ADJUSTMENT:
+            // The advance is consumed by a real expense: Advance Receivable CR
+            // (it reduces) and the underlying Expense/Purchase DR hits P&L.
+            // No cash moves — the money left at advance time.
+            return { kind: 'advance_adjustment', debit_account: ACCOUNT.EXPENSE, credit_account: ACCOUNT.ADVANCE_RECEIVABLE, pnl: 'expense' };
+        case TRANSACTION_TYPES.SETTLEMENT:
+            return null; // ordinary receivable/payable settlement
+        case TRANSACTION_TYPES.OTHER:
+            return null;
+        default:
+            return null;
+    }
+}
+
+/**
+ * Loan & advance balances (balance sheet) as of a date.
+ * Reads ledger_entries by account-tagged descriptions written by savePayment
+ * ('[Advance Receivable]', '[Loan / Sapati Receivable]', '[Loan / Sapati Payable]').
+ */
+function getLoanAdvanceBalances(db, { as_of } = {}) {
+    const tagMap = {
+        [ACCOUNT.ADVANCE_RECEIVABLE]: 'advance_receivable',
+        [ACCOUNT.LOAN_RECEIVABLE]: 'loan_receivable',
+        [ACCOUNT.LOAN_PAYABLE]: 'loan_payable'
+    };
+    const where = as_of ? "AND date <= ?" : "";
+    const params = as_of ? [as_of] : [];
+    const out = { advance_receivable: 0, loan_receivable: 0, loan_payable: 0 };
+    for (const [tag, key] of Object.entries(tagMap)) {
+        const rows = db.prepare(`
+            SELECT debit, credit FROM ledger_entries
+            WHERE description LIKE ? ${where}
+        `).all(`%[${tag}]%`, ...params);
+        out[key] = round2(rows.reduce((s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0), 0));
+    }
+    // Loan payable is a credit-natured account: report its balance positively.
+    out.loan_payable = round2(-out.loan_payable);
+    return out;
+}
+
 module.exports = {
     // money
     round2, moneyEq, moneyGte, CURRENCY_TOLERANCE, paymentStatus,
     // accounts
-    ACCOUNT, classifyTransaction,
+    ACCOUNT, TRANSACTION_TYPES, TRANSACTION_TYPE_VALUES, classifyTransaction, getPaymentPostingRule,
+    getLoanAdvanceBalances,
     // milk / purchases
     getMilkCostSummary, detectMilkLine,
     // bank classification

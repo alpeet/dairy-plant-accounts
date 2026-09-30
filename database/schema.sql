@@ -287,6 +287,7 @@ CREATE TABLE IF NOT EXISTS payments (
     party_id INTEGER NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
     type TEXT NOT NULL CHECK(type IN ('receipt', 'payment', 'advance')),
+    transaction_type TEXT DEFAULT NULL,
     amount REAL NOT NULL DEFAULT 0.0,
     mode TEXT DEFAULT 'cash' CHECK(mode IN ('cash', 'bank', 'upi', 'cheque')),
     reference_type TEXT DEFAULT '',

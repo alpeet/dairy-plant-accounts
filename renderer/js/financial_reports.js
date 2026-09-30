@@ -862,18 +862,25 @@ async function showCashCollectionPage() {
                 <span style="font-size:16px">💳</span>
                 <h3 style="font-size:15px;font-weight:700;margin:0">Payment Records</h3>
                 <span style="font-size:11px;background:var(--bg);color:var(--text-light);padding:2px 8px;border-radius:4px">${data.payment_records.length} payment(s)</span>
+                <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="showPaymentEntryForm()">+ New Payment / Receipt</button>
             </div>
             <div class="table-container">
                 <table>
-                    <thead><tr><th>Date</th><th>Party</th><th>Type</th><th class="text-right">Amount</th><th>Mode</th><th>Reference</th><th>Notes</th><th class="actions" style="min-width:130px">Actions</th></tr></thead>
+                    <thead><tr><th>Date</th><th>Party</th><th>Type</th><th>Transaction</th><th class="text-right">Amount</th><th>Mode</th><th>Reference</th><th>Notes</th><th class="actions" style="min-width:130px">Actions</th></tr></thead>
                     <tbody>
                         ${data.payment_records.map(p => {
                             const typeIcon = p.type === 'receipt' ? '📩' : '💸';
                             const typeLabel = p.type === 'receipt' ? 'Receipt' : 'Payment';
+                            const ttLabels = {
+                                actual_expense: '💰 Actual Expense', advance: '📥 Advance', loan_given: '🤝 Loan Given',
+                                loan_received: '🏦 Loan Received', loan_repayment: '🔁 Loan Repayment',
+                                advance_adjustment: '⚡ Advance Adjustment', settlement: '✓ Settlement', other: '… Other'
+                            };
                             return `<tr>
                                 <td>${formatDate(p.date)}</td>
                                 <td style="font-size:12px"><strong>${escapeHtml(p.party_name || 'Unknown')}</strong></td>
                                 <td><span class="badge ${p.type === 'receipt' ? 'badge-success' : 'badge-danger'}">${typeIcon} ${typeLabel}</span></td>
+                                <td style="font-size:11px">${p.transaction_type ? (ttLabels[p.transaction_type] || escapeHtml(p.transaction_type)) : '<span style="color:var(--text-light)">—</span>'}</td>
                                 <td class="text-right" style="font-weight:600;color:${p.type === 'receipt' ? 'var(--accent)' : 'var(--danger)'}">${formatCurrency(p.amount)}</td>
                                 <td style="font-size:12px">${statusBadge(p.mode)}</td>
                                 <td style="font-size:11px;color:var(--text-light)">${p.reference_type ? escapeHtml(p.reference_type) + (p.reference_id ? ' #' + p.reference_id : '') : '-'}</td>
@@ -1262,11 +1269,25 @@ async function editPaymentRecord(id) {
                 </div>
             </div>
             <div class="form-group">
+                <label>Transaction Type (re-posts the accounting)</label>
+                <select class="form-control" id="editPayType">
+                    <option value="" ${!p.transaction_type ? 'selected' : ''}>— Settlement (legacy)</option>
+                    <option value="actual_expense" ${p.transaction_type === 'actual_expense' ? 'selected' : ''}>💰 Actual Expense</option>
+                    <option value="advance" ${p.transaction_type === 'advance' ? 'selected' : ''}>📥 Advance Payment</option>
+                    <option value="loan_given" ${p.transaction_type === 'loan_given' ? 'selected' : ''}>🤝 Loan / Sapati Given</option>
+                    <option value="loan_received" ${p.transaction_type === 'loan_received' ? 'selected' : ''}>🏦 Loan / Sapati Received</option>
+                    <option value="loan_repayment" ${p.transaction_type === 'loan_repayment' ? 'selected' : ''}>🔁 Loan / Sapati Repayment</option>
+                    <option value="advance_adjustment" ${p.transaction_type === 'advance_adjustment' ? 'selected' : ''}>⚡ Advance Adjustment</option>
+                    <option value="settlement" ${p.transaction_type === 'settlement' ? 'selected' : ''}>✓ Settlement</option>
+                    <option value="other" ${p.transaction_type === 'other' ? 'selected' : ''}>… Other</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label>Notes</label>
                 <textarea class="form-control" id="editPayNotes" rows="2">${escapeHtml(p.notes || '')}</textarea>
             </div>
             <div style="background:var(--bg);padding:10px;border-radius:6px;font-size:12px;color:var(--text-light)">
-                ℹ️ Type and amount cannot be changed. Edit only date, mode, and notes.
+                ℹ️ Amount cannot be changed. Changing the transaction type re-posts the ledger entry automatically.
             </div>
         </div>
         <div class="modal-footer">
@@ -1287,8 +1308,10 @@ async function savePaymentRecordEdit() {
         id: parseInt(id),
         date: document.getElementById('editPayDate')?.value || '',
         mode: document.getElementById('editPayMode')?.value || 'cash',
+        transaction_type: document.getElementById('editPayType')?.value || '',
         notes: document.getElementById('editPayNotes')?.value || ''
     };
+    if (data.transaction_type === '') data.transaction_type = null;
 
     if (!data.date) { showToast('Date is required', 'error'); return; }
 
@@ -1335,6 +1358,136 @@ async function renderFinancialReports() {
     await showProfitLoss();
 }
 
+// ============================================================
+// Payment / Receipt Entry with transaction-type accounting (§7)
+// Payment does not automatically mean expense — the selected type
+// decides whether this is a P&L event or a balance-sheet movement.
+// ============================================================
+const PAYMENT_TYPE_TREATMENTS = {
+    actual_expense:    { dir: 'out', label: '💰 Actual Expense',      treat: 'P&L expense — reduces profit',          pnl: true },
+    advance:           { dir: 'out', label: '📥 Advance Payment',    treat: 'Balance sheet — Advance Receivable ↑, no P&L effect', pnl: false },
+    loan_given:        { dir: 'out', label: '🤝 Loan / Sapati Given', treat: 'Balance sheet — Loan Receivable ↑, no P&L effect', pnl: false },
+    loan_received:     { dir: 'in',  label: '🏦 Loan / Sapati Received', treat: 'Balance sheet — Loan Payable ↑, NOT income', pnl: false },
+    loan_repayment:    { dir: 'out', label: '🔁 Loan Repayment (we repay)', treat: 'Balance sheet — Loan Payable ↓, no P&L effect (interest only if typed as expense)', pnl: false },
+    advance_adjustment:{ dir: 'out', label: '⚡ Advance Adjustment', treat: 'P&L expense now — Advance Receivable ↓ (actual usage recognised)', pnl: true }
+};
+
+function showPaymentEntryForm() {
+    const parties = window._finLastData && window._finLastData.payment_records
+        ? [] : []; // parties loaded fresh below
+    showModal(`
+        <div class="modal-header">
+            <h2>💳 New Payment / Receipt</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Transaction Type *</label>
+                    <select class="form-control" id="payEntryType" onchange="updatePaymentTypeTreatment()">
+                        <option value="actual_expense">💰 Actual Expense (rent, salary, electricity…)</option>
+                        <option value="advance">📥 Advance Payment (to supplier/party)</option>
+                        <option value="loan_given">🤝 Loan / Sapati Given</option>
+                        <option value="loan_received">🏦 Loan / Sapati Received</option>
+                        <option value="loan_repayment">🔁 Loan / Sapati Repayment (we repay)</option>
+                        <option value="advance_adjustment">⚡ Advance Adjustment (advance used for expense)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Date *</label>
+                    <input type="date" class="form-control" id="payEntryDate" value="${today()}">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Party *</label>
+                    <input type="text" class="form-control" id="payEntryParty" placeholder="Start typing a name…" list="payEntryPartyList" autocomplete="off">
+                    <datalist id="payEntryPartyList"></datalist>
+                </div>
+                <div class="form-group">
+                    <label>Amount (Rs) *</label>
+                    <input type="number" class="form-control" id="payEntryAmount" min="0.01" step="0.01" oninput="updatePaymentTypeTreatment()">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Mode *</label>
+                    <select class="form-control" id="payEntryMode">
+                        <option value="cash">💵 Cash</option>
+                        <option value="bank">🏦 Bank</option>
+                        <option value="upi">📱 UPI</option>
+                        <option value="cheque">📄 Cheque</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes</label>
+                    <input type="text" class="form-control" id="payEntryNotes" placeholder="reference, description…">
+                </div>
+            </div>
+            <div id="payEntryTreatment" style="margin-top:8px;padding:10px 14px;background:var(--bg);border-radius:6px;font-size:13px"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitPaymentEntry()">💾 Save</button>
+        </div>
+    `);
+
+    // Load parties for the autocomplete
+    window.api.getParties({}).then(r => {
+        const parties = r.success ? (r.data || []) : [];
+        const dl = document.getElementById('payEntryPartyList');
+        if (dl) dl.innerHTML = parties.map(p => `<option value="${escapeHtml(p.name)}">`).join('');
+        window._payEntryParties = parties;
+    });
+    updatePaymentTypeTreatment();
+}
+
+function updatePaymentTypeTreatment() {
+    const t = document.getElementById('payEntryType')?.value || 'actual_expense';
+    const info = PAYMENT_TYPE_TREATMENTS[t] || {};
+    const box = document.getElementById('payEntryTreatment');
+    if (!box || !info.label) return;
+    const amount = parseFloat(document.getElementById('payEntryAmount')?.value || 0);
+    const dir = info.dir === 'in' ? 'Cash/Bank +' : 'Cash/Bank −';
+    box.innerHTML = `
+        <strong>${info.label}</strong> — ${escapeHtml(info.treat)}<br>
+        <span style="color:var(--text-light)">${dir} ${formatCurrency(amount)} · ${info.pnl ? 'P&L: recognised' : 'P&L: Rs 0 (balance-sheet movement)'}</span>`;
+}
+
+async function submitPaymentEntry() {
+    const typeName = document.getElementById('payEntryType')?.value || 'actual_expense';
+    const date = document.getElementById('payEntryDate')?.value || '';
+    const partyName = (document.getElementById('payEntryParty')?.value || '').trim();
+    const amount = parseFloat(document.getElementById('payEntryAmount')?.value || 0);
+    if (!date) { showToast('Date is required', 'error'); return; }
+    if (!partyName) { showToast('Party is required', 'error'); return; }
+    if (!(amount > 0)) { showToast('Amount must be greater than zero', 'error'); return; }
+
+    const parties = window._payEntryParties || [];
+    const party = parties.find(p => p.name.toLowerCase() === partyName.toLowerCase());
+    if (!party) { showToast('Unknown party — pick from the list', 'error'); return; }
+
+    // Direction: loan_received brings money IN; everything else in the
+    // selector pays money OUT.
+    const dir = (PAYMENT_TYPE_TREATMENTS[typeName] || {}).dir === 'in' ? 'in' : 'out';
+    const type = dir === 'in' ? 'receipt' : 'payment';
+
+    const result = await window.api.savePayment({
+        party_id: party.id, date, type,
+        transaction_type: typeName,
+        amount, mode: document.getElementById('payEntryMode')?.value || 'cash',
+        notes: document.getElementById('payEntryNotes')?.value || ''
+    });
+    if (result.success) {
+        closeModal();
+        const info = PAYMENT_TYPE_TREATMENTS[typeName];
+        showToast(info && !info.pnl ? 'Saved — balance-sheet movement (no P&L effect)' : 'Saved', 'success');
+        applyCashCollectionPage();
+    } else {
+        showToast(result.error || 'Failed to save payment', 'error');
+    }
+}
+
 // Globals
 window.renderFinancialReports = renderFinancialReports;
 window.showProfitLoss = showProfitLoss;
@@ -1367,3 +1520,6 @@ window.viewPaymentRecord = viewPaymentRecord;
 window.editPaymentRecord = editPaymentRecord;
 window.savePaymentRecordEdit = savePaymentRecordEdit;
 window.deletePaymentRecord = deletePaymentRecord;
+window.showPaymentEntryForm = showPaymentEntryForm;
+window.updatePaymentTypeTreatment = updatePaymentTypeTreatment;
+window.submitPaymentEntry = submitPaymentEntry;

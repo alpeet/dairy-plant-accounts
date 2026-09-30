@@ -257,6 +257,10 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         loadBulkPurchases: (params) => apiPost('/bulk/load-purchases', params || {}),
         loadBulkSales: (params) => apiPost('/bulk/load-sales', params || {}),
 
+        // Payment accounting by transaction type
+        getPaymentTransactionTypes: () => apiPost('/payments/transaction-types'),
+        getLoanAdvanceBalances: (params) => apiPost('/payments/loan-advance-balances', params || {}),
+
         // Partner Capital
         getPartnerCapitalList: (opts) => apiPost('/partners/capital-list', opts || {}),
         getPartnerCapital: (id) => apiPost('/partners/capital-get', { id }),

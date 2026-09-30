@@ -175,6 +175,10 @@ contextBridge.exposeInMainWorld('api', {
     loadBulkPurchases: (params) => ipcRenderer.invoke('db:bulk:load-purchases', params),
     loadBulkSales: (params) => ipcRenderer.invoke('db:bulk:load-sales', params),
 
+    // Payment accounting by transaction type
+    getPaymentTransactionTypes: () => ipcRenderer.invoke('db:payments:transaction-types'),
+    getLoanAdvanceBalances: (params) => ipcRenderer.invoke('db:payments:loan-advance-balances', params),
+
     // Partner Capital
     getPartnerCapitalList: (opts) => ipcRenderer.invoke('db:partners:capital-list', opts),
     getPartnerCapital: (id) => ipcRenderer.invoke('db:partners:capital-get', id),

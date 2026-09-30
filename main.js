@@ -1167,6 +1167,15 @@ authHandle('db:bulk:load-sales', async (event, params = {}) => {
     return safeRun(() => ops.loadBulkSales(db, params));
 });
 
+// --- Payment accounting by transaction type ---
+authHandle('db:payments:transaction-types', async () => {
+    return safeRun(() => ops.TRANSACTION_TYPES);
+});
+
+authHandle('db:payments:loan-advance-balances', async (event, params = {}) => {
+    return safeRun(() => ops.getLoanAdvanceBalances(db, params));
+});
+
 // --- Partner Capital ---
 authHandle('db:partners:capital-list', async (event, params = {}) => {
     return safeRun(() => ops.listPartnerCapital(db, params));

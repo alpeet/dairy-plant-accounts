@@ -1687,6 +1687,15 @@ app.post('/api/bulk/load-purchases', (req, res) => {
     res.json(safeRun(() => ops.loadBulkPurchases(db, req.body || {})));
 });
 
+// ── Payment accounting by transaction type (advances/loans never hit P&L) ──
+app.post('/api/payments/transaction-types', (req, res) => {
+    res.json(safeRun(() => ops.TRANSACTION_TYPES));
+});
+
+app.post('/api/payments/loan-advance-balances', (req, res) => {
+    res.json(safeRun(() => ops.getLoanAdvanceBalances(db, req.body || {})));
+});
+
 // ──────────────────────────────────────────────────────────────
 // Partner Capital (accountant+ only — sensitive financial data)
 // ──────────────────────────────────────────────────────────────

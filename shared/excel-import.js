@@ -1078,8 +1078,8 @@ function importCollections(db, sheetData, opts) {
         SELECT id FROM payments WHERE party_id = ? AND date = ? AND type = ? AND ABS(amount - ?) < 0.01
     `);
     const insertPayment = db.prepare(`
-        INSERT INTO payments (party_id, date, type, amount, mode, reference_type, reference_id, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, reference_id, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     // Upsert mode: new payments get a matching payment_received ledger entry.
     const insertLedger = opts.genLedger ? db.prepare(`
@@ -1088,9 +1088,11 @@ function importCollections(db, sheetData, opts) {
     `) : null;
 
     // Col: 0=Date, 1=AD Date, 2=Receipt No, 3=Customer, 4=Against Bill, 5=Type,
-    // 6=Opening Due, 7=Collected, 8=Paid, 9=Mode, 10=Closing Due, 11=Remarks
+    // 6=Opening Due, 7=Collected, 8=Paid, 9=Mode, 10=Closing Due, 11=Transaction Type, 12=Remarks
+    // (Col 11 is the transaction_type added by the exporter; legacy books have
+    // remarks there — legacy rows import untyped, which stays correct.)
     const dateIdx = 0, adDateIdx = 1, recIdx = 2, custIdx = 3, billIdx = 4, typeIdx = 5,
-          collectedIdx = 7, paidIdx = 8, modeIdx = 9, remarkIdx = 11;
+          collectedIdx = 7, paidIdx = 8, modeIdx = 9, transTypeIdx = 11, remarkIdx = 11;
 
     let inserted = 0, unchanged = 0, skipped = 0;
     const now = new Date().toISOString();
@@ -1123,12 +1125,19 @@ function importCollections(db, sheetData, opts) {
             const receiptNo = toNum(row[recIdx]) > 0 ? String(toNum(row[recIdx])) : '';
             const againstBill = toStr(row[billIdx]);
             const mode = mapPaymentMode(toStr(row[modeIdx]));
-            const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${toStr(row[remarkIdx])}`;
+            // Preserve the selected transaction type across the round-trip
+            // (advance / loan_given / loan_received / loan_repayment / …).
+            const rawTransType = toStr(row[transTypeIdx]).trim().toLowerCase().replace(/[\s-]+/g, '_');
+            const KNOWN_TT = new Set(['actual_expense', 'advance', 'loan_given', 'loan_received',
+                'loan_repayment', 'advance_adjustment', 'settlement', 'other']);
+            const transactionType = KNOWN_TT.has(rawTransType) ? rawTransType : null;
+            const remarksSource = KNOWN_TT.has(rawTransType) ? toStr(row[remarkIdx + 1]) : toStr(row[remarkIdx]);
+            const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${remarksSource}`;
 
             const existing = findPayment.get(partyId, bsDate, payType, amount);
             if (existing) { unchanged++; continue; }
 
-            insertPayment.run(partyId, bsDate, payType, amount, mode,
+            insertPayment.run(partyId, bsDate, payType, transactionType, amount, mode,
                 receiptNo || againstBill, receiptNo || againstBill, remarks, now);
             inserted++;
             if (insertLedger) {

@@ -754,6 +754,20 @@ function runMigrations(db) {
         console.log('Migration 23 (production lot costing) skipped:', e23.message);
     }
 
+    // Migration 24: payment transaction types. Records WHY a payment moved —
+    // actual_expense / advance / loan_given / loan_received / loan_repayment /
+    // advance_adjustment / settlement / other — so advances and loans post to
+    // Receivable/Payable (balance sheet) instead of P&L. Nullable: legacy rows
+    // keep their historical settlement behaviour.
+    try {
+        const pCols = db.prepare("PRAGMA table_info(payments)").all().map(c => c.name);
+        if (!pCols.includes('transaction_type')) {
+            db.exec("ALTER TABLE payments ADD COLUMN transaction_type TEXT DEFAULT NULL;");
+        }
+    } catch (e24) {
+        console.log('Migration 24 (payment transaction types) skipped:', e24.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {
