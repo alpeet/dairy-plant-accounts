@@ -1142,6 +1142,31 @@ authHandle('db:costing:opening-lots', async (event, data = {}) => {
     return safeRun(() => ops.createOpeningStockLots(db, data, currentUser && currentUser.id));
 });
 
+// --- Bulk (date-wise) entry — reuses the single-entry save functions ---
+authHandle('db:bulk:save-collections', async (event, data = {}) => {
+    return safeRun(() => ops.saveBulkCollections(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:bulk:save-purchases', async (event, data = {}) => {
+    return safeRun(() => ops.saveBulkPurchases(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:bulk:save-sales', async (event, data = {}) => {
+    return safeRun(() => ops.saveBulkSales(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:bulk:load-collections', async (event, params = {}) => {
+    return safeRun(() => ops.loadBulkCollections(db, params));
+});
+
+authHandle('db:bulk:load-purchases', async (event, params = {}) => {
+    return safeRun(() => ops.loadBulkPurchases(db, params));
+});
+
+authHandle('db:bulk:load-sales', async (event, params = {}) => {
+    return safeRun(() => ops.loadBulkSales(db, params));
+});
+
 // --- Partner Capital ---
 authHandle('db:partners:capital-list', async (event, params = {}) => {
     return safeRun(() => ops.listPartnerCapital(db, params));

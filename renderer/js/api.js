@@ -249,6 +249,14 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getBatchMargin: (opts) => apiPost('/costing/batch-margin', opts || {}),
         createOpeningStockLots: (data) => apiPost('/costing/opening-lots', data || {}),
 
+        // Bulk (date-wise) entry — same backend as single entry & Excel import
+        saveBulkCollections: (data) => apiPost('/bulk/collections', data || {}),
+        saveBulkPurchases: (data) => apiPost('/bulk/purchases', data || {}),
+        saveBulkSales: (data) => apiPost('/bulk/sales', data || {}),
+        loadBulkCollections: (params) => apiPost('/bulk/load-collections', params || {}),
+        loadBulkPurchases: (params) => apiPost('/bulk/load-purchases', params || {}),
+        loadBulkSales: (params) => apiPost('/bulk/load-sales', params || {}),
+
         // Partner Capital
         getPartnerCapitalList: (opts) => apiPost('/partners/capital-list', opts || {}),
         getPartnerCapital: (id) => apiPost('/partners/capital-get', { id }),

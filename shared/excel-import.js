@@ -1144,6 +1144,111 @@ function importCollections(db, sheetData, opts) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// IMPORT: MILK COLLECTIONS (raw-milk reception sheet)
+// ════════════════════════════════════════════════════════════════
+// Business key = collection_no when present, else (date, shift, farmer,
+// milk_type). ADD / UPDATE / UNCHANGED per row; updates re-run the same
+// saveMilkCollection path the bulk screen uses (ledger, stock, milk lots).
+
+function importMilkCollectionsSheet(db, data, { log }) {
+    const _r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const hr = findHeaderRow(data, ['date', 'farmer', 'collection no', 'collection_no']);
+    if (hr < 0) return { ...newSheetResult(), note: 'No header row found' };
+    const dateI = colIndex(data, hr, ['date (bs)', 'date']);
+    const noI = colIndex(data, hr, ['collection no', 'collection_no', 'collection no.']);
+    const farmerI = colIndex(data, hr, ['farmer']);
+    const typeI = colIndex(data, hr, ['milk type', 'type']);
+    const shiftI = colIndex(data, hr, ['shift']);
+    const qtyI = colIndex(data, hr, ['quantity (l)', 'quantity', 'qty']);
+    const fatI = colIndex(data, hr, ['fat %', 'fat', 'fat_percent']);
+    const snfI = colIndex(data, hr, ['snf %', 'snf', 'snf_percent']);
+    const rateI = colIndex(data, hr, ['rate']);
+    const amtI = colIndex(data, hr, ['amount']);
+    const notesI = colIndex(data, hr, ['notes', 'remarks']);
+
+    const farmerByName = new Map();
+    for (const p of db.prepare("SELECT id, name FROM parties WHERE type = 'farmer'").all()) {
+        farmerByName.set(normalize(p.name), p.id);
+    }
+    const res = newSheetResult();
+    const seen = new Set();
+
+    const { saveMilkCollection, getOrCreateRawMilkProduct } = require('./operations/milk');
+
+    for (let i = hr + 1; i < data.length; i++) {
+        const row = data[i];
+        const farmerName = toStr(row && row[farmerI]).trim();
+        const qty = toNum(row && row[qtyI]);
+        if (!farmerName || !(qty > 0)) continue;
+        const rowKey = [toStr(row[dateI]), toStr(row[shiftI]), normalize(farmerName), toStr(row[typeI])].join('|');
+        if (seen.has(rowKey)) { res.skipped++; continue; }
+        seen.add(rowKey);
+        try {
+            const bsDate = toBSDate(row[dateI]);
+            if (!bsDate) { res.failed++; continue; }
+            const milkType = (toStr(row[typeI]).trim() || 'cow').toLowerCase();
+            let partyId = farmerByName.get(normalize(farmerName));
+            if (!partyId) {
+                // Auto-create the farmer (mirrors importCollections behaviour).
+                const info = db.prepare("INSERT INTO parties (name, type) VALUES (?, 'farmer')").run(farmerName);
+                partyId = Number(info.lastInsertRowid);
+                farmerByName.set(normalize(farmerName), partyId);
+            }
+            const rate = toNum(row[rateI]);
+            const amount = toNum(row[amtI]);
+            const existingNo = toStr(row[noI]).trim();
+            let existing = null;
+            if (existingNo) {
+                existing = db.prepare('SELECT * FROM milk_collections WHERE collection_no = ?').get(existingNo);
+            }
+            if (!existing) {
+                existing = db.prepare(`
+                    SELECT * FROM milk_collections
+                    WHERE date = ? AND IFNULL(shift,'') = IFNULL(?, '') AND party_id = ?
+                      AND LOWER(IFNULL(milk_type,'')) = LOWER(?)
+                    ORDER BY id LIMIT 1
+                `).get(bsDate, toStr(row[shiftI]).trim() || 'morning', partyId, milkType);
+            }
+            const cand = {
+                date: bsDate,
+                party_id: partyId,
+                milk_type: milkType,
+                shift: toStr(row[shiftI]).trim() || 'morning',
+                quantity_liters: qty,
+                fat_percent: toNum(row[fatI]),
+                snf_percent: toNum(row[snfI]),
+                rate: rate > 0 ? rate : (qty > 0 && amount > 0 ? _r2(amount / qty) : 0),
+                amount: amount > 0 ? amount : (rate > 0 ? _r2(rate * qty) : 0),
+                notes: toStr(row[notesI]).trim()
+            };
+            if (existing) {
+                const same = existing.date === cand.date && existing.party_id === cand.party_id
+                    && String(existing.milk_type || '').toLowerCase() === cand.milk_type
+                    && (existing.shift || 'morning') === cand.shift
+                    && Math.abs((Number(existing.quantity_liters) || 0) - qty) < 0.01
+                    && Math.abs((Number(existing.fat_percent) || 0) - cand.fat_percent) < 0.01
+                    && Math.abs((Number(existing.snf_percent) || 0) - cand.snf_percent) < 0.01
+                    && Math.abs((Number(existing.rate) || 0) - cand.rate) < 0.01;
+                if (same) { res.unchanged++; continue; }
+            }
+            getOrCreateRawMilkProduct(db, milkType);
+            saveMilkCollection(db, {
+                id: existing ? existing.id : undefined,
+                collection_no: existing ? existing.collection_no : (existingNo || undefined),
+                status: existing ? existing.status : 'pending',
+                ...cand
+            }, null);
+            if (existing) res.updated++;
+            else res.added++;
+        } catch (e) {
+            res.failed++;
+        }
+    }
+    log(`  ✅ Milk Collections: ${res.added} added, ${res.updated} updated, ${res.unchanged} unchanged${res.failed ? `, ${res.failed} failed` : ''}${res.skipped ? `, ${res.skipped} duplicate rows` : ''}`);
+    return res;
+}
+
+// ════════════════════════════════════════════════════════════════
 // IMPORT: PARTY LEDGER
 // ════════════════════════════════════════════════════════════════
 
@@ -2446,6 +2551,19 @@ function runExcelImport(db, excelPath, opts = {}) {
         }
     }
 
+    // 5b. Milk_Collections → milk_collections (ADD/UPDATE/UNCHANGED)
+    const milkSheetName = workbook.SheetNames.includes('Milk_Collections') ? 'Milk_Collections' : null;
+    if (milkSheetName) {
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[milkSheetName], { header: 1, defval: '' });
+        if (data.length > 1) {
+            results.milkCollections = importMilkCollectionsSheet(db, data, { mode, log });
+        } else {
+            results.milkCollections = absentSheetResult();
+        }
+    } else {
+        results.milkCollections = absentSheetResult();
+    }
+
     // 6. Party ledger (fresh mode only — line-level sheet is incompatible with the
     //    per-invoice ledger entries the app maintains)
     if (mode === 'fresh') {
@@ -2570,7 +2688,7 @@ function runExcelImport(db, excelPath, opts = {}) {
     log('\n  ═══════════════════════════════════════════════════════');
     log('  📊 IMPORT SUMMARY');
     log('');
-    const tables = ['parties', 'products', 'routes', 'milk_rate_chart', 'sales', 'sales_items',
+    const tables = ['parties', 'products', 'routes', 'milk_rate_chart', 'milk_collections', 'sales', 'sales_items',
         'purchases', 'purchase_items', 'payments', 'ledger_entries', 'stock_movements',
         'milk_lots', 'stock_lots', 'lot_consumptions', 'wastage_records',
         'production_batches', 'production_inputs', 'production_outputs',
@@ -2623,6 +2741,7 @@ module.exports = {
     importPartnerCapitalSheet,
     importSalaryRecordsSheet,
     importProductionBatchesSheet,
+    importMilkCollectionsSheet,
     absentSheetResult,
     backfillMilkCollectionsFromPurchases,
     deriveProductionBatches,

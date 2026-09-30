@@ -290,6 +290,36 @@ function exportToDailyAccountExcel(db, outputPath) {
         ];
         XLSX.utils.book_append_sheet(wb, wsCollection, 'Collection');
 
+        // ── Milk_Collections — raw-milk reception sheet (spec: bulk entry and
+        //    Excel must round-trip every row, not just purchases-as-milk) ──
+        try {
+            const milkRows = [[
+                'Date (BS)', 'AD Date', 'Collection No', 'Farmer', 'Milk Type', 'Shift',
+                'Quantity (L)', 'FAT %', 'SNF %', 'Rate', 'Amount', 'Notes'
+            ]];
+            const milkColls = db.prepare(`
+                SELECT mc.*, p.name AS farmer_name FROM milk_collections mc
+                LEFT JOIN parties p ON p.id = mc.party_id
+                ORDER BY mc.date, mc.id
+            `).all();
+            for (const c of milkColls) {
+                milkRows.push([
+                    c.date || '', c.ad_date || '', c.collection_no || '', c.farmer_name || '',
+                    c.milk_type || '', c.shift || '',
+                    Number(c.quantity_liters) || 0, Number(c.fat_percent) || 0, Number(c.snf_percent) || 0,
+                    Number(c.rate) || 0, Number(c.amount) || 0, c.notes || ''
+                ]);
+            }
+            if (milkRows.length > 1) {
+                const wsMilk = XLSX.utils.aoa_to_sheet(milkRows);
+                wsMilk['!cols'] = [
+                    { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 25 }, { wch: 10 }, { wch: 9 },
+                    { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 9 }, { wch: 12 }, { wch: 22 }
+                ];
+                XLSX.utils.book_append_sheet(wb, wsMilk, 'Milk_Collections');
+            }
+        } catch (e) { /* old schema without milk_collections — skip sheet */ }
+
         // ── Party_Ledger ──────────────────────────────────────
         const ledgerEntries = db.prepare(`
             SELECT le.date, p.name as party_name, le.reference_type, le.reference_id,

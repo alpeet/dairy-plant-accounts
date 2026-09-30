@@ -92,9 +92,8 @@ function backfillMilkLots(db, { from_date } = {}) {
         SELECT mc.* FROM milk_collections mc
         WHERE mc.quantity_liters > 0 AND mc.date >= ?
           AND NOT EXISTS (SELECT 1 FROM milk_lots ml WHERE ml.collection_id = mc.id)
-          ${from_date ? 'AND mc.date >= @from' : ''}
         ORDER BY mc.date, mc.id
-    `).all({ from: from_date || cut });
+    `).all(from_date || cut);
     let n = 0;
     for (const c of rows) { createMilkLot(db, c); n++; }
     return n;

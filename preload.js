@@ -167,6 +167,14 @@ contextBridge.exposeInMainWorld('api', {
     getBatchMargin: (opts) => ipcRenderer.invoke('db:costing:batch-margin', opts),
     createOpeningStockLots: (data) => ipcRenderer.invoke('db:costing:opening-lots', data),
 
+    // Bulk (date-wise) entry — same backend as single entry & Excel import
+    saveBulkCollections: (data) => ipcRenderer.invoke('db:bulk:save-collections', data),
+    saveBulkPurchases: (data) => ipcRenderer.invoke('db:bulk:save-purchases', data),
+    saveBulkSales: (data) => ipcRenderer.invoke('db:bulk:save-sales', data),
+    loadBulkCollections: (params) => ipcRenderer.invoke('db:bulk:load-collections', params),
+    loadBulkPurchases: (params) => ipcRenderer.invoke('db:bulk:load-purchases', params),
+    loadBulkSales: (params) => ipcRenderer.invoke('db:bulk:load-sales', params),
+
     // Partner Capital
     getPartnerCapitalList: (opts) => ipcRenderer.invoke('db:partners:capital-list', opts),
     getPartnerCapital: (id) => ipcRenderer.invoke('db:partners:capital-get', id),

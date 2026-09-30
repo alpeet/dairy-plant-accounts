@@ -1659,6 +1659,35 @@ app.post('/api/costing/opening-lots', requireRole('admin'), (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Bulk (date-wise) entry — one SAVE ALL per date. Every row goes
+// through the same saveMilkCollection/savePurchase/saveSale used
+// by single entry and Excel import (same validation/ledger/stock).
+// ──────────────────────────────────────────────────────────────
+app.post('/api/bulk/collections', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveBulkCollections(db, req.body || {}, req.user?.id)));
+});
+
+app.post('/api/bulk/purchases', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveBulkPurchases(db, req.body || {}, req.user?.id)));
+});
+
+app.post('/api/bulk/sales', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveBulkSales(db, req.body || {}, req.user?.id)));
+});
+
+app.post('/api/bulk/load-collections', (req, res) => {
+    res.json(safeRun(() => ops.loadBulkCollections(db, req.body || {})));
+});
+
+app.post('/api/bulk/load-sales', (req, res) => {
+    res.json(safeRun(() => ops.loadBulkSales(db, req.body || {})));
+});
+
+app.post('/api/bulk/load-purchases', (req, res) => {
+    res.json(safeRun(() => ops.loadBulkPurchases(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Partner Capital (accountant+ only — sensitive financial data)
 // ──────────────────────────────────────────────────────────────
 app.post('/api/partners/capital-list', requireRole('accountant'), (req, res) => {

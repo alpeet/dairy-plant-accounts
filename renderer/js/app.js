@@ -14,6 +14,7 @@ const pageModules = {
     routes: renderRoutes,
     reports: renderReports,
     production: renderProduction,
+    'bulk-entry': () => renderBulkEntry(),
     statements: renderStatements,
     'invoice-generator': renderInvoiceGenerator,
     cash: renderCash,

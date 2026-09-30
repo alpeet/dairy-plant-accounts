@@ -116,6 +116,9 @@ const {
 // ── Accounting core (money precision, account mapping, settlement, reconcile) ──
 const accounting = require('./accounting');
 
+// ── Bulk (date-wise) entry — same backend as single entry & Excel import ──
+const bulkEntry = require('./bulk_entry');
+
 // ── Post-Dated Cheques (PDC register + lifecycle) ──
 const {
     listPdcCheques, getPdcCheque, listPdcOpenDocuments, getPdcPosition,
@@ -286,6 +289,16 @@ module.exports = {
     getCashBankPosition: accounting.getCashBankPosition,
     getExpenseSummary: accounting.getExpenseSummary,
     getReconciliation: accounting.getReconciliation,
+
+    // Bulk (date-wise) entry — Mode B data entry. Every row reuses
+    // saveMilkCollection/savePurchase/saveSale, so validation, ledger, stock,
+    // milk lots, audit and reports are identical to one-by-one entry.
+    saveBulkCollections: bulkEntry.saveBulkCollections,
+    saveBulkPurchases: bulkEntry.saveBulkPurchases,
+    saveBulkSales: bulkEntry.saveBulkSales,
+    loadBulkCollections: bulkEntry.loadBulkCollections,
+    loadBulkSales: bulkEntry.loadBulkSales,
+    loadBulkPurchases: bulkEntry.loadBulkPurchases,
 
     // Post-Dated Cheques — an instrument, not money: nothing is posted while a
     // cheque is HELD/DEPOSITED; clearing posts one normal receipt/payment, and
