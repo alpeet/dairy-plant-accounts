@@ -422,11 +422,54 @@ CREATE TABLE IF NOT EXISTS production_batches (
     cost_approximate INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'posted' CHECK(status IN ('posted', 'reversed')),
     yield_note TEXT DEFAULT '',
+    labour_cost REAL DEFAULT 0.0,
+    fuel_cost REAL DEFAULT 0.0,
+    electricity_cost REAL DEFAULT 0.0,
+    packaging_cost REAL DEFAULT 0.0,
+    water_cost REAL DEFAULT 0.0,
+    cip_cost REAL DEFAULT 0.0,
+    refrigeration_cost REAL DEFAULT 0.0,
+    other_processing_cost REAL DEFAULT 0.0,
+    overhead_cost REAL DEFAULT 0.0,
+    expected_output_quantity REAL DEFAULT 0.0,
+    yield_variance_percent REAL DEFAULT 0.0,
+    yield_flag TEXT DEFAULT 'ok',
+    input_fat_percent REAL DEFAULT 0.0,
+    output_fat_percent REAL DEFAULT 0.0,
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
+
+-- ============================================================
+-- PRODUCTION OVERHEADS (configurable processing-cost register, spec §13)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS production_overheads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    basis TEXT NOT NULL DEFAULT 'per_batch'
+        CHECK(basis IN ('per_input_liter','per_batch','percent_of_input_cost')),
+    rate REAL NOT NULL DEFAULT 0.0,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+-- ============================================================
+-- YIELD STANDARDS (expected yield % per process, spec §14)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS yield_standards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    process_type TEXT NOT NULL DEFAULT '',
+    output_product_id INTEGER DEFAULT NULL,
+    expected_yield_percent REAL NOT NULL DEFAULT 0.0,
+    warn_low_percent REAL NOT NULL DEFAULT 0.0,
+    warn_high_percent REAL NOT NULL DEFAULT 0.0,
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_yield_standards_process ON yield_standards(process_type);
 
 -- ============================================================
 -- PRODUCTION INPUTS (what raw materials were consumed)

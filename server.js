@@ -1659,6 +1659,55 @@ app.post('/api/costing/opening-lots', requireRole('admin'), (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Scientific Dairy Costing reports — weighted-avg milk cost, milk flow,
+// sales realization/L, cost-vs-sales, product cost, stock ledger, dashboard,
+// daily closing & traceability. Read-only; any signed-in role.
+// ──────────────────────────────────────────────────────────────
+app.post('/api/dairy/daily-milk-cost', (req, res) => {
+    res.json(safeRun(() => ops.getDailyMilkCost(db, req.body || {})));
+});
+
+app.post('/api/dairy/milk-flow', (req, res) => {
+    res.json(safeRun(() => ops.getMilkFlow(db, req.body || {})));
+});
+
+app.post('/api/dairy/sales-realization', (req, res) => {
+    res.json(safeRun(() => ops.getDailySalesRealization(db, req.body || {})));
+});
+
+app.post('/api/dairy/cost-vs-sales', (req, res) => {
+    res.json(safeRun(() => ops.getDailyMilkCostVsSales(db, req.body || {})));
+});
+
+app.post('/api/dairy/product-cost', (req, res) => {
+    res.json(safeRun(() => ops.getProductCostReport(db, req.body || {})));
+});
+
+app.post('/api/dairy/stock-ledger', (req, res) => {
+    res.json(safeRun(() => ops.getStockLedger(db, req.body || {})));
+});
+
+app.post('/api/dairy/inventory-valuation', (req, res) => {
+    res.json(safeRun(() => ops.getInventoryValuation(db, req.body || {})));
+});
+
+app.post('/api/dairy/dashboard', (req, res) => {
+    res.json(safeRun(() => ops.getManagementDashboard(db, req.body || {})));
+});
+
+app.post('/api/dairy/daily-closing', (req, res) => {
+    res.json(safeRun(() => ops.getDailyClosing(db, req.body || {})));
+});
+
+app.post('/api/dairy/sale-traceability', (req, res) => {
+    res.json(safeRun(() => ops.getSaleTraceability(db, req.body || {})));
+});
+
+app.post('/api/dairy/batch-traceability', (req, res) => {
+    res.json(safeRun(() => ops.getBatchTraceability(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Bulk (date-wise) entry — one SAVE ALL per date. Every row goes
 // through the same saveMilkCollection/savePurchase/saveSale used
 // by single entry and Excel import (same validation/ledger/stock).

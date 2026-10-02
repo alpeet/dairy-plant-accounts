@@ -249,6 +249,19 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getBatchMargin: (opts) => apiPost('/costing/batch-margin', opts || {}),
         createOpeningStockLots: (data) => apiPost('/costing/opening-lots', data || {}),
 
+        // Scientific Dairy Costing reports (read-only)
+        getDailyMilkCost: (params) => apiPost('/dairy/daily-milk-cost', params || {}),
+        getMilkFlow: (params) => apiPost('/dairy/milk-flow', params || {}),
+        getDailySalesRealization: (params) => apiPost('/dairy/sales-realization', params || {}),
+        getDailyMilkCostVsSales: (params) => apiPost('/dairy/cost-vs-sales', params || {}),
+        getProductCostReport: (params) => apiPost('/dairy/product-cost', params || {}),
+        getStockLedger: (params) => apiPost('/dairy/stock-ledger', params || {}),
+        getInventoryValuation: (params) => apiPost('/dairy/inventory-valuation', params || {}),
+        getManagementDashboard: (params) => apiPost('/dairy/dashboard', params || {}),
+        getDailyClosing: (params) => apiPost('/dairy/daily-closing', params || {}),
+        getSaleTraceability: (params) => apiPost('/dairy/sale-traceability', params || {}),
+        getBatchTraceability: (params) => apiPost('/dairy/batch-traceability', params || {}),
+
         // Bulk (date-wise) entry — same backend as single entry & Excel import
         saveBulkCollections: (data) => apiPost('/bulk/collections', data || {}),
         saveBulkPurchases: (data) => apiPost('/bulk/purchases', data || {}),

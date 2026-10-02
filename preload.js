@@ -167,6 +167,19 @@ contextBridge.exposeInMainWorld('api', {
     getBatchMargin: (opts) => ipcRenderer.invoke('db:costing:batch-margin', opts),
     createOpeningStockLots: (data) => ipcRenderer.invoke('db:costing:opening-lots', data),
 
+    // Scientific Dairy Costing reports (read-only)
+    getDailyMilkCost: (params) => ipcRenderer.invoke('db:dairy:daily-milk-cost', params),
+    getMilkFlow: (params) => ipcRenderer.invoke('db:dairy:milk-flow', params),
+    getDailySalesRealization: (params) => ipcRenderer.invoke('db:dairy:sales-realization', params),
+    getDailyMilkCostVsSales: (params) => ipcRenderer.invoke('db:dairy:cost-vs-sales', params),
+    getProductCostReport: (params) => ipcRenderer.invoke('db:dairy:product-cost', params),
+    getStockLedger: (params) => ipcRenderer.invoke('db:dairy:stock-ledger', params),
+    getInventoryValuation: (params) => ipcRenderer.invoke('db:dairy:inventory-valuation', params),
+    getManagementDashboard: (params) => ipcRenderer.invoke('db:dairy:dashboard', params),
+    getDailyClosing: (params) => ipcRenderer.invoke('db:dairy:daily-closing', params),
+    getSaleTraceability: (params) => ipcRenderer.invoke('db:dairy:sale-traceability', params),
+    getBatchTraceability: (params) => ipcRenderer.invoke('db:dairy:batch-traceability', params),
+
     // Bulk (date-wise) entry — same backend as single entry & Excel import
     saveBulkCollections: (data) => ipcRenderer.invoke('db:bulk:save-collections', data),
     saveBulkPurchases: (data) => ipcRenderer.invoke('db:bulk:save-purchases', data),

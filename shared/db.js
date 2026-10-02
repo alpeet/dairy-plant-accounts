@@ -768,6 +768,77 @@ function runMigrations(db) {
         console.log('Migration 24 (payment transaction types) skipped:', e24.message);
     }
 
+    // Migration 25: scientific milk-to-finished-product costing. Adds the
+    // processing-cost breakdown + yield-control columns on production batches,
+    // a configurable production-overhead register, and expected-yield
+    // standards per process. Purely additive/idempotent — existing books keep
+    // working; the lot engine (v1.4.16) supplies the actual cost chain.
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS production_overheads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                basis TEXT NOT NULL DEFAULT 'per_batch'
+                    CHECK(basis IN ('per_input_liter','per_batch','percent_of_input_cost')),
+                rate REAL NOT NULL DEFAULT 0.0,
+                active INTEGER NOT NULL DEFAULT 1,
+                notes TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE TABLE IF NOT EXISTS yield_standards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_type TEXT NOT NULL DEFAULT '',
+                output_product_id INTEGER DEFAULT NULL,
+                expected_yield_percent REAL NOT NULL DEFAULT 0.0,
+                warn_low_percent REAL NOT NULL DEFAULT 0.0,
+                warn_high_percent REAL NOT NULL DEFAULT 0.0,
+                notes TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_yield_standards_process ON yield_standards(process_type);
+        `);
+        // Seed the seven spec overhead categories once (rate 0 — the owner fills
+        // the actual rates in; they are never invented).
+        const overheadCount = db.prepare('SELECT COUNT(*) c FROM production_overheads').get().c;
+        if (overheadCount === 0) {
+            const seed = db.prepare('INSERT INTO production_overheads (name, basis, rate) VALUES (?, ?, 0)');
+            for (const [name, basis] of [
+                ['Electricity', 'per_input_liter'],
+                ['Boiler / Fuel', 'per_input_liter'],
+                ['Labour', 'per_batch'],
+                ['Packaging', 'per_input_liter'],
+                ['Water', 'per_input_liter'],
+                ['Cleaning / CIP', 'per_batch'],
+                ['Refrigeration / Chilling', 'per_input_liter']
+            ]) seed.run(name, basis);
+        }
+        // Processing-cost breakdown + yield-control columns.
+        const pbCols25 = db.prepare('PRAGMA table_info(production_batches)').all().map(c => c.name);
+        const pbAdd25 = [
+            ['labour_cost', 'REAL DEFAULT 0.0'],
+            ['fuel_cost', 'REAL DEFAULT 0.0'],
+            ['electricity_cost', 'REAL DEFAULT 0.0'],
+            ['packaging_cost', 'REAL DEFAULT 0.0'],
+            ['water_cost', 'REAL DEFAULT 0.0'],
+            ['cip_cost', 'REAL DEFAULT 0.0'],
+            ['refrigeration_cost', 'REAL DEFAULT 0.0'],
+            ['other_processing_cost', 'REAL DEFAULT 0.0'],
+            ['overhead_cost', 'REAL DEFAULT 0.0'],
+            ['expected_output_quantity', 'REAL DEFAULT 0.0'],
+            ['yield_variance_percent', 'REAL DEFAULT 0.0'],
+            ['yield_flag', "TEXT DEFAULT 'ok'"],
+            ['input_fat_percent', 'REAL DEFAULT 0.0'],
+            ['output_fat_percent', 'REAL DEFAULT 0.0']
+        ];
+        for (const [col, def] of pbAdd25) {
+            if (!pbCols25.includes(col)) {
+                try { db.exec(`ALTER TABLE production_batches ADD COLUMN ${col} ${def};`); } catch (e) { /* concurrent */ }
+            }
+        }
+    } catch (e25) {
+        console.log('Migration 25 (scientific dairy costing) skipped:', e25.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

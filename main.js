@@ -1142,6 +1142,51 @@ authHandle('db:costing:opening-lots', async (event, data = {}) => {
     return safeRun(() => ops.createOpeningStockLots(db, data, currentUser && currentUser.id));
 });
 
+// --- Scientific Dairy Costing reports (read-only) ---
+authHandle('db:dairy:daily-milk-cost', async (event, params = {}) => {
+    return safeRun(() => ops.getDailyMilkCost(db, params));
+});
+
+authHandle('db:dairy:milk-flow', async (event, params = {}) => {
+    return safeRun(() => ops.getMilkFlow(db, params));
+});
+
+authHandle('db:dairy:sales-realization', async (event, params = {}) => {
+    return safeRun(() => ops.getDailySalesRealization(db, params));
+});
+
+authHandle('db:dairy:cost-vs-sales', async (event, params = {}) => {
+    return safeRun(() => ops.getDailyMilkCostVsSales(db, params));
+});
+
+authHandle('db:dairy:product-cost', async (event, params = {}) => {
+    return safeRun(() => ops.getProductCostReport(db, params));
+});
+
+authHandle('db:dairy:stock-ledger', async (event, params = {}) => {
+    return safeRun(() => ops.getStockLedger(db, params));
+});
+
+authHandle('db:dairy:inventory-valuation', async (event, params = {}) => {
+    return safeRun(() => ops.getInventoryValuation(db, params));
+});
+
+authHandle('db:dairy:dashboard', async (event, params = {}) => {
+    return safeRun(() => ops.getManagementDashboard(db, params));
+});
+
+authHandle('db:dairy:daily-closing', async (event, params = {}) => {
+    return safeRun(() => ops.getDailyClosing(db, params));
+});
+
+authHandle('db:dairy:sale-traceability', async (event, params = {}) => {
+    return safeRun(() => ops.getSaleTraceability(db, params));
+});
+
+authHandle('db:dairy:batch-traceability', async (event, params = {}) => {
+    return safeRun(() => ops.getBatchTraceability(db, params));
+});
+
 // --- Bulk (date-wise) entry — reuses the single-entry save functions ---
 authHandle('db:bulk:save-collections', async (event, data = {}) => {
     return safeRun(() => ops.saveBulkCollections(db, data, currentUser && currentUser.id));

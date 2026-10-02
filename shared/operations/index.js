@@ -106,6 +106,11 @@ const { listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartner
 // ── Production Costing — lots, FIFO, NRV, real COGS ──
 const costing = require('./production_costing');
 
+// ── Scientific dairy costing reports — weighted-avg daily milk cost, milk flow,
+// sales realization/L, product cost, stock ledger, dashboard, daily closing,
+// traceability. Read-only over the lot engine + quantity ledger.
+const dairyCosting = require('./dairy_costing');
+
 // ── Bank Transactions ──
 const {
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
@@ -264,6 +269,23 @@ module.exports = {
     getDailyReconciliation: costing.getDailyReconciliation,
     getBatchMargin: costing.getBatchMargin,
     createOpeningStockLots: costing.createOpeningStockLots,
+
+    // Scientific Dairy Costing — weighted-average milk cost, milk flow
+    // reconciliation, sales realization/L, cost-vs-sales, product cost, stock
+    // ledger + inventory valuation, management dashboard, formal daily closing
+    // and sale→batch→milk→farmer traceability. All read-only.
+    getDailyMilkCost: dairyCosting.getDailyMilkCost,
+    getMilkFlow: dairyCosting.getMilkFlow,
+    getDailySalesRealization: dairyCosting.getDailySalesRealization,
+    getDailyMilkCostVsSales: dairyCosting.getDailyMilkCostVsSales,
+    getProductCostReport: dairyCosting.getProductCostReport,
+    getStockLedger: dairyCosting.getStockLedger,
+    getInventoryValuation: dairyCosting.getInventoryValuation,
+    getManagementDashboard: dairyCosting.getManagementDashboard,
+    getDailyClosing: dairyCosting.getDailyClosing,
+    getSaleTraceability: dairyCosting.getSaleTraceability,
+    getBatchTraceability: dairyCosting.getBatchTraceability,
+    classifyInventoryCategory: dairyCosting.classifyInventoryCategory,
 
     // Partner Capital
     listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance,

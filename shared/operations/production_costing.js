@@ -58,6 +58,11 @@ function lotTracked(db, bsDate) {
 function createMilkLot(db, collection) {
     const qty = round2(collection.quantity_liters);
     if (!(qty > 0)) return null;
+    // Never build lot history for dates before the explicit cutover (§23): old
+    // data keeps no lots and is never back-costed. When no cutover exists yet
+    // (a fresh book) lots are created normally so FIFO works from day one.
+    const cut = getLotCutover(db);
+    if (cut && String(collection.date) < cut) return null;
     const existing = db.prepare('SELECT id FROM milk_lots WHERE collection_id = ?').get(collection.id);
     if (existing) return existing.id;
 
@@ -196,6 +201,37 @@ function suggestMilkConsumption(db, { milk_type, quantity, date }) {
     };
 }
 
+/**
+ * FIFO suggestion for a finished/semi-finished input (cream, nauni, curd…).
+ * Mirrors suggestMilkConsumption but reads stock_lots, so the multi-stage
+ * cost chain can be previewed before it is posted.
+ */
+function suggestStockConsumption(db, { product_id, quantity, date }) {
+    const lots = db.prepare(`
+        SELECT * FROM stock_lots
+        WHERE product_id = ? AND qty_remaining > 1e-9 AND produced_date <= ?
+        ORDER BY produced_date, id
+    `).all(Number(product_id), date);
+    let remaining = round2(quantity);
+    const plan = [];
+    for (const lot of lots) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, round2(lot.qty_remaining));
+        if (take > 0) {
+            plan.push({ lot_id: lot.id, date: lot.produced_date,
+                quantity: round2(take), unit_cost: round2(lot.unit_cost),
+                total_cost: round2(take * lot.unit_cost) });
+            remaining = round2(remaining - take);
+        }
+    }
+    return {
+        plan,
+        suggested_input_cost: consumptionTotal(plan),
+        available: round2(lots.reduce((s, l) => s + l.qty_remaining, 0)),
+        shortfall: round2(Math.max(0, remaining))
+    };
+}
+
 /** Standard selling price of a product for NRV: products.rate, else 0. */
 function standardPrice(db, productId) {
     const p = db.prepare('SELECT rate FROM products WHERE id = ?').get(productId);
@@ -240,6 +276,83 @@ function allocateOutputs(db, outputs, totalCost) {
 }
 
 /**
+ * Total processing cost for a batch. Precedence (never a silent double count):
+ *   1. the operator's itemised breakdown (labour/fuel/electricity/packaging/
+ *      water/CIP/refrigeration/other), else
+ *   2. an explicit scalar processing_cost, else
+ *   3. the configured production_overheads applied on their basis, else
+ *   4. the per-litre setting fallback.
+ * Rates default to 0 — a cost is never invented.
+ */
+function computeProcessingCost(db, { data, inputLiters, inputCost }) {
+    const breakdown = {
+        labour_cost: round2(data.labour_cost),
+        fuel_cost: round2(data.fuel_cost),
+        electricity_cost: round2(data.electricity_cost),
+        packaging_cost: round2(data.packaging_cost),
+        water_cost: round2(data.water_cost),
+        cip_cost: round2(data.cip_cost),
+        refrigeration_cost: round2(data.refrigeration_cost),
+        other_processing_cost: round2(data.other_processing_cost)
+    };
+    const itemised = round2(Object.values(breakdown).reduce((s, v) => s + v, 0));
+
+    let configured = 0;
+    const overheads = [];
+    if (itemised <= 0) {
+        const rows = db.prepare('SELECT * FROM production_overheads WHERE active = 1 ORDER BY id').all();
+        for (const o of rows) {
+            let cost = 0;
+            if (o.basis === 'per_input_liter') cost = round2((Number(o.rate) || 0) * inputLiters);
+            else if (o.basis === 'per_batch') cost = round2(o.rate);
+            else if (o.basis === 'percent_of_input_cost') cost = round2((Number(o.rate) || 0) / 100 * inputCost);
+            if (cost > 0) { overheads.push({ name: o.name, basis: o.basis, cost }); configured = round2(configured + cost); }
+        }
+    }
+
+    const scalar = round2(data.processing_cost);
+    let total = 0;
+    if (itemised > 0) total = itemised;
+    else if (scalar > 0) total = scalar;
+    else if (configured > 0) total = configured;
+    else if (data.processing_cost === undefined || data.processing_cost === null) {
+        const perLiter = round2(db.prepare(
+            "SELECT value FROM settings WHERE key = 'production_processing_cost_per_liter'"
+        ).get()?.value || 0);
+        if (perLiter > 0) total = round2(perLiter * inputLiters);
+    }
+
+    return { total, itemised, configured, breakdown, overheads };
+}
+
+/** Expected yield % for a process (batch value first, then the standards table). */
+function expectedYieldFor(db, processType, productId, explicitPct) {
+    const explicit = round2(explicitPct);
+    if (explicit > 0) return explicit;
+    const row = db.prepare(`
+        SELECT expected_yield_percent e FROM yield_standards
+        WHERE process_type = ? AND (output_product_id IS NULL OR output_product_id = ?)
+        ORDER BY (output_product_id IS NULL) ASC, id LIMIT 1
+    `).get(String(processType || ''), productId || null);
+    return row ? round2(row.e) : 0;
+}
+
+/** Compare actual vs expected yield and classify (§14). Never blocks posting. */
+function evaluateYield(db, processType, actualPct, expectedPct) {
+    if (!(expectedPct > 0)) return { flag: 'ok', variance: 0, expected_low: 0, expected_high: 0 };
+    const std = db.prepare(
+        'SELECT warn_low_percent, warn_high_percent FROM yield_standards WHERE process_type = ? ORDER BY id LIMIT 1'
+    ).get(String(processType || ''));
+    const low = std && round2(std.warn_low_percent) > 0 ? round2(std.warn_low_percent) : round2(expectedPct * 0.9);
+    const high = std && round2(std.warn_high_percent) > 0 ? round2(std.warn_high_percent) : round2(expectedPct * 1.1);
+    const variance = round2(actualPct - expectedPct);
+    let flag = 'ok';
+    if (actualPct < low) flag = 'low';
+    else if (actualPct > high) flag = 'high';
+    return { flag, variance, expected_low: low, expected_high: high };
+}
+
+/**
  * Post a production batch through the lot engine.
  * Consumes milk lots FIFO for each input, costs the batch, allocates to
  * outputs, creates stock lots, and writes the production stock movements —
@@ -262,37 +375,55 @@ function postProductionBatch(db, data) {
         const processType = data.process_type || 'DIRECT_MIX';
         const batchNo = data.batch_no || nextBatchNo(db, date);
 
-        // ── 1. Resolve inputs to milk lots (FIFO) ──
+        // ── 1. Resolve inputs FIFO ──
+        // A batch input is EITHER raw milk ({ milk_type, quantity } → milk_lots)
+        // OR a semi/finished product ({ product_id, quantity } → stock_lots).
+        // The second form is what makes Cream → Nauni → Ghee traceable: each
+        // stage consumes the previous stage's real inventory at its actual cost.
         const inputPlans = [];
         let inputCost = 0;
+        let fatWeighted = 0, fatQty = 0;
         for (const inp of (data.inputs || [])) {
-            const milkType = String(inp.milk_type || 'cow').toLowerCase();
             const qty = round2(inp.quantity);
             if (!(qty > 0)) continue;
-            const lots = db.prepare(`
-                SELECT * FROM milk_lots WHERE milk_type = ? AND qty_remaining > 1e-9 AND date <= ?
-                ORDER BY date, id
-            `).all(milkType, date);
-            const cons = consumeFIFO(db, {
-                lotType: 'milk', lots, quantity: qty,
-                referenceType: 'production_input', referenceId: null, date
-            });
-            inputPlans.push({ milk_type: milkType, quantity: qty, consumptions: cons });
-            inputCost = round2(inputCost + consumptionTotal(cons));
+            if (inp.product_id && !inp.milk_type) {
+                const productId = Number(inp.product_id);
+                const lots = db.prepare(`
+                    SELECT * FROM stock_lots WHERE product_id = ? AND qty_remaining > 1e-9 AND produced_date <= ?
+                    ORDER BY produced_date, id
+                `).all(productId, date);
+                const cons = consumeFIFO(db, {
+                    lotType: 'stock', lots, quantity: qty,
+                    referenceType: 'production_input', referenceId: null, date
+                });
+                inputPlans.push({ product_id: productId, quantity: qty, consumptions: cons });
+                inputCost = round2(inputCost + consumptionTotal(cons));
+            } else {
+                const milkType = String(inp.milk_type || 'cow').toLowerCase();
+                const lots = db.prepare(`
+                    SELECT * FROM milk_lots WHERE milk_type = ? AND qty_remaining > 1e-9 AND date <= ?
+                    ORDER BY date, id
+                `).all(milkType, date);
+                const cons = consumeFIFO(db, {
+                    lotType: 'milk', lots, quantity: qty,
+                    referenceType: 'production_input', referenceId: null, date
+                });
+                inputPlans.push({ milk_type: milkType, quantity: qty, consumptions: cons });
+                for (const c of cons) {
+                    const lot = db.prepare('SELECT fat_percent FROM milk_lots WHERE id = ?').get(c.lot_id);
+                    if (lot) { fatWeighted += (Number(lot.fat_percent) || 0) * c.quantity; fatQty += c.quantity; }
+                }
+                inputCost = round2(inputCost + consumptionTotal(cons));
+            }
         }
-        if (!inputPlans.length) throw new Error('A batch needs at least one raw-milk input.');
+        if (!inputPlans.length) throw new Error('A batch needs at least one input.');
 
         // ── 2. Processing cost (never a silent zero) ──
         const inputLiters = round2(inputPlans.reduce((s, p) => s + p.quantity, 0));
-        let processingCost = round2(data.processing_cost);
-        if (!(processingCost > 0) && data.processing_cost !== 0) {
-            const perLiter = round2(db.prepare(
-                "SELECT value FROM settings WHERE key = 'production_processing_cost_per_liter'"
-            ).get()?.value || 0);
-            if (perLiter > 0) processingCost = round2(perLiter * inputLiters);
-        }
+        const proc = computeProcessingCost(db, { data, inputLiters, inputCost });
+        const processingCost = proc.total;
         if (!(processingCost > 0) && !data.allow_zero_processing_cost) {
-            throw new Error('Processing cost is 0 — enter the cost or set production_processing_cost_per_liter in Settings (pass allow_zero_processing_cost to override).');
+            throw new Error('Processing cost is 0 — itemise the processing costs, configure Production Overheads, or set production_processing_cost_per_liter in Settings (pass allow_zero_processing_cost to override).');
         }
         const totalCost = round2(inputCost + processingCost);
 
@@ -311,48 +442,67 @@ function postProductionBatch(db, data) {
         // ── 4. NRV allocation ──
         const { allocations, method, approximate } = allocateOutputs(db, outputs, totalCost);
 
-        // ── 5. Batch row ──
+        // ── 5. Batch row (with yield control + cost breakdown) ──
         const outQty = round2(outputs.reduce((s, o) => s + o.quantity, 0));
         const yieldPct = inputLiters > 0 ? round2(outQty / inputLiters * 100) : 0;
+        const expectedYield = expectedYieldFor(db, processType, outputs[0] && outputs[0].product_id, data.expected_yield_percent);
+        const expectedOutQty = round2(data.expected_output_quantity) || (expectedYield > 0 ? round2(inputLiters * expectedYield / 100) : 0);
+        const yieldEval = evaluateYield(db, processType, yieldPct, expectedYield);
+        const inputFat = fatQty > 0 ? round2(fatWeighted / fatQty) : round2(data.input_fat_percent);
+        const outputFat = round2(data.output_fat_percent);
+        const bd = proc.breakdown;
         const ins = db.prepare(`
             INSERT INTO production_batches (batch_no, date, shift, process_type, input_quantity,
                 input_unit, output_quantity, output_unit, standard_yield_percent, actual_yield_percent,
                 wastage_quantity, wastage_reason, operator_name, remarks, input_cost, processing_cost,
-                total_cost, cost_allocation, cost_approximate, status, yield_note, created_by)
-            VALUES (?, ?, ?, ?, ?, 'liter', ?, 'kg', 0, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?)
+                total_cost, cost_allocation, cost_approximate, status, yield_note,
+                labour_cost, fuel_cost, electricity_cost, packaging_cost, water_cost, cip_cost,
+                refrigeration_cost, other_processing_cost, overhead_cost,
+                expected_output_quantity, yield_variance_percent, yield_flag,
+                input_fat_percent, output_fat_percent, created_by)
+            VALUES (?, ?, ?, ?, ?, 'liter', ?, 'kg', ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, 'posted', ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
-        const res = ins.run(batchNo, date, shift, processType, inputLiters, outQty, yieldPct,
+        const res = ins.run(batchNo, date, shift, processType, inputLiters, outQty, expectedYield, yieldPct,
             data.operator_name || '', data.remarks || '', inputCost, processingCost, totalCost,
-            method, approximate ? 1 : 0, data.yield_note || '', data.created_by || null);
+            method, approximate ? 1 : 0, data.yield_note || '',
+            bd.labour_cost, bd.fuel_cost, bd.electricity_cost, bd.packaging_cost, bd.water_cost,
+            bd.cip_cost, bd.refrigeration_cost, bd.other_processing_cost, proc.configured,
+            expectedOutQty, yieldEval.variance, yieldEval.flag, inputFat, outputFat, data.created_by || null);
         const batchId = Number(res.lastInsertRowid);
 
         // ── 6. Input rows + lot consumption links + stock movements ──
         const { getOrCreateRawMilkProduct } = require('./milk');
         for (const plan of inputPlans) {
-            const rawProduct = getOrCreateRawMilkProduct(db, plan.milk_type);
+            const isProduct = !!plan.product_id;
+            const product = isProduct
+                ? db.prepare('SELECT id, name FROM products WHERE id = ?').get(plan.product_id)
+                : getOrCreateRawMilkProduct(db, plan.milk_type);
+            const lotType = isProduct ? 'stock' : 'milk';
+            const consumedCost = round2(consumptionTotal(plan.consumptions));
             db.prepare(`
                 INSERT INTO production_inputs (batch_id, product_id, product_name, quantity, unit, rate, amount)
-                VALUES (?, ?, ?, ?, 'liter', ?, ?)
-            `).run(batchId, rawProduct.id, rawProduct.name, plan.quantity,
-                  plan.consumptions.length ? round2(plan.consumptions.reduce((s, c) => s + c.quantity * c.unit_cost, 0) / plan.quantity) : 0,
-                  round2(consumptionTotal(plan.consumptions)));
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(batchId, product.id, product.name, plan.quantity,
+                  isProduct ? (product.unit || 'kg') : 'liter',
+                  plan.quantity > 0 ? round2(consumedCost / plan.quantity) : 0, consumedCost);
             // Re-point the placeholder consumptions at this input row.
             const inputRowId = Number(db.prepare('SELECT last_insert_rowid() AS id').get().id);
             for (const c of plan.consumptions) {
                 db.prepare(
-                    "UPDATE lot_consumptions SET reference_id = ? WHERE lot_type = 'milk' AND lot_id = ? AND reference_id IS NULL AND date = ?"
-                ).run(inputRowId, c.lot_id, date);
+                    "UPDATE lot_consumptions SET reference_id = ? WHERE lot_type = ? AND lot_id = ? AND reference_id IS NULL AND date = ?"
+                ).run(inputRowId, lotType, c.lot_id, date);
             }
             const lastBalance = db.prepare(
                 'SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1'
-            ).get(rawProduct.id);
+            ).get(product.id);
             const newBalance = round2((lastBalance ? lastBalance.balance_after : 0) - plan.quantity);
-            if (newBalance < -1e-9) throw new Error(`Negative raw milk stock for ${rawProduct.name}`);
+            if (newBalance < -1e-9) throw new Error(`Negative stock for ${product.name}`);
             db.prepare(`
                 INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id)
                 VALUES (?, ?, 'production_input', 0, ?, ?, ?, ?, 'production', ?)
-            `).run(rawProduct.id, date, plan.quantity, newBalance,
-                  plan.consumptions.length ? round2(consumptionTotal(plan.consumptions) / plan.quantity) : 0,
+            `).run(product.id, date, plan.quantity, newBalance,
+                  plan.quantity > 0 ? round2(consumedCost / plan.quantity) : 0,
                   `Production ${batchNo}`, batchId);
         }
 
@@ -383,12 +533,19 @@ function postProductionBatch(db, data) {
         logAudit(db, 'production_batches', batchId, 'create', null, {
             operation: 'Batch posted (lot costing)', batch_no: batchNo, date, shift, process_type: processType,
             input_cost: inputCost, processing_cost: processingCost, total_cost: totalCost,
+            processing_breakdown: bd, overheads: proc.overheads,
+            yield_percent: yieldPct, expected_yield_percent: expectedYield, yield_flag: yieldEval.flag,
+            input_fat_percent: inputFat, output_fat_percent: outputFat,
             allocation: method, approximate, outputs: allocations.map(a => ({ product_id: a.product_id, qty: a.quantity, unit_cost: a.unit_cost }))
         }, data.created_by || null);
 
         return {
             id: batchId, batch_no: batchNo, input_cost: inputCost,
             processing_cost: processingCost, total_cost: totalCost,
+            processing_breakdown: { ...bd, overheads: proc.overheads, overhead_cost: proc.configured },
+            actual_yield_percent: yieldPct, expected_yield_percent: expectedYield,
+            yield_variance_percent: yieldEval.variance, yield_flag: yieldEval.flag,
+            input_fat_percent: inputFat, output_fat_percent: outputFat,
             allocation_method: method, approximate,
             allocations: allocations.map(a => ({
                 product_id: a.product_id, quantity: a.quantity, nrv: a.nrv,
@@ -446,10 +603,12 @@ function reverseProductionBatch(db, batchId, { reason, userId } = {}) {
             throw new Error('Stock from this batch has already been sold — reverse those sales first.');
         }
 
-        // Restore raw milk lots consumed by this batch's inputs.
+        // Restore every lot this batch consumed — raw milk AND finished goods
+        // (cream/nauni/... inputs each live under their own lot_type).
         const inputs = db.prepare('SELECT * FROM production_inputs WHERE batch_id = ?').all(batchId);
         for (const inp of inputs) {
             reverseConsumptions(db, { lotType: 'milk', referenceType: 'production_input', referenceId: inp.id });
+            reverseConsumptions(db, { lotType: 'stock', referenceType: 'production_input', referenceId: inp.id });
         }
 
         // Remove the batch's stock lots (nothing consumed them — enforced above).
@@ -851,36 +1010,44 @@ function previewBatchCosting(db, data) {
     let inputCost = 0;
     const inputs = [];
     for (const inp of (data.inputs || [])) {
-        const milkType = String(inp.milk_type || 'cow').toLowerCase();
         const qty = round2(inp.quantity);
         if (!(qty > 0)) continue;
-        const sug = suggestMilkConsumption(db, { milk_type: milkType, quantity: qty, date });
-        inputs.push({ milk_type: milkType, quantity: qty, ...sug });
-        inputCost = round2(inputCost + sug.suggested_input_cost);
+        if (inp.product_id && !inp.milk_type) {
+            const product = db.prepare('SELECT name FROM products WHERE id = ?').get(Number(inp.product_id));
+            const sug = suggestStockConsumption(db, { product_id: inp.product_id, quantity: qty, date });
+            inputs.push({ product_id: Number(inp.product_id), product_name: product ? product.name : '', quantity: qty, ...sug });
+            inputCost = round2(inputCost + sug.suggested_input_cost);
+        } else {
+            const milkType = String(inp.milk_type || 'cow').toLowerCase();
+            const sug = suggestMilkConsumption(db, { milk_type: milkType, quantity: qty, date });
+            inputs.push({ milk_type: milkType, quantity: qty, ...sug });
+            inputCost = round2(inputCost + sug.suggested_input_cost);
+        }
     }
     const inputLiters = round2(inputs.reduce((s, i) => s + i.quantity, 0));
-    let processingCost = round2(data.processing_cost);
-    if (!(processingCost > 0)) {
-        const perLiter = round2(db.prepare(
-            "SELECT value FROM settings WHERE key = 'production_processing_cost_per_liter'"
-        ).get()?.value || 0);
-        if (perLiter > 0) processingCost = round2(perLiter * inputLiters);
-    }
+    const proc = computeProcessingCost(db, { data, inputLiters, inputCost });
+    const processingCost = proc.total;
     const totalCost = round2(inputCost + processingCost);
     const outputs = (data.outputs || []).map(o => ({ product_id: Number(o.product_id), quantity: round2(o.quantity) }))
         .filter(o => o.product_id && o.quantity > 0);
     const { allocations, method, approximate } = outputs.length ? allocateOutputs(db, outputs, totalCost) : { allocations: [], method: 'single', approximate: false };
     const outQty = round2(outputs.reduce((s, o) => s + o.quantity, 0));
+    const actualYield = inputLiters > 0 ? round2(outQty / inputLiters * 100) : 0;
+    const expectedYield = expectedYieldFor(db, data.process_type || 'DIRECT_MIX', outputs[0] && outputs[0].product_id, data.expected_yield_percent);
+    const yieldEval = evaluateYield(db, data.process_type || 'DIRECT_MIX', actualYield, expectedYield);
     return {
         date, inputs, input_cost: inputCost, processing_cost: processingCost,
+        processing_breakdown: { ...proc.breakdown, overheads: proc.overheads, overhead_cost: proc.configured },
         total_cost: totalCost, allocation_method: method, approximate,
-        allocations, expected_yield_pct: inputLiters > 0 ? round2(outQty / inputLiters * 100) : 0,
+        allocations, actual_yield_pct: actualYield, expected_yield_pct: expectedYield,
+        yield_variance_percent: yieldEval.variance, yield_flag: yieldEval.flag,
         warnings: [
-            ...inputs.filter(i => i.shortfall > 0).map(i => `Insufficient ${i.milk_type} milk: short by ${i.shortfall} L`),
+            ...inputs.filter(i => i.shortfall > 0).map(i => `Insufficient ${i.milk_type ? i.milk_type + ' milk' : i.product_name}: short by ${i.shortfall}`),
             ...(approximate && outputs.length > 1 ? ['Standard selling price missing — volume allocation used (COST ALLOCATION APPROXIMATE)'] : []),
             ...(processingCost <= 0 ? ['Processing cost is zero'] : []),
-            ...(outQty > 0 && inputLiters > 0 && (outQty / inputLiters > 1.02) ? ['Abnormal yield: output exceeds input by more than 2%'] : []),
-            ...(outQty > 0 && inputLiters > 0 && (outQty / inputLiters < 0.6) ? ['Excessive loss: yield below 60%'] : [])
+            ...(yieldEval.flag === 'low' ? [`Low yield: ${actualYield}% vs expected ${expectedYield}%`] : []),
+            ...(yieldEval.flag === 'high' ? [`High yield: ${actualYield}% vs expected ${expectedYield}%`] : []),
+            ...(outputs.length === 0 ? ['No outputs yet'] : [])
         ]
     };
 }
@@ -917,7 +1084,8 @@ module.exports = {
     getLotCutover, setLotCutover, lotTracked,
     createMilkLot, deleteMilkLotByCollection, backfillMilkLots,
     consumeFIFO, consumptionTotal, reverseConsumptions,
-    suggestMilkConsumption, standardPrice, allocateOutputs,
+    suggestMilkConsumption, suggestStockConsumption, standardPrice, allocateOutputs,
+    computeProcessingCost, expectedYieldFor, evaluateYield,
     postProductionBatch, reverseProductionBatch,
     costSaleItem, reverseSaleCosting,
     getExpiredLots, writeOffExpiredStock, recordWastage,
