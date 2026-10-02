@@ -1187,6 +1187,31 @@ authHandle('db:dairy:batch-traceability', async (event, params = {}) => {
     return safeRun(() => ops.getBatchTraceability(db, params));
 });
 
+// --- Production Setup (processing overheads + yield standards) ---
+authHandle('db:prod-settings:overheads', async (event, params = {}) => {
+    return safeRun(() => ops.listProductionOverheads(db, params));
+});
+
+authHandle('db:prod-settings:overheads-save', async (event, data = {}) => {
+    return safeRun(() => ops.saveProductionOverhead(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:prod-settings:overheads-delete', async (event, { id } = {}) => {
+    return safeRun(() => ops.deleteProductionOverhead(db, id, currentUser && currentUser.id));
+});
+
+authHandle('db:prod-settings:yields', async (event, params = {}) => {
+    return safeRun(() => ops.listYieldStandards(db, params));
+});
+
+authHandle('db:prod-settings:yields-save', async (event, data = {}) => {
+    return safeRun(() => ops.saveYieldStandard(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:prod-settings:yields-delete', async (event, { id } = {}) => {
+    return safeRun(() => ops.deleteYieldStandard(db, id, currentUser && currentUser.id));
+});
+
 // --- Bulk (date-wise) entry — reuses the single-entry save functions ---
 authHandle('db:bulk:save-collections', async (event, data = {}) => {
     return safeRun(() => ops.saveBulkCollections(db, data, currentUser && currentUser.id));

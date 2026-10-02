@@ -262,6 +262,14 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getSaleTraceability: (params) => apiPost('/dairy/sale-traceability', params || {}),
         getBatchTraceability: (params) => apiPost('/dairy/batch-traceability', params || {}),
 
+        // Production Setup (processing overheads + yield standards)
+        getProductionOverheads: (params) => apiPost('/production-settings/overheads', params || {}),
+        saveProductionOverhead: (data) => apiPost('/production-settings/overheads/save', data || {}),
+        deleteProductionOverhead: (id) => apiPost('/production-settings/overheads/delete', { id }),
+        getYieldStandards: (params) => apiPost('/production-settings/yields', params || {}),
+        saveYieldStandard: (data) => apiPost('/production-settings/yields/save', data || {}),
+        deleteYieldStandard: (id) => apiPost('/production-settings/yields/delete', { id }),
+
         // Bulk (date-wise) entry — same backend as single entry & Excel import
         saveBulkCollections: (data) => apiPost('/bulk/collections', data || {}),
         saveBulkPurchases: (data) => apiPost('/bulk/purchases', data || {}),

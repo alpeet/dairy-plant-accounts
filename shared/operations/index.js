@@ -111,6 +111,9 @@ const costing = require('./production_costing');
 // traceability. Read-only over the lot engine + quantity ledger.
 const dairyCosting = require('./dairy_costing');
 
+// ── Production Setup — configurable processing overheads + yield standards ──
+const productionSettings = require('./production_settings');
+
 // ── Bank Transactions ──
 const {
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
@@ -286,6 +289,16 @@ module.exports = {
     getSaleTraceability: dairyCosting.getSaleTraceability,
     getBatchTraceability: dairyCosting.getBatchTraceability,
     classifyInventoryCategory: dairyCosting.classifyInventoryCategory,
+
+    // Production Setup — the owner-configurable overhead register that feeds
+    // every batch's processing cost, and per-process expected yields.
+    listProductionOverheads: productionSettings.listProductionOverheads,
+    saveProductionOverhead: productionSettings.saveProductionOverhead,
+    deleteProductionOverhead: productionSettings.deleteProductionOverhead,
+    listYieldStandards: productionSettings.listYieldStandards,
+    saveYieldStandard: productionSettings.saveYieldStandard,
+    deleteYieldStandard: productionSettings.deleteYieldStandard,
+    OVERHEAD_BASES: productionSettings.OVERHEAD_BASES,
 
     // Partner Capital
     listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance,

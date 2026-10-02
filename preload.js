@@ -180,6 +180,14 @@ contextBridge.exposeInMainWorld('api', {
     getSaleTraceability: (params) => ipcRenderer.invoke('db:dairy:sale-traceability', params),
     getBatchTraceability: (params) => ipcRenderer.invoke('db:dairy:batch-traceability', params),
 
+    // Production Setup (processing overheads + yield standards)
+    getProductionOverheads: (params) => ipcRenderer.invoke('db:prod-settings:overheads', params),
+    saveProductionOverhead: (data) => ipcRenderer.invoke('db:prod-settings:overheads-save', data),
+    deleteProductionOverhead: (id) => ipcRenderer.invoke('db:prod-settings:overheads-delete', { id }),
+    getYieldStandards: (params) => ipcRenderer.invoke('db:prod-settings:yields', params),
+    saveYieldStandard: (data) => ipcRenderer.invoke('db:prod-settings:yields-save', data),
+    deleteYieldStandard: (id) => ipcRenderer.invoke('db:prod-settings:yields-delete', { id }),
+
     // Bulk (date-wise) entry — same backend as single entry & Excel import
     saveBulkCollections: (data) => ipcRenderer.invoke('db:bulk:save-collections', data),
     saveBulkPurchases: (data) => ipcRenderer.invoke('db:bulk:save-purchases', data),

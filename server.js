@@ -1708,6 +1708,34 @@ app.post('/api/dairy/batch-traceability', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Production Setup — configurable processing overheads + yield standards.
+// Reads open to any signed-in role; writes need operator+ (deletes admin).
+// ──────────────────────────────────────────────────────────────
+app.post('/api/production-settings/overheads', (req, res) => {
+    res.json(safeRun(() => ops.listProductionOverheads(db, req.body || {})));
+});
+
+app.post('/api/production-settings/overheads/save', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveProductionOverhead(db, req.body || {}, req.user?.id)));
+});
+
+app.post('/api/production-settings/overheads/delete', requireRole('admin'), (req, res) => {
+    res.json(safeRun(() => ops.deleteProductionOverhead(db, req.body?.id, req.user?.id)));
+});
+
+app.post('/api/production-settings/yields', (req, res) => {
+    res.json(safeRun(() => ops.listYieldStandards(db, req.body || {})));
+});
+
+app.post('/api/production-settings/yields/save', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveYieldStandard(db, req.body || {}, req.user?.id)));
+});
+
+app.post('/api/production-settings/yields/delete', requireRole('admin'), (req, res) => {
+    res.json(safeRun(() => ops.deleteYieldStandard(db, req.body?.id, req.user?.id)));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Bulk (date-wise) entry — one SAVE ALL per date. Every row goes
 // through the same saveMilkCollection/savePurchase/saveSale used
 // by single entry and Excel import (same validation/ledger/stock).
