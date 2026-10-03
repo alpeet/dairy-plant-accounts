@@ -9,6 +9,8 @@
  *
  *   actual_expense     Expense DR / Cash-Bank CR          → P&L expense
  *   advance            Advance Receivable DR / Cash-Bank CR → balance sheet only
+ *   advance_returned   Cash-Bank DR / Advance Receivable CR → balance sheet only
+ *                      (money came back — completes the recovery register)
  *   loan_given         Loan Receivable DR / Cash-Bank CR    → balance sheet only
  *   loan_received      Cash-Bank DR / Loan Payable CR       → balance sheet only
  *   loan_repayment     in: Cash-Bank DR / Loan Receivable CR
@@ -62,6 +64,7 @@ function normalizeTransactionType(v) {
     if (!t) return null;
     if (t === 'expense' || t === 'actual') return accounting.TRANSACTION_TYPES.ACTUAL_EXPENSE;
     if (t === 'advance_payment' || t === 'advance_paid' || t === 'advance') return accounting.TRANSACTION_TYPES.ADVANCE;
+    if (t === 'advance_returned' || t === 'advance_return' || t === 'return_advance' || t === 'advance_refund') return accounting.TRANSACTION_TYPES.ADVANCE_RETURNED;
     if (t === 'loan_given' || t === 'sapati_given' || t === 'loan') return accounting.TRANSACTION_TYPES.LOAN_GIVEN;
     if (t === 'loan_received' || t === 'sapati_received') return accounting.TRANSACTION_TYPES.LOAN_RECEIVED;
     if (t === 'loan_repayment' || t === 'repayment' || t === 'loan_paid') return accounting.TRANSACTION_TYPES.LOAN_REPAYMENT;

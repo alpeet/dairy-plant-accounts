@@ -33,6 +33,19 @@ async function renderDashboard() {
     // register has something to say, so existing dashboards stay uncluttered.
     const pdc = d.pdc || null;
     const pdcAlert = pdc && (pdc.pdc_receivable > 0 || pdc.pdc_payable > 0 || (pdc.overdue && pdc.overdue.count > 0));
+    // Outstanding advances + ageing (spec Phase 10) — same register as the
+    // Advances page; the dashboard only displays it.
+    const adv = d.advances || null;
+    const advAlert = adv && adv.total_outstanding > 0;
+    // KPI derivations — display-only maths over values already computed by
+    // getProfitLoss / getMilkSummary above (no second source of truth).
+    const revenue = ps.revenue != null ? ps.revenue : ps.total_income;
+    const cogs = ps.cogs || 0;
+    const milkCost = ps.milk_cost != null ? ps.milk_cost : 0;
+    const milkLiters = (milk.todayTotal && milk.todayTotal.total_liters) || 0;
+    const avgMilkCostPL = milkLiters > 0 ? milkCost / milkLiters : null;
+    const gpMarginPct = (ps.gross_profit != null && revenue > 0)
+        ? (ps.gross_profit / revenue) * 100 : null;
 
     container.innerHTML = `
         <!-- Global Search -->
@@ -48,24 +61,79 @@ async function renderDashboard() {
             <div id="global-search-results" style="margin-top:12px"></div>
         </div>
 
-        <!-- Financial Summary Cards (New) -->
-        <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px">
-            <div class="summary-card ${cp.net_cash >= 0 ? 'card-success' : 'card-danger'}" style="margin:0;cursor:pointer" onclick="navigateTo('cash-collection')" title="Click for details">
-                <span class="label">💵 Today's Cash Position</span>
-                <span class="value" style="font-size:22px">${formatCurrency(cp.net_cash)}</span>
-                <span class="sub">In: ${formatCurrency(cp.cash_in)} | Out: ${formatCurrency(cp.cash_out)}</span>
+        <!-- KPI Hero Row 1 — today's P&L (identical to the P&L page) -->
+        <div class="kpi-grid">
+            <div class="kpi-card kpi-primary kpi-click" onclick="navigateTo('profit-loss')" title="Open the P&L page">
+                <span class="kpi-label">Today's Sales</span>
+                <span class="kpi-value">${formatCurrency(revenue)}</span>
+                <span class="kpi-sub">Received: ${formatCurrency(d.todaySales.paid)}</span>
             </div>
-            <div class="summary-card ${nr >= 0 ? 'card-primary' : 'card-warning'}" style="margin:0;cursor:pointer" onclick="navigateTo('receivable-payable')" title="Click for details">
-                <span class="label">💰 Receivables vs Payables</span>
-                <span class="value" style="font-size:22px">${formatCurrency(nr)}</span>
-                <span class="sub">Receivable: ${formatCurrency(totalReceivable)} | Payable: ${formatCurrency(totalPayable)}</span>
+            <div class="kpi-card kpi-warning kpi-click" onclick="navigateTo('profit-loss')" title="Open the P&L page">
+                <span class="kpi-label">Cost of Goods Sold</span>
+                <span class="kpi-value">${formatCurrency(cogs)}</span>
+                <span class="kpi-sub">Milk: ${formatCurrency(milkCost)} · Other purchases: ${formatCurrency(cogs - milkCost)}</span>
             </div>
-            <div class="summary-card ${ps.net_profit >= 0 ? 'card-info' : 'card-danger'}" style="margin:0;cursor:pointer" onclick="navigateTo('profit-loss')" title="Click for details">
-                <span class="label">📊 Today's Profit Snapshot</span>
-                <span class="value" style="font-size:22px">${formatCurrency(ps.net_profit)}</span>
-                <span class="sub">Income: ${formatCurrency(ps.total_income)} | Expenses: ${formatCurrency(ps.total_expenses)}</span>
+            <div class="kpi-card ${ps.gross_profit != null && ps.gross_profit >= 0 ? 'kpi-success' : 'kpi-danger'} kpi-click" onclick="navigateTo('profit-loss')" title="Open the P&L page">
+                <span class="kpi-label">Gross Profit</span>
+                <span class="kpi-value ${ps.gross_profit != null && ps.gross_profit >= 0 ? 'kpi-positive' : 'kpi-negative'}">${ps.gross_profit != null ? formatCurrency(ps.gross_profit) : '—'}</span>
+                <span class="kpi-sub">${gpMarginPct != null ? gpMarginPct.toFixed(1) + '% of sales' : 'Margin unavailable'}</span>
+            </div>
+            <div class="kpi-card ${ps.net_profit >= 0 ? 'kpi-success' : 'kpi-danger'} kpi-click" onclick="navigateTo('profit-loss')" title="Same numbers as the P&L page">
+                <span class="kpi-label">Net Profit / Loss</span>
+                <span class="kpi-value ${ps.net_profit >= 0 ? 'kpi-positive' : 'kpi-negative'}">${formatCurrency(ps.net_profit)}</span>
+                <span class="kpi-sub">OpEx: ${formatCurrency(ps.operating_expenses != null ? ps.operating_expenses : ps.total_expenses)}</span>
             </div>
         </div>
+
+        <!-- KPI Hero Row 2 — operations -->
+        <div class="kpi-grid">
+            <div class="kpi-card kpi-info kpi-click" onclick="navigateTo('milk')" title="Open Milk Collection">
+                <span class="kpi-label">Milk Received Today</span>
+                <span class="kpi-value">${formatNumber(milkLiters)} L</span>
+                <span class="kpi-sub">${formatCurrency(milk.todayTotal.total_amount)} · ${milk.todayTotal.collection_count} collections</span>
+            </div>
+            <div class="kpi-card kpi-primary kpi-click" onclick="navigateTo('profit-loss')" title="Today's milk cost ÷ liters received">
+                <span class="kpi-label">Avg Milk Cost / L</span>
+                <span class="kpi-value">${avgMilkCostPL != null ? formatCurrency(avgMilkCostPL) : '—'}</span>
+                <span class="kpi-sub">Today's milk cost: ${formatCurrency(milkCost)}</span>
+            </div>
+            ${adv ? `
+            <div class="kpi-card ${adv.overdue > 0 ? 'kpi-warning' : 'kpi-info'} kpi-click" onclick="navigateTo('advances')" title="Open the Advance Recovery Register">
+                <span class="kpi-label">Outstanding Advances</span>
+                <span class="kpi-value">${formatCurrency(adv.total_outstanding)}</span>
+                <span class="kpi-sub">Overdue 7+: ${formatCurrency(adv.overdue)} · ${adv.open_advances} open</span>
+            </div>` : `
+            <div class="kpi-card ${nr >= 0 ? 'kpi-success' : 'kpi-warning'} kpi-click" onclick="navigateTo('receivable-payable')" title="Click for details">
+                <span class="kpi-label">Receivables vs Payables</span>
+                <span class="kpi-value">${formatCurrency(nr)}</span>
+                <span class="kpi-sub">Receivable: ${formatCurrency(totalReceivable)} · Payable: ${formatCurrency(totalPayable)}</span>
+            </div>`}
+            <div class="kpi-card ${cp.net_cash >= 0 ? 'kpi-success' : 'kpi-danger'} kpi-click" onclick="navigateTo('cash-collection')" title="Click for details">
+                <span class="kpi-label">Today's Cash Position</span>
+                <span class="kpi-value ${cp.net_cash >= 0 ? 'kpi-positive' : 'kpi-negative'}">${formatCurrency(cp.net_cash)}</span>
+                <span class="kpi-sub">In: ${formatCurrency(cp.cash_in)} · Out: ${formatCurrency(cp.cash_out)}</span>
+            </div>
+        </div>
+
+        ${advAlert ? `
+        <!-- Advance ageing detail (the headline number is in the KPI row above) -->
+        <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin:8px 0">
+            <div class="summary-card ${adv.overdue > 0 ? 'card-warning' : 'card-info'}" style="margin:0;cursor:pointer" onclick="navigateTo('advances')" title="Open the Advance Recovery Register">
+                <span class="label">Advance Ageing — Current (0–6 d)</span>
+                <span class="value" style="font-size:22px">${formatCurrency(adv.current)}</span>
+                <span class="sub">Overdue 7+: ${formatCurrency(adv.overdue)} · Given total: ${formatCurrency(adv.advance_given)}</span>
+            </div>
+            <div class="summary-card ${adv.bucket_30 > 0 ? 'card-warning' : 'card-info'}" style="margin:0;cursor:pointer" onclick="navigateTo('advances')">
+                <span class="label">Aged 30+ / 60+ days</span>
+                <span class="value" style="font-size:22px">${formatCurrency(adv.bucket_30)} / ${formatCurrency(adv.bucket_60)}</span>
+                <span class="sub">Open advances: ${adv.open_advances}</span>
+            </div>
+            <div class="summary-card ${adv.bucket_90 > 0 ? 'card-danger' : 'card-info'}" style="margin:0;cursor:pointer" onclick="navigateTo('advances')">
+                <span class="label">Aged 90+ days</span>
+                <span class="value" style="font-size:22px">${formatCurrency(adv.bucket_90)}</span>
+                <span class="sub">Adjusted to date: ${formatCurrency(adv.adjusted)}</span>
+            </div>
+        </div>` : ''}
 
         ${pdcAlert ? `
         <!-- Post-Dated Cheques (never mixed into cash/bank) -->
@@ -87,29 +155,24 @@ async function renderDashboard() {
             </div>
         </div>` : ''}
 
-        <!-- Core Summary Cards -->
+        <!-- Secondary summary cards -->
         <div class="summary-cards">
-            <div class="summary-card card-primary">
-                <span class="label">Today's Sales</span>
-                <span class="value">${formatCurrency(d.todaySales.total)}</span>
-                <span class="sub">Received: ${formatCurrency(d.todaySales.paid)}</span>
-            </div>
-            <div class="summary-card card-success">
+            <div class="summary-card card-success" style="cursor:pointer" onclick="navigateTo('purchases')" title="Open Purchases">
                 <span class="label">Today's Purchases</span>
-                <span class="value">${formatCurrency(d.todayPurchases.total)}</span>
+                <span class="value" style="font-size:22px">${formatCurrency(d.todayPurchases.total)}</span>
                 <span class="sub">Paid: ${formatCurrency(d.todayPurchases.paid)}</span>
             </div>
-            <div class="summary-card card-info">
-                <span class="label">🥛 Today's Milk Collection</span>
-                <span class="value" style="font-size:22px">${formatNumber(milk.todayTotal.total_liters)} L</span>
-                <span class="sub">${formatCurrency(milk.todayTotal.total_amount)} | ${milk.todayTotal.collection_count} collections</span>
-            </div>
-            <div class="summary-card card-warning">
+            ${adv ? `<div class="summary-card card-primary" style="cursor:pointer" onclick="navigateTo('receivable-payable')" title="Click for details">
+                <span class="label">Receivables vs Payables</span>
+                <span class="value" style="font-size:22px">${formatCurrency(nr)}</span>
+                <span class="sub">Receivable: ${formatCurrency(totalReceivable)} · Payable: ${formatCurrency(totalPayable)}</span>
+            </div>` : ''}
+            <div class="summary-card card-warning" style="cursor:pointer" onclick="navigateTo('petty-cash')" title="Open Petty Cash">
                 <span class="label">Today Petty Cash</span>
                 <span class="value" style="font-size:22px">${formatCurrency(t.todayPettyCash.total)}</span>
                 <span class="sub">Expenses today</span>
             </div>
-            <div class="summary-card card-danger">
+            <div class="summary-card card-danger" style="cursor:pointer" onclick="navigateTo('expenses')" title="Open Expenses">
                 <span class="label">Today Expenses</span>
                 <span class="value" style="font-size:22px">${formatCurrency(t.todayExpenses.total)}</span>
                 <span class="sub">+ Vehicle: ${formatCurrency(t.todayVehicleExpenses.total)}</span>
@@ -124,6 +187,9 @@ async function renderDashboard() {
                 </div>
                 <div id="monthlyChartContainer">
                     ${renderMonthlyChart(d.monthlySales, d.monthlyPurchases)}
+                </div>
+                <div id="monthlyMilkContainer" style="margin-top:8px">
+                    ${renderMonthlyMilkChart(d.monthlyMilk)}
                 </div>
             </div>
 
@@ -352,6 +418,28 @@ function renderMonthlyChart(salesData, purchaseData) {
             ${bars}
         </div>
     `;
+}
+
+// Monthly milk received (litres) — same bar-chart language as the
+// sales/purchase chart, single series, values shown only on hover.
+function renderMonthlyMilkChart(milkData) {
+    if (!milkData || milkData.length === 0) {
+        return '<div style="text-align:center;padding:8px;color:var(--text-light);font-size:12px">No milk collection data yet</div>';
+    }
+    const maxVal = Math.max(...milkData.map(m => m.total), 1);
+    const bars = milkData.map(m => {
+        const h = (m.total / maxVal) * 100;
+        return `
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div class="chart-bar" style="height:${Math.max(h, 4)}px;width:24px;background:var(--info)" title="${getMonthName(m.month)}: ${formatNumber(m.total)} L">
+                    <span class="bar-value" style="font-size:8px">${formatNumber(m.total)}</span>
+                </div>
+                <span style="font-size:9px;color:var(--text-light);margin-top:4px">${getMonthName(m.month)}</span>
+            </div>`;
+    }).join('');
+    return `
+        <div style="margin-bottom:16px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-light)">Milk Received (L)</div>
+        <div class="monthly-chart" style="height:120px">${bars}</div>`;
 }
 
 async function viewTransactionDetail(type, id) {

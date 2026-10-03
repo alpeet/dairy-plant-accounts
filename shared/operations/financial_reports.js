@@ -111,7 +111,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
                COALESCE(SUM(amount), 0) as total, COUNT(*) as count
         FROM payments
         WHERE date >= ? AND date <= ?
-          AND transaction_type IN ('advance', 'loan_given', 'loan_received', 'loan_repayment')
+          AND transaction_type IN ('advance', 'advance_returned', 'loan_given', 'loan_received', 'loan_repayment')
         GROUP BY transaction_type, type
     `).all(from, to);
     const bsTotal = (tt) => round2(bsMovements.filter(r => r.transaction_type === tt).reduce((s, r) => s + (Number(r.total) || 0), 0));
@@ -151,6 +151,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     // Balance-sheet movements — reference only, outside every P&L total.
     const balance_sheet_movements = {
         advances_paid: { total: bsTotal('advance'), count: bsCount('advance') },
+        advances_returned: { total: bsTotal('advance_returned'), count: bsCount('advance_returned') },
         loans_given: { total: bsTotal('loan_given'), count: bsCount('loan_given') },
         loans_received: { total: bsTotal('loan_received'), count: bsCount('loan_received') },
         loan_repayments: { total: bsTotal('loan_repayment'), count: bsCount('loan_repayment') }
@@ -239,12 +240,7 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
     const purchases = groupSum('purchases', 'date', 'grand_total').all(from, to);
     // Milk already represented by a Milk Collection: excluded from purchases so
     // the milk purchase cost is recognised once (same rule as getProfitLoss).
-    const linkedMilk = db.prepare(`
-        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total
-        FROM milk_collections
-        WHERE date >= ? AND date <= ? AND purchase_ref_id IS NOT NULL
-        GROUP BY ym
-    `).all(from, to);
+    const linkedMilk = accounting.getLinkedMilkByMonth(db, { from_date: from, to_date: to });
     // Milk lines still sitting on purchase bills with no linked collection.
     const unlinkedMilkLines = db.prepare(`
         SELECT substr(p.date, 1, 7) as ym, pi.product_name, pi.amount
@@ -414,9 +410,37 @@ function getStockStatement(db, { category, search } = {}) {
     query += " ORDER BY p.name";
 
     const items = db.prepare(query).all(...params);
-    const totalValue = items.reduce((sum, i) => sum + (i.stock_value || 0), 0);
-    const totalProducts = items.length;
-    const totalQuantity = items.reduce((sum, i) => sum + (i.current_stock || 0), 0);
+
+    // ── Lot-basis value (Phase 17) ────────────────────────────────────
+    // FIFO actual cost of the open lots, shown ALONGSIDE the legacy
+    // master-rate value — the same dual-basis pattern as lot_cogs in the P&L.
+    // Source: the ONE authoritative inventory valuation, never a second sum.
+    let lotLines = new Map();
+    let lotAvailable = false;
+    try {
+        const valuation = require('./dairy_costing').getInventoryValuation(db);
+        for (const l of valuation.lines) lotLines.set(l.product_id, l);
+        lotAvailable = true;
+    } catch (e) { /* costing module not present in this build */ }
+    const enriched = items.map(i => {
+        const lot = lotLines.get(i.id);
+        const lotQty = lot ? (Number(lot.lot_quantity) || 0) : 0;
+        const lotValue = lot ? (Number(lot.value) || 0) : 0;
+        return Object.assign({}, i, {
+            // Movement replay is the correct quantity basis (the last-row
+            // balance_after above is kept for legacy compatibility only).
+            quantity_replay: lot ? lot.quantity : i.current_stock,
+            lot_quantity: lotAvailable ? lotQty : null,
+            lot_value: lotAvailable ? lotValue : null,
+            lot_unit_cost: lot && lotQty > 0 ? round2(lotValue / lotQty) : null,
+            valuation_basis: lotAvailable && lotQty > 0 ? 'lot (FIFO actual cost)' : 'master rate (no lots)'
+        });
+    });
+
+    const totalValue = enriched.reduce((sum, i) => sum + (i.stock_value || 0), 0);
+    const totalLotValue = round2(enriched.reduce((sum, i) => sum + (Number(i.lot_value) || 0), 0));
+    const totalProducts = enriched.length;
+    const totalQuantity = enriched.reduce((sum, i) => sum + (i.current_stock || 0), 0);
 
     // Get categories for filter
     const categories = db.prepare(
@@ -424,10 +448,15 @@ function getStockStatement(db, { category, search } = {}) {
     ).all().map(r => r.category);
 
     return {
-        items,
+        items: enriched,
         total_value: totalValue,
         total_products: totalProducts,
         total_quantity: totalQuantity,
+        // Lot-basis totals (null-basis products simply contribute 0) and the
+        // variance against the legacy value, so neither is silently trusted.
+        lot_valuation_available: lotAvailable,
+        total_lot_value: lotAvailable ? totalLotValue : null,
+        lot_vs_master_diff: lotAvailable ? round2(totalLotValue - totalValue) : null,
         categories
     };
 }

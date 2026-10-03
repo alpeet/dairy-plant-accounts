@@ -839,6 +839,36 @@ function runMigrations(db) {
         console.log('Migration 25 (scientific dairy costing) skipped:', e25.message);
     }
 
+    // Migration 26: supplier-specific milk pricing. The rate chart stays ONE
+    // authoritative engine — it simply gains a supplier dimension (party_id),
+    // an effective-to date, an optional milk-type scope and an active flag, so
+    // a farmer can be priced Fixed while others follow the fat/SNF formula.
+    // Collections gain the override reason the spec requires when the operator
+    // departs from the calculated rate. Purely additive/idempotent.
+    try {
+        const rcCols26 = db.prepare('PRAGMA table_info(milk_rate_chart)').all().map(c => c.name);
+        const rcAdd26 = [
+            ['party_id', 'INTEGER DEFAULT NULL'],
+            ['effective_to', 'TEXT DEFAULT NULL'],
+            ['milk_type', "TEXT DEFAULT ''"],
+            ['is_active', 'INTEGER DEFAULT 1']
+        ];
+        for (const [col, def] of rcAdd26) {
+            if (!rcCols26.includes(col)) {
+                try { db.exec(`ALTER TABLE milk_rate_chart ADD COLUMN ${col} ${def};`); } catch (e) { /* concurrent */ }
+            }
+        }
+        const mcCols26 = db.prepare('PRAGMA table_info(milk_collections)').all().map(c => c.name);
+        if (!mcCols26.includes('rate_override_reason')) {
+            try { db.exec("ALTER TABLE milk_collections ADD COLUMN rate_override_reason TEXT DEFAULT '';"); } catch (e) { /* concurrent */ }
+        }
+        try {
+            db.exec('CREATE INDEX IF NOT EXISTS idx_rate_chart_party ON milk_rate_chart(party_id);');
+        } catch (e) { /* index already there */ }
+    } catch (e26) {
+        console.log('Migration 26 (supplier milk pricing) skipped:', e26.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

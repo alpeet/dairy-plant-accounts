@@ -111,6 +111,10 @@ const ACCOUNT = {
 const TRANSACTION_TYPES = {
     ACTUAL_EXPENSE: 'actual_expense',
     ADVANCE: 'advance',
+    // Money coming BACK from an advance holder: Cash/Bank DR → Advance
+    // Receivable CR. The mirror image of 'advance' — still balance sheet,
+    // never P&L, and it makes the recovery register complete.
+    ADVANCE_RETURNED: 'advance_returned',
     LOAN_GIVEN: 'loan_given',
     LOAN_RECEIVED: 'loan_received',
     LOAN_REPAYMENT: 'loan_repayment',
@@ -303,6 +307,42 @@ function getMilkCostSummary(db, opts = {}) {
         non_milk_purchases: nonMilkPurchases,
         cogs: round2(milkCost + nonMilkPurchases)
     };
+}
+
+/**
+ * Milk already represented by a Milk Collection, grouped by its purchase bill
+ * (Phase 27 — single source). Read models subtract this from each bill to get
+ * the bill's non-milk value; before this helper the same query existed three
+ * times (company ledger, expense analysis, monthly P&L trend).
+ *
+ * @returns {Map<number, number>} purchase_id → linked milk amount
+ */
+function getLinkedMilkByBill(db, opts = {}) {
+    const { from, to } = periodBounds(opts);
+    const map = new Map();
+    for (const r of db.prepare(
+        `SELECT purchase_ref_id AS pid, SUM(amount) AS v FROM milk_collections
+          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL
+          GROUP BY purchase_ref_id`
+    ).all(from, to)) {
+        map.set(r.pid, round2(r.v));
+    }
+    return map;
+}
+
+/**
+ * Same linked-milk split grouped by BS month (YYYY-MM) for trend series.
+ *
+ * @returns {Array<{ym: string, total: number}>}
+ */
+function getLinkedMilkByMonth(db, opts = {}) {
+    const { from, to } = periodBounds(opts);
+    return db.prepare(
+        `SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total
+           FROM milk_collections
+          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL
+          GROUP BY ym`
+    ).all(from, to);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -931,6 +971,10 @@ function getPaymentPostingRule(t = {}) {
             return { kind: 'expense', debit_account: ACCOUNT.EXPENSE, credit_account: money, pnl: 'expense' };
         case TRANSACTION_TYPES.ADVANCE:
             return { kind: 'advance_receivable', debit_account: ACCOUNT.ADVANCE_RECEIVABLE, credit_account: money, pnl: null };
+        case TRANSACTION_TYPES.ADVANCE_RETURNED:
+            // The advance holder gave the money back: Cash/Bank DR,
+            // Advance Receivable CR. Reduces the receivable, no P&L.
+            return { kind: 'advance_returned', debit_account: money, credit_account: ACCOUNT.ADVANCE_RECEIVABLE, pnl: null };
         case TRANSACTION_TYPES.LOAN_GIVEN:
             return { kind: 'loan_receivable', debit_account: ACCOUNT.LOAN_RECEIVABLE, credit_account: money, pnl: null };
         case TRANSACTION_TYPES.LOAN_RECEIVED:
@@ -980,6 +1024,164 @@ function getLoanAdvanceBalances(db, { as_of } = {}) {
     return out;
 }
 
+// ──────────────────────────────────────────────────────────────
+// Advance recovery register (balance sheet control — spec Phase 9)
+// ──────────────────────────────────────────────────────────────
+
+/** Age of a BS date (in days) relative to `as_of`, via real AD dates. */
+function _bsAgeDays(fromBS, toBS) {
+    try {
+        const { bsToAD } = require('../excel-import');
+        const a = bsToAD(fromBS), b = bsToAD(toBS);
+        if (!a || !b) return 0;
+        return Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 86400000));
+    } catch (e) { return 0; }
+}
+
+/** Ageing bucket label for an advance outstanding at `age` days old. */
+function _ageBucket(age) {
+    if (age >= 90) return '90+';
+    if (age >= 60) return '60+';
+    if (age >= 30) return '30+';
+    if (age >= 7) return '7+';
+    return 'current';
+}
+
+/**
+ * Advance Recovery Register (spec Phase 9): per-advance outstanding with what
+ * was adjusted against an approved expense and what was returned in cash.
+ *
+ * Source of truth: the EXISTING `[Advance Receivable]`-tagged ledger rows
+ * (the same rows getLoanAdvanceBalances totals), allocated FIFO per party so
+ * every rupee of recovery is traced back to the advance it clears:
+ *
+ *   Outstanding = Advance Given − Returned − Properly Adjusted
+ *
+ * A credit row whose source payment is typed `advance_adjustment` is an
+ * ADJUSTMENT (it already reached the P&L as a real expense); every other
+ * tagged credit is a RETURN of cash. No new table, no new posting rule.
+ *
+ * @param {object} db
+ * @param {object} opts - { as_of (BS date, default today), party_id }
+ * @returns {object} { as_of, lots, movements, summary, checks }
+ *   summary: { advance_given, adjusted, returned, total_outstanding,
+ *              current, overdue, bucket_7, bucket_30, bucket_60, bucket_90 }
+ */
+function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
+    let cutoff = as_of;
+    if (!cutoff) {
+        const { adToBS } = require('../excel-import');
+        const ad = new Date().toISOString().split('T')[0];
+        try { cutoff = adToBS(ad) || ad; } catch (e) { cutoff = ad; }
+    }
+
+    let sql = `SELECT id, party_id, date, reference_type, reference_id, description, debit, credit
+                 FROM ledger_entries
+                WHERE description LIKE '%[${ACCOUNT.ADVANCE_RECEIVABLE}]%'
+                  AND date <= ?`;
+    const params = [cutoff];
+    if (party_id) { sql += ' AND party_id = ?'; params.push(party_id); }
+    sql += ' ORDER BY date, id';
+    const rows = db.prepare(sql).all(...params);
+
+    // Batch-resolve the source payments so each credit row can be classified.
+    const paymentIds = [...new Set(rows
+        .filter(r => r.credit > 0 && r.reference_id != null)
+        .map(r => r.reference_id))];
+    const ttById = new Map();
+    if (paymentIds.length) {
+        const ph = paymentIds.map(() => '?').join(',');
+        for (const p of db.prepare(`SELECT id, transaction_type FROM payments WHERE id IN (${ph})`).all(...paymentIds)) {
+            ttById.set(p.id, String(p.transaction_type || ''));
+        }
+    }
+    const partyIds = [...new Set(rows.map(r => r.party_id).filter(v => v != null))];
+    const names = new Map();
+    if (partyIds.length) {
+        const ph = partyIds.map(() => '?').join(',');
+        for (const p of db.prepare(`SELECT id, name FROM parties WHERE id IN (${ph})`).all(...partyIds)) names.set(p.id, p.name);
+    }
+
+    const byParty = new Map();
+    for (const r of rows) {
+        const key = r.party_id || 0;
+        if (!byParty.has(key)) byParty.set(key, []);
+        byParty.get(key).push(r);
+    }
+
+    const lots = [];
+    const movements = [];
+    for (const [pid, list] of byParty) {
+        const open = []; // FIFO advance lots still holding money
+        for (const r of list) {
+            const name = names.get(pid) || (pid ? `Party #${pid}` : '(unassigned)');
+            if (Number(r.debit) > 0) {
+                const amt = round2(r.debit);
+                open.push({ ledger_id: r.id, party_id: pid, party_name: name, date: r.date, advance: amt, adjusted: 0, returned: 0, outstanding: amt });
+                movements.push({ ledger_id: r.id, party_id: pid, party_name: name, date: r.date, kind: 'given', amount: amt, particular: r.description });
+                continue;
+            }
+            const credit = round2(r.credit);
+            if (!(credit > 0)) continue;
+            // The receivable leg of an adjustment posts with reference_type
+            // 'advance' (the expense leg carries 'adjustment'), so the source
+            // payment's transaction_type is what decides the classification.
+            const isAdjustment = ttById.get(r.reference_id) === TRANSACTION_TYPES.ADVANCE_ADJUSTMENT;
+            const kind = isAdjustment ? 'adjusted' : 'returned';
+            let left = credit;
+            for (const lot of open) {
+                if (left <= 0.005 || lot.outstanding <= 0.005) continue;
+                const take = Math.min(left, lot.outstanding);
+                if (kind === 'adjusted') lot.adjusted = round2(lot.adjusted + take);
+                else lot.returned = round2(lot.returned + take);
+                lot.outstanding = round2(lot.outstanding - take);
+                left = round2(left - take);
+            }
+            movements.push({ ledger_id: r.id, party_id: pid, party_name: name, date: r.date, kind, amount: credit, particular: r.description });
+        }
+        for (const lot of open) {
+            lot.age_days = _bsAgeDays(lot.date, cutoff);
+            lot.due_status = lot.outstanding > 0.005 ? _ageBucket(lot.age_days) : 'settled';
+            lots.push(lot);
+        }
+    }
+    lots.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.party_id - b.party_id);
+    movements.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.ledger_id - b.ledger_id);
+
+    const sum = (f) => round2(lots.reduce((s, l) => s + (Number(l[f]) || 0), 0));
+    const out = (minAge, maxAge) => round2(lots.filter(l => l.age_days >= minAge && (maxAge === undefined || l.age_days < maxAge))
+        .reduce((s, l) => s + (Number(l.outstanding) || 0), 0));
+    const summary = {
+        advance_given: round2(movements.filter(m => m.kind === 'given').reduce((s, m) => s + m.amount, 0)),
+        adjusted: round2(movements.filter(m => m.kind === 'adjusted').reduce((s, m) => s + m.amount, 0)),
+        returned: round2(movements.filter(m => m.kind === 'returned').reduce((s, m) => s + m.amount, 0)),
+        total_outstanding: sum('outstanding'),
+        open_advances: lots.filter(l => l.outstanding > 0.005).length,
+        current: out(0, 7),
+        overdue: out(7),
+        bucket_7: out(7),
+        bucket_30: out(30),
+        bucket_60: out(60),
+        bucket_90: out(90)
+    };
+
+    // The register must never disagree with the balance it is a register OF.
+    const balances = getLoanAdvanceBalances(db, { as_of: cutoff });
+    const checks = [{
+        name: 'Register outstanding = Advance Receivable balance',
+        expected: balances.advance_receivable,
+        actual: summary.total_outstanding,
+        ok: Math.abs(round2(balances.advance_receivable) - summary.total_outstanding) <= 0.01
+    }, {
+        name: 'Given = returned + adjusted + outstanding',
+        expected: round2(summary.advance_given),
+        actual: round2(summary.returned + summary.adjusted + summary.total_outstanding),
+        ok: Math.abs(round2(summary.advance_given) - round2(summary.returned + summary.adjusted + summary.total_outstanding)) <= 0.01
+    }];
+
+    return { as_of: cutoff, lots, movements, summary, checks, all_checks_ok: checks.every(c => c.ok) };
+}
+
 module.exports = {
     // money
     round2, moneyEq, moneyGte, CURRENCY_TOLERANCE, paymentStatus,
@@ -987,13 +1189,15 @@ module.exports = {
     ACCOUNT, TRANSACTION_TYPES, TRANSACTION_TYPE_VALUES, classifyTransaction, getPaymentPostingRule,
     getLoanAdvanceBalances,
     // milk / purchases
-    getMilkCostSummary, detectMilkLine,
+    getMilkCostSummary, getLinkedMilkByBill, getLinkedMilkByMonth, detectMilkLine,
     // bank classification
     classifyBankRow, listClassifiedBankRows,
     // sales settlement
     getSaleSettlements, isCustomerReceipt,
     // cash / bank / expenses
     getCashBankPosition, getExpenseSummary,
+    // advances / loans
+    getAdvanceRecoveryRegister,
     // reconciliation
     getReconciliation
 };

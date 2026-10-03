@@ -58,6 +58,10 @@ contextBridge.exposeInMainWorld('api', {
     getSalesRegister: (opts) => ipcRenderer.invoke('db:reports:sales-register', opts),
     getPurchaseRegister: (opts) => ipcRenderer.invoke('db:reports:purchase-register', opts),
     getProfitLoss: (opts) => ipcRenderer.invoke('db:reports:profit-loss', opts),
+    getCompanyLedger: (opts) => ipcRenderer.invoke('db:reports:company-ledger', opts),
+    getExpenseAnalysis: (opts) => ipcRenderer.invoke('db:reports:expense-analysis', opts),
+    getBoardReport: (opts) => ipcRenderer.invoke('db:reports:board-report', opts),
+    getManagementReport: (opts) => ipcRenderer.invoke('db:reports:management', opts),
     getStockStatement: (opts) => ipcRenderer.invoke('db:reports:stock-statement', opts),
     getEnhancedDaybook: (opts) => ipcRenderer.invoke('db:reports:enhanced-daybook', opts),
     getTodaySummary: () => ipcRenderer.invoke('db:reports:today-summary'),
@@ -140,7 +144,8 @@ contextBridge.exposeInMainWorld('api', {
     getRateChart: (id) => ipcRenderer.invoke('db:rates:get', id),
     saveRateChart: (data) => ipcRenderer.invoke('db:rates:save', data),
     deleteRateChart: (id) => ipcRenderer.invoke('db:rates:delete', id),
-    getEffectiveRate: (date) => ipcRenderer.invoke('db:rates:effective', { date }),
+    getEffectiveRate: (date, opts) => ipcRenderer.invoke('db:rates:effective', Object.assign({ date }, opts || {})),
+    resolveMilkRate: (data) => ipcRenderer.invoke('db:rates:resolve', data),
     calculateMilkRate: (data) => ipcRenderer.invoke('db:rates:calculate', data),
 
     // Production
@@ -198,6 +203,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Payment accounting by transaction type
     getPaymentTransactionTypes: () => ipcRenderer.invoke('db:payments:transaction-types'),
+    getAdvanceRecoveryRegister: (params) => ipcRenderer.invoke('db:payments:advance-register', params),
     getLoanAdvanceBalances: (params) => ipcRenderer.invoke('db:payments:loan-advance-balances', params),
 
     // Partner Capital

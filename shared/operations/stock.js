@@ -5,6 +5,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { logAudit } = require('./audit');
+
 /**
  * Get current stock levels for all products with optional search.
  */
@@ -46,25 +48,39 @@ function getStockMovements(db, { product_id, from_date, to_date } = {}) {
 /**
  * Adjust stock for a product (positive = add, negative = remove).
  */
-function adjustStock(db, { product_id, date, quantity, rate, notes }) {
+function adjustStock(db, { product_id, date, quantity, rate, notes }, userId) {
+    const qty = parseFloat(quantity) || 0;
+    const movementDate = date || new Date().toISOString().split('T')[0];
     const trx = db.transaction(() => {
-        const lastBalance = db.prepare(
-            "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
-        ).get(product_id);
-        const currentBal = lastBalance ? lastBalance.balance_after : 0;
-        const newBalance = currentBal + parseFloat(quantity);
+        // Current balance must be computed EXACTLY like getCurrentStock replays it
+        // (SUM of movements, falling back to opening_stock when there are none).
+        // The old code read the latest row's balance_after, which can drift from
+        // the replay and ignored opening_stock entirely.
+        const replay = db.prepare(
+            "SELECT COALESCE(SUM(inward_qty - outward_qty), (SELECT opening_stock FROM products WHERE id = ?)) AS bal FROM stock_movements WHERE product_id = ?"
+        ).get(product_id, product_id);
+        const currentBal = (replay && replay.bal) || 0;
+        const newBalance = currentBal + qty;
 
-        db.prepare(
-            "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes) VALUES (?, ?, 'adjustment', ?, 0, ?, ?, ?)"
+        // A negative adjustment is an OUTWARD movement. Writing 0 for both sides
+        // (the old behaviour) left balance_after reduced while the replayed
+        // closing balance never changed — the two silently disagreed.
+        const result = db.prepare(
+            "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes) VALUES (?, ?, 'adjustment', ?, ?, ?, ?, ?)"
         ).run(
             product_id,
-            date || new Date().toISOString().split('T')[0],
-            quantity > 0 ? quantity : 0,
+            movementDate,
+            qty > 0 ? qty : 0,
+            qty < 0 ? Math.abs(qty) : 0,
             newBalance,
             rate || 0,
             notes || 'Stock Adjustment'
         );
-        return { success: true };
+        logAudit(db, 'stock_movements', result.lastInsertRowid, 'create', null, {
+            product_id, date: movementDate, quantity: qty, rate: rate || 0,
+            notes: notes || 'Stock Adjustment', balance_after: newBalance
+        }, userId || null);
+        return { success: true, id: result.lastInsertRowid, balance_after: newBalance };
     });
     return trx();
 }

@@ -112,8 +112,7 @@ function saveBulkCollections(db, data, userId = null) {
     const rows = Array.isArray(data.rows) ? data.rows : [];
     if (!rows.length) throw new Error('No rows to save.');
 
-    const { getEffectiveRate, calculateMilkRate } = require('./rates');
-    const chart = getEffectiveRate(db, date);
+    const { resolveMilkRate, rateOverrideError } = require('./rates');
 
     const errors = [];
     const results = [];
@@ -134,7 +133,12 @@ function saveBulkCollections(db, data, userId = null) {
             return null;
         }
         const milkType = String(r.milk_type || 'cow').toLowerCase();
-        return { rowNo, party, qty, milkType, fat: round2(r.fat_percent || 0), snf: round2(r.snf_percent || 0), explicitRate: round2(r.rate || 0), notes: r.notes || '' };
+        return {
+            rowNo, party, qty, milkType, fat: round2(r.fat_percent || 0), snf: round2(r.snf_percent || 0),
+            explicitRate: round2(r.rate || 0), notes: r.notes || '',
+            rateType: r.rate_type || '', fixedRate: r.fixed_rate != null ? r.fixed_rate : null,
+            overrideReason: String(r.rate_override_reason || r.override_reason || '').trim()
+        };
     }).filter(Boolean);
 
     const trx = db.transaction(() => {
@@ -143,8 +147,23 @@ function saveBulkCollections(db, data, userId = null) {
                 const existing = findExistingCollection(db, {
                     date, shift: shift, party_id: p.party.id, milk_type: p.milkType, route_id: routeId
                 });
-                // Rate: explicit row rate wins, else effective-chart formula
-                const calcRate = round2(calculateMilkRate(p.fat, p.snf, chart));
+                // One authoritative price per row: the supplier's own chart
+                // (falls back to the plant chart). Explicit row rate wins only
+                // when it is not an unexplained deviation.
+                const resolved = resolveMilkRate(db, {
+                    date, party_id: p.party.id, milk_type: p.milkType,
+                    fat: p.fat, snf: p.snf, rate: p.explicitRate > 0 ? p.explicitRate : null,
+                    rate_override_reason: p.overrideReason
+                });
+                const overrideError = rateOverrideError(db, {
+                    date, party_id: p.party.id, milk_type: p.milkType,
+                    fat: p.fat, snf: p.snf, rate: p.explicitRate > 0 ? p.explicitRate : null,
+                    rate_type: p.rateType, fixed_rate: p.fixedRate,
+                    rate_override_reason: p.overrideReason
+                });
+                if (overrideError) throw new Error(overrideError);
+                const chart = resolved.chart || {};
+                const calcRate = resolved.calculated_rate;
                 const rate = p.explicitRate > 0 ? p.explicitRate : calcRate;
                 const payload = {
                     id: existing ? existing.id : undefined,
@@ -161,10 +180,11 @@ function saveBulkCollections(db, data, userId = null) {
                     status: 'pending',   // schema CHECK: pending|processed|paid
                     notes: p.notes,
                     route_id: routeId,
-                    rate_type: chart.rate_type || 'formula',
+                    rate_type: p.rateType || chart.rate_type || 'formula',
                     fat_multiplier: chart.fat_multiplier,
                     snf_multiplier: chart.snf_multiplier,
-                    calculated_rate: calcRate
+                    calculated_rate: calcRate,
+                    rate_override_reason: p.overrideReason || ''
                 };
                 const res = require('./milk').saveMilkCollection(db, payload, userId);
                 const id = res && res.id ? res.id : (existing ? existing.id : res);

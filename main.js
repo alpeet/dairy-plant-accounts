@@ -605,7 +605,7 @@ authHandle('db:stock:movements', async (event, params = {}) => {
 });
 
 authHandle('db:stock:adjust', async (event, params) => {
-    return safeRun(() => ops.adjustStock(db, params));
+    return safeRun(() => ops.adjustStock(db, params, currentUser && currentUser.id));
 });
 
 // --- Sales ---
@@ -652,6 +652,9 @@ authHandle('db:milk:get', async (event, id) => {
 });
 
 authHandle('db:milk:save', async (event, data) => {
+    // A rate that departs from the supplier's calculated rate needs a reason.
+    const overrideError = ops.rateOverrideError(db, data || {});
+    if (overrideError) return { success: false, error: overrideError };
     return safeRun(() => ops.saveMilkCollection(db, data));
 });
 
@@ -717,6 +720,22 @@ authHandle('db:reports:profit-loss', async (event, params = {}) => {
 
 authHandle('db:reports:profit-loss-by-month', async (event, params = {}) => {
     return safeRun(() => ops.getProfitLossByMonth(db, params));
+});
+
+authHandle('db:reports:company-ledger', async (event, params = {}) => {
+    return safeRun(() => ops.getCompanyLedger(db, params));
+});
+
+authHandle('db:reports:expense-analysis', async (event, params = {}) => {
+    return safeRun(() => ops.getExpenseAnalysis(db, params));
+});
+
+authHandle('db:reports:board-report', async (event, params = {}) => {
+    return safeRun(() => ops.getBoardReport(db, params));
+});
+
+authHandle('db:reports:management', async (event, params = {}) => {
+    return safeRun(() => ops.getManagementReport(db, params));
 });
 
 authHandle('db:reports:stock-statement', async (event, params = {}) => {
@@ -1052,8 +1071,12 @@ authHandle('db:rates:delete', async (event, id) => {
     return safeRun(() => ops.deleteRateChart(db, id, currentUser && currentUser.id));
 });
 
-authHandle('db:rates:effective', async (event, { date } = {}) => {
-    return safeRun(() => ops.getEffectiveRate(db, date));
+authHandle('db:rates:effective', async (event, data = {}) => {
+    return safeRun(() => ops.getEffectiveRate(db, data && data.date, { party_id: data && data.party_id, milk_type: data && data.milk_type }));
+});
+
+authHandle('db:rates:resolve', async (event, data = {}) => {
+    return safeRun(() => ops.resolveMilkRate(db, data || {}));
 });
 
 authHandle('db:rates:calculate', async (event, data = {}) => {
@@ -1240,6 +1263,10 @@ authHandle('db:bulk:load-sales', async (event, params = {}) => {
 // --- Payment accounting by transaction type ---
 authHandle('db:payments:transaction-types', async () => {
     return safeRun(() => ops.TRANSACTION_TYPES);
+});
+
+authHandle('db:payments:advance-register', async (event, params = {}) => {
+    return safeRun(() => ops.getAdvanceRecoveryRegister(db, params));
 });
 
 authHandle('db:payments:loan-advance-balances', async (event, params = {}) => {

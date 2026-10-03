@@ -100,9 +100,38 @@ function saveMilkCollection(db, data) {
         const { id, collection_no, date, party_id, milk_type, quantity_liters,
                 fat_percent, snf_percent, rate, amount, shift, status, notes,
                 route_id, clr_percent, adulteration_test, rate_type,
-                extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, calculated_rate } = data;
+                extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, rate_override_reason } = data;
 
         const rawMilkProduct = getOrCreateRawMilkProduct(db, milk_type);
+
+        // ── One authoritative price ──────────────────────────────────────
+        // The engine resolves the supplier-specific chart (falls back to the
+        // plant-wide chart) and answers what this litre must cost. The stored
+        // rate is the caller's rate when one was given (single entry, bulk,
+        // import all pass the rate they display), otherwise the resolved rate
+        // — so the server, not the screen, decides what milk costs.
+        const { resolveMilkRate } = require('./rates');
+        const resolved = resolveMilkRate(db, {
+            date, party_id, milk_type, fat: fat_percent, snf: snf_percent,
+            rate, rate_type, fixed_rate
+        });
+        const chart = resolved.chart || {};
+        const effRate = (rate === undefined || rate === null || rate === '')
+            ? resolved.calculated_rate : Number(rate) || 0;
+        const effCalculated = resolved.calculated_rate;
+        const effRateType = rate_type || resolved.rate_type || 'formula';
+        const effFatMult = chart.fat_multiplier != null ? chart.fat_multiplier : (Number(fat_multiplier) || 7.15);
+        const effSnfMult = chart.snf_multiplier != null ? chart.snf_multiplier : (Number(snf_multiplier) || 4.55);
+        const effExtra = chart.extra_per_unit != null ? chart.extra_per_unit : (Number(extra_per_unit) || 0);
+        const effFixed = effRateType === 'fixed'
+            ? (Number(fixed_rate) || Number(chart.fixed_rate) || 0)
+            : (chart.fixed_rate != null ? chart.fixed_rate : (Number(fixed_rate) || 0));
+        const effOverrideReason = String(rate_override_reason || '').trim();
+        // Amount is derived when the caller did not send one — the user never
+        // has to compute the payable by hand (spec Phase 4).
+        const qty = Number(quantity_liters) || 0;
+        const effAmount = (amount === undefined || amount === null || amount === '')
+            ? Math.round(effRate * qty * 100) / 100 : (Number(amount) || 0);
 
         if (id) {
             // ── Revert old collection ──
@@ -131,19 +160,20 @@ function saveMilkCollection(db, data) {
                  fat_percent=?, snf_percent=?, rate=?, amount=?, shift=?, status=?, notes=?,
                  route_id=?, clr_percent=?, adulteration_test=?, rate_type=?,
                  extra_per_unit=?, fixed_rate=?, fat_multiplier=?, snf_multiplier=?, calculated_rate=?,
+                 rate_override_reason=?,
                  updated_at=datetime('now','localtime') WHERE id=?`
             ).run(collection_no, date, party_id, milk_type, quantity_liters,
-                  fat_percent || 0, snf_percent || 0, rate || 0, amount || 0,
+                  fat_percent || 0, snf_percent || 0, effRate, effAmount,
                   shift || 'morning', status || 'pending', notes || '',
-                  route_id || null, clr_percent || null, adulteration_test || 'not_tested', rate_type || 'formula',
-                  extra_per_unit || 0, fixed_rate || 0, fat_multiplier || 7.15, snf_multiplier || 4.55, calculated_rate || 0,
-                  id);
+                  route_id || null, clr_percent || null, adulteration_test || 'not_tested', effRateType,
+                  effExtra, effFixed, effFatMult, effSnfMult, effCalculated,
+                  effOverrideReason, id);
 
-            // Add new ledger entry
-            const ledgerBalance = status === 'paid' ? 0 : (amount || 0);
+            // Add new ledger entry (the payable is the resolved amount)
+            const ledgerBalance = status === 'paid' ? 0 : effAmount;
             db.prepare(
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, 'milk_collection', ?, ?, ?, 0, ?)"
-            ).run(party_id, date, id, `Milk Collection ${collection_no}`, amount || 0, ledgerBalance);
+            ).run(party_id, date, id, `Milk Collection ${collection_no}`, effAmount, ledgerBalance);
 
             // Add new stock movement
             const newLiters = parseFloat(quantity_liters || 0);
@@ -173,20 +203,22 @@ function saveMilkCollection(db, data) {
                 `INSERT INTO milk_collections (collection_no, date, party_id, milk_type, quantity_liters,
                  fat_percent, snf_percent, rate, amount, shift, status, notes,
                  route_id, clr_percent, adulteration_test, rate_type,
-                 extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, calculated_rate)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                 extra_per_unit, fixed_rate, fat_multiplier, snf_multiplier, calculated_rate,
+                 rate_override_reason)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).run(collection_no, date, party_id, milk_type, quantity_liters,
-                  fat_percent || 0, snf_percent || 0, rate || 0, amount || 0,
+                  fat_percent || 0, snf_percent || 0, effRate, effAmount,
                   shift || 'morning', status || 'pending', notes || '',
-                  route_id || null, clr_percent || null, adulteration_test || 'not_tested', rate_type || 'formula',
-                  extra_per_unit || 0, fixed_rate || 0, fat_multiplier || 7.15, snf_multiplier || 4.55, calculated_rate || 0);
+                  route_id || null, clr_percent || null, adulteration_test || 'not_tested', effRateType,
+                  effExtra, effFixed, effFatMult, effSnfMult, effCalculated,
+                  effOverrideReason);
             const newId = result.lastInsertRowid;
 
-            // Add ledger entry (credit = plant owes farmer)
-            const ledgerBalance = status === 'paid' ? 0 : (amount || 0);
+            // Add ledger entry (credit = plant owes farmer, at the resolved amount)
+            const ledgerBalance = status === 'paid' ? 0 : effAmount;
             db.prepare(
                 "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, 'milk_collection', ?, ?, ?, 0, ?)"
-            ).run(party_id, date, newId, `Milk Collection ${collection_no}`, amount || 0, ledgerBalance);
+            ).run(party_id, date, newId, `Milk Collection ${collection_no}`, effAmount, ledgerBalance);
 
             // Add stock movement (increase raw milk inventory)
             const newLiters = parseFloat(quantity_liters || 0);

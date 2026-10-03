@@ -72,17 +72,26 @@ function getDashboard(db) {
     ).get();
 
     // ── Quick Profit Snapshot (Today) ──
-    // Same accrual basis as the P&L report: sales revenue minus COGS
-    // (purchases + milk collections) and operating costs. Cash receipts
-    // are excluded (they collect against the same sales).
-    const todayMilk = db.prepare(
+    // Legacy fallback components (only used if the P&L module is unavailable).
+    const todayMilkLegacy = db.prepare(
         "SELECT COALESCE(SUM(amount), 0) as total FROM milk_collections WHERE date = ?"
-    ).get(today);
-    const todaySalary = db.prepare(
+    ).get(today).total || 0;
+    const todaySalaryLegacy = db.prepare(
         "SELECT COALESCE(SUM(net_salary), 0) as total FROM salary_records WHERE payment_date = ?"
-    ).get(today);
-    const todayTotalExpenses = (todayPurchases.total || 0) + (todayMilk.total || 0) + (todayPettyCash.total || 0) + (todayExpenses.total || 0) + (todayVehicle.total || 0) + (todaySalary.total || 0);
-    const todayProfit = (todaySales.total || 0) - todayTotalExpenses;
+    ).get(today).total || 0;
+    // ONE authoritative calculation (spec Phases 14 & 27): the dashboard calls
+    // the SAME getProfitLoss the P&L page uses, so "today's profit" can never
+    // disagree with the reports. The legacy formula stays only as a fallback
+    // if the reports module is unavailable.
+    let todayPnl = null;
+    try {
+        const { getProfitLoss } = require('./financial_reports');
+        todayPnl = getProfitLoss(db, { from_date: today, to_date: today });
+    } catch (e) { todayPnl = null; }
+    const todayTotalExpenses = todayPnl
+        ? Math.round((todayPnl.expenses.total_expenses + Number.EPSILON) * 100) / 100
+        : (todayPurchases.total || 0) + todayMilkLegacy + (todayPettyCash.total || 0) + (todayExpenses.total || 0) + (todayVehicle.total || 0) + todaySalaryLegacy;
+    const todayProfit = todayPnl ? todayPnl.net_profit : ((todaySales.total || 0) - todayTotalExpenses);
 
     // ── Stock Summary ──
     // Closing balance is replayed from the movements. Taking "inward - outward of the
@@ -117,6 +126,12 @@ function getDashboard(db) {
         "SELECT substr(date, 1, 7) as month, COALESCE(SUM(grand_total), 0) as total FROM purchases WHERE date LIKE '____-__-__' GROUP BY month ORDER BY month"
     ).all().slice(-6);
 
+    // Milk received per BS month — same slice pattern as sales/purchases so
+    // all three dashboard series group identically.
+    const monthlyMilk = db.prepare(
+        "SELECT substr(date, 1, 7) as month, COALESCE(SUM(quantity_liters), 0) as total FROM milk_collections WHERE date LIKE '____-__-__' GROUP BY month ORDER BY month"
+    ).all().slice(-6);
+
     const lowStock = db.prepare(
         `SELECT p.name, p.unit, p.reorder_level, ${closingBalanceSql} as current_stock
            FROM products p
@@ -144,6 +159,16 @@ function getDashboard(db) {
         pdc = null; // older database without the PDC register
     }
 
+    // ── Advance recovery alert (spec Phase 10) ──
+    // Outstanding advances + ageing buckets from the SAME register the
+    // Advances page shows — the dashboard never computes its own numbers.
+    let advances = null;
+    try {
+        advances = require('./accounting').getAdvanceRecoveryRegister(db, { as_of: today }).summary;
+    } catch (e) {
+        advances = null;
+    }
+
     return {
         todaySales,
         todayPurchases,
@@ -164,12 +189,21 @@ function getDashboard(db) {
         receivables,
         payables,
         netReceivable: (receivables?.total || 0) - (payables?.total || 0),
-        // Quick profit snapshot
+        // Quick profit snapshot — now the SAME figures as the P&L page
+        // (revenue / COGS / gross profit / operating expenses / net).
         profitSnapshot: {
-            total_income: todaySales.total || 0,
+            total_income: todayPnl ? todayPnl.income.total_income : (todaySales.total || 0),
             total_expenses: todayTotalExpenses,
             net_profit: todayProfit,
-            total_receipts: todayCashReceipts.total || 0
+            total_receipts: todayCashReceipts.total || 0,
+            revenue: todayPnl ? todayPnl.income.total_sales : (todaySales.total || 0),
+            cogs: todayPnl ? todayPnl.cogs : 0,
+            gross_profit: todayPnl ? todayPnl.gross_profit : null,
+            operating_expenses: todayPnl ? todayPnl.operating_expenses : null,
+            // Milk component of COGS from the SAME P&L — the dashboard never
+            // re-derives it, it only divides by liters for the per-litre KPI.
+            milk_cost: todayPnl ? todayPnl.expenses.milk_collection.total : todayMilkLegacy,
+            pnl_basis: !!todayPnl
         },
         // Stock
         stockSummary: {
@@ -181,11 +215,14 @@ function getDashboard(db) {
             .slice(0, 8),
         monthlySales,
         monthlyPurchases,
+        monthlyMilk,
         lowStock: lowStock || [],
         topCustomer: topCustomer || { name: 'N/A', total: 0 },
         topSupplier: topSupplier || { name: 'N/A', total: 0 },
         // PDC position — never mixed into cash/bank, receivable or payable.
-        pdc
+        pdc,
+        // Advance recovery control — outstanding + 7/30/60/90+ ageing.
+        advances
     };
 }
 

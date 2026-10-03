@@ -28,7 +28,7 @@ async function renderRateCharts() {
             <div class="summary-card card-primary" style="margin:0;padding:12px">
                 <span class="label">Rate Chart Entries</span>
                 <span class="value" style="font-size:22px">${rates.length}</span>
-                <span class="sub">Historical rate records</span>
+                <span class="sub">${rates.filter(r => r.party_id).length} supplier-specific · ${rates.filter(r => !r.party_id).length} plant-wide</span>
             </div>
             <div class="summary-card card-info" style="margin:0;padding:12px">
                 <span class="label">Default FAT Multiplier</span>
@@ -55,10 +55,12 @@ async function renderRateCharts() {
                 <table>
                     <thead>
                         <tr>
-                            <th>Effective From</th>
+                            <th>Applies To</th>
+                            <th>Milk</th>
+                            <th>Effective</th>
                             <th>Rate Type</th>
-                            <th class="text-right">FAT Multiplier</th>
-                            <th class="text-right">SNF Multiplier</th>
+                            <th class="text-right">FAT Mult</th>
+                            <th class="text-right">SNF Mult</th>
                             <th class="text-right">Extra / Unit</th>
                             <th class="text-right">Fixed Rate</th>
                             <th>Notes</th>
@@ -67,10 +69,14 @@ async function renderRateCharts() {
                     </thead>
                     <tbody>
                         ${rates.length === 0
-                            ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No rate chart entries yet. Add the first rate!</td></tr>'
+                            ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No rate chart entries yet. Add the first rate!</td></tr>'
                             : rates.map(r => `
                                 <tr>
-                                    <td><strong>${formatDate(r.effective_from)}</strong></td>
+                                    <td>${r.party_id
+                                        ? `<strong>🌾 ${escapeHtml(r.party_name || ('Supplier #' + r.party_id))}</strong>`
+                                        : '<span class="badge badge-info">Plant-wide</span>'}</td>
+                                    <td>${r.milk_type ? `<span style="text-transform:capitalize">${escapeHtml(r.milk_type)}</span>` : '<span style="color:var(--text-light)">All</span>'}</td>
+                                    <td><strong>${formatDate(r.effective_from)}</strong>${r.effective_to ? `<br><span style="font-size:11px;color:var(--text-light)">to ${formatDate(r.effective_to)}</span>` : ''}${r.is_active === 0 ? '<br><span class="badge badge-danger">Inactive</span>' : ''}</td>
                                     <td><span class="badge ${r.rate_type === 'formula' ? 'badge-info' : 'badge-success'}">${r.rate_type}</span></td>
                                     <td class="text-right">${r.rate_type === 'formula' ? r.fat_multiplier : '-'}</td>
                                     <td class="text-right">${r.rate_type === 'formula' ? r.snf_multiplier : '-'}</td>
@@ -96,13 +102,14 @@ async function renderRateCharts() {
 function getRateFormulaHelp() {
     return '💡 <strong>Formula Rate:</strong> Rate = (FAT × FAT Multiplier) + (SNF × SNF Multiplier) + Extra/Unit &nbsp;|&nbsp; ' +
            '<strong>Fixed Rate:</strong> Rate = Fixed Rate per unit (ignores FAT/SNF) &nbsp;|&nbsp; ' +
-           'Rates are date-effective: the system uses the rate active on the collection date.';
+           'Rates are date-effective and <strong>supplier-aware</strong>: a supplier-specific rule beats the plant-wide rule, ' +
+           'and a milk-type rule beats a generic one. One pricing engine prices every collection.';
 }
 
 // ============================================================
 // Rate Chart Form
 // ============================================================
-function showRateChartForm(existingData) {
+async function showRateChartForm(existingData) {
     const todayStr = today();
     const d = existingData || {
         effective_from: todayStr,
@@ -111,8 +118,27 @@ function showRateChartForm(existingData) {
         snf_multiplier: 4.55,
         extra_per_unit: 0,
         fixed_rate: 0,
-        notes: ''
+        notes: '',
+        party_id: null, effective_to: '', milk_type: '', is_active: 1
     };
+    if (d.is_active === undefined || d.is_active === null) d.is_active = 1;
+    if (d.effective_to === undefined || d.effective_to === null) d.effective_to = '';
+    if (d.milk_type === undefined || d.milk_type === null) d.milk_type = '';
+    if (d.party_id === undefined) d.party_id = null;
+
+    // Suppliers/farmers that can carry their own pricing rule
+    let suppliers = [];
+    try {
+        const [supRes, famRes] = await Promise.all([
+            window.api.getParties({ type: 'supplier' }),
+            window.api.getParties({ type: 'farmer' })
+        ]);
+        const seen = new Set();
+        for (const p of [...(supRes.success ? supRes.data : []), ...(famRes.success ? famRes.data : [])]) {
+            if (!seen.has(p.id)) { seen.add(p.id); suppliers.push(p); }
+        }
+        suppliers.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    } catch (e) { /* parties master unavailable — plant-wide only */ }
 
     showModal(`
         <div class="modal-header">
@@ -121,10 +147,43 @@ function showRateChartForm(existingData) {
         </div>
         <div class="modal-body">
             <form id="rateChartForm">
+                <div class="form-section-title">Applies To</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Supplier / Farmer</label>
+                        <select class="form-control" id="rcParty" onchange="toggleRateType()">
+                            <option value="">— Plant-wide (every supplier) —</option>
+                            ${suppliers.map(p => `<option value="${p.id}" ${d.party_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+                        </select>
+                        <small style="color:var(--text-light)">Pick one supplier for supplier-specific pricing (Fixed Rs/L or their own FAT/SNF chart).</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Milk Type</label>
+                        <select class="form-control" id="rcMilkType">
+                            <option value="" ${!d.milk_type ? 'selected' : ''}>All types</option>
+                            <option value="cow" ${d.milk_type === 'cow' ? 'selected' : ''}>Cow only</option>
+                            <option value="buffalo" ${d.milk_type === 'buffalo' ? 'selected' : ''}>Buffalo only</option>
+                            <option value="mixed" ${d.milk_type === 'mixed' ? 'selected' : ''}>Mixed only</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Effective From *</label>
                         <input type="date" class="form-control" id="rcDate" value="${d.effective_from}">
+                    </div>
+                    <div class="form-group">
+                        <label>Effective To (blank = open-ended)</label>
+                        <input type="date" class="form-control" id="rcEffectiveTo" value="${escapeHtml(d.effective_to || '')}">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select class="form-control" id="rcActive">
+                            <option value="1" ${d.is_active ? 'selected' : ''}>Active</option>
+                            <option value="0" ${!d.is_active ? 'selected' : ''}>Inactive (kept for history)</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label>Rate Type</label>
@@ -185,9 +244,14 @@ function toggleRateType() {
 }
 
 async function saveRateChartEntry(id) {
+    const partySel = document.getElementById('rcParty');
     const data = {
         id: id || undefined,
+        party_id: partySel && partySel.value ? parseInt(partySel.value) : null,
+        milk_type: document.getElementById('rcMilkType')?.value || '',
         effective_from: document.getElementById('rcDate')?.value || '',
+        effective_to: document.getElementById('rcEffectiveTo')?.value || null,
+        is_active: (document.getElementById('rcActive')?.value || '1') === '1',
         rate_type: document.getElementById('rcType')?.value || 'formula',
         fat_multiplier: parseFloat(document.getElementById('rcFatMult')?.value || 7.15),
         snf_multiplier: parseFloat(document.getElementById('rcSnfMult')?.value || 4.55),
@@ -197,6 +261,7 @@ async function saveRateChartEntry(id) {
     };
 
     if (!data.effective_from) { showToast('Effective date is required', 'error'); return; }
+    if (data.rate_type === 'fixed' && !(data.fixed_rate > 0)) { showToast('Enter the fixed rate per litre', 'error'); return; }
 
     const result = await window.api.saveRateChart(data);
     if (result.success) {
@@ -231,15 +296,46 @@ async function deleteRateChartEntry(id) {
 async function showEffectiveRateLookup() {
     const todayStr = today();
 
+    let suppliers = [];
+    try {
+        const [supRes, famRes] = await Promise.all([
+            window.api.getParties({ type: 'supplier' }),
+            window.api.getParties({ type: 'farmer' })
+        ]);
+        const seen = new Set();
+        for (const p of [...(supRes.success ? supRes.data : []), ...(famRes.success ? famRes.data : [])]) {
+            if (!seen.has(p.id)) { seen.add(p.id); suppliers.push(p); }
+        }
+        suppliers.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    } catch (e) { /* plant-wide lookup still works */ }
+
     showModal(`
         <div class="modal-header">
             <h2>Effective Rate Lookup</h2>
             <button class="close-btn" onclick="closeModal()">&times;</button>
         </div>
         <div class="modal-body">
-            <div class="form-group">
-                <label>Select Date</label>
-                <input type="date" class="form-control" id="erDate" value="${todayStr}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Select Date</label>
+                    <input type="date" class="form-control" id="erDate" value="${todayStr}">
+                </div>
+                <div class="form-group">
+                    <label>Supplier / Farmer</label>
+                    <select class="form-control" id="erParty">
+                        <option value="">— Plant-wide —</option>
+                        ${suppliers.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Milk Type</label>
+                    <select class="form-control" id="erMilkType">
+                        <option value="">All types</option>
+                        <option value="cow">Cow</option>
+                        <option value="buffalo">Buffalo</option>
+                        <option value="mixed">Mixed</option>
+                    </select>
+                </div>
             </div>
             <div class="form-group">
                 <label>Test Calculation (Optional)</label>
@@ -250,7 +346,7 @@ async function showEffectiveRateLookup() {
                 </div>
             </div>
             <div id="erResult" style="padding:20px;text-align:center;color:var(--text-light)">
-                Select a date and click Lookup to see the effective rate.
+                Select a date (and supplier, if they have their own rule) and click Lookup.
             </div>
         </div>
         <div class="modal-footer">
@@ -261,22 +357,36 @@ async function showEffectiveRateLookup() {
 
 async function lookupEffectiveRate() {
     const date = document.getElementById('erDate')?.value || '';
+    const partyId = document.getElementById('erParty')?.value || '';
+    const milkType = document.getElementById('erMilkType')?.value || '';
     const fat = parseFloat(document.getElementById('erFat')?.value || 0);
     const snf = parseFloat(document.getElementById('erSnf')?.value || 0);
 
-    const rateResult = await window.api.getEffectiveRate(date);
-    if (!rateResult.success) {
-        document.getElementById('erResult').innerHTML = `<div style="color:var(--danger)">Error: ${rateResult.error}</div>`;
-        return;
+    const opts = { party_id: partyId ? parseInt(partyId) : null, milk_type: milkType, fat, snf };
+    let resolved = null;
+    if (window.api.resolveMilkRate) {
+        const rr = await window.api.resolveMilkRate(Object.assign({ date }, opts));
+        if (rr.success) resolved = rr.data;
+    }
+    if (!resolved) {
+        const rateResult = await window.api.getEffectiveRate(date, opts);
+        if (!rateResult.success) {
+            document.getElementById('erResult').innerHTML = `<div style="color:var(--danger)">Error: ${rateResult.error}</div>`;
+            return;
+        }
+        const c = rateResult.data;
+        resolved = { chart: c, calculated_rate: null, source: c && c.id ? 'plant' : 'default' };
     }
 
-    const rate = rateResult.data;
-    let calculatedRate = 0;
-    if (rate.rate_type === 'formula') {
-        calculatedRate = (fat * rate.fat_multiplier) + (snf * rate.snf_multiplier) + (rate.extra_per_unit || 0);
-    } else {
-        calculatedRate = rate.fixed_rate || 0;
-    }
+    const rate = resolved.chart || {};
+    const calculatedRate = resolved.calculated_rate != null
+        ? resolved.calculated_rate
+        : (rate.rate_type === 'formula'
+            ? (fat * (rate.fat_multiplier || 7.15)) + (snf * (rate.snf_multiplier || 4.55)) + (rate.extra_per_unit || 0)
+            : (rate.fixed_rate || 0));
+    const sourceLabel = resolved.source === 'supplier'
+        ? '🌾 <strong>Supplier-specific rule</strong> (beats the plant chart)'
+        : resolved.source === 'plant' ? '🏭 Plant-wide rule' : '⚠️ Settings defaults (no chart yet)';
 
     document.getElementById('erResult').innerHTML = `
         <div style="background:var(--bg);padding:16px;border-radius:8px;text-align:left">
@@ -284,16 +394,17 @@ async function lookupEffectiveRate() {
                 ✅ Effective Rate on ${formatDate(date)}
             </div>
             <table style="width:100%;font-size:13px">
-                ${rate.id ? `<tr><td style="padding:4px 8px;color:var(--text-light)">Rate Chart ID:</td><td style="padding:4px 8px;font-weight:600">#${rate.id}</td></tr>` : ''}
-                <tr><td style="padding:4px 8px;color:var(--text-light)">Rate Type:</td><td style="padding:4px 8px;font-weight:600">${rate.rate_type}</td></tr>
+                ${rate.id ? `<tr><td style="padding:4px 8px;color:var(--text-light)">Rate Chart:</td><td style="padding:4px 8px;font-weight:600">#${rate.id}${rate.party_name ? ' — ' + escapeHtml(rate.party_name) : ''}</td></tr>` : ''}
+                <tr><td style="padding:4px 8px;color:var(--text-light)">Priced by:</td><td style="padding:4px 8px">${sourceLabel}</td></tr>
+                <tr><td style="padding:4px 8px;color:var(--text-light)">Rate Type:</td><td style="padding:4px 8px;font-weight:600">${rate.rate_type || 'formula'}${rate.milk_type ? ' · ' + escapeHtml(rate.milk_type) : ''}</td></tr>
                 ${rate.rate_type === 'formula' ? `
                     <tr><td style="padding:4px 8px;color:var(--text-light)">FAT Multiplier:</td><td style="padding:4px 8px;font-weight:600">${rate.fat_multiplier}</td></tr>
                     <tr><td style="padding:4px 8px;color:var(--text-light)">SNF Multiplier:</td><td style="padding:4px 8px;font-weight:600">${rate.snf_multiplier}</td></tr>
                     <tr><td style="padding:4px 8px;color:var(--text-light)">Extra/Unit:</td><td style="padding:4px 8px;font-weight:600">${formatCurrency(rate.extra_per_unit || 0)}</td></tr>
-                    <tr style="border-top:1px solid var(--border)"><td style="padding:8px;color:var(--text-light)">Test: FAT=${fat}, SNF=${snf}</td><td style="padding:8px;font-weight:700;font-size:16px;color:var(--accent)">${formatCurrency(calculatedRate)}/L</td></tr>
                 ` : `
                     <tr><td style="padding:4px 8px;color:var(--text-light)">Fixed Rate:</td><td style="padding:4px 8px;font-weight:600">${formatCurrency(rate.fixed_rate)}/L</td></tr>
                 `}
+                <tr style="border-top:1px solid var(--border)"><td style="padding:8px;color:var(--text-light)">Test: FAT=${fat}, SNF=${snf}</td><td style="padding:8px;font-weight:700;font-size:16px;color:var(--accent)">${formatCurrency(calculatedRate)}/L</td></tr>
                 ${rate.notes ? `<tr><td style="padding:4px 8px;color:var(--text-light)">Notes:</td><td style="padding:4px 8px">${escapeHtml(rate.notes)}</td></tr>` : ''}
                 ${!rate.id ? `<tr><td colspan="2" style="padding:8px;color:var(--warning)">⚠️ No rate chart entry for this date — using defaults from settings.</td></tr>` : ''}
             </table>
@@ -312,8 +423,8 @@ async function printRateCharts() {
 
     const html = `
         <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Milk Rate Chart History</h2>        <p>As of: ${formatDate(today())}</p></div>
-        <table><thead><tr><th>Effective</th><th>Type</th><th class="text-right">FAT Mult</th><th class="text-right">SNF Mult</th><th class="text-right">Extra</th><th class="text-right">Fixed Rate</th><th>Notes</th></tr></thead>
-        <tbody>${rates.map(r => `<tr><td>${formatDate(r.effective_from)}</td><td>${r.rate_type}</td><td class="text-right">${r.rate_type === 'formula' ? r.fat_multiplier : '-'}</td><td class="text-right">${r.rate_type === 'formula' ? r.snf_multiplier : '-'}</td><td class="text-right">${r.rate_type === 'formula' ? formatCurrency(r.extra_per_unit||0) : '-'}</td><td class="text-right">${r.rate_type === 'fixed' ? formatCurrency(r.fixed_rate) : '-'}</td><td>${escapeHtml(r.notes||'')}</td></tr>`).join('')}</tbody>
+        <table><thead><tr><th>Applies To</th><th>Milk</th><th>Effective From</th><th>Effective To</th><th>Type</th><th class="text-right">FAT Mult</th><th class="text-right">SNF Mult</th><th class="text-right">Extra</th><th class="text-right">Fixed Rate</th><th>Notes</th></tr></thead>
+        <tbody>${rates.map(r => `<tr><td>${r.party_id ? escapeHtml(r.party_name || ('#' + r.party_id)) : 'Plant-wide'}</td><td>${r.milk_type ? escapeHtml(r.milk_type) : 'All'}</td><td>${formatDate(r.effective_from)}</td><td>${r.effective_to ? formatDate(r.effective_to) : '—'}</td><td>${r.rate_type}${r.is_active === 0 ? ' (inactive)' : ''}</td><td class="text-right">${r.rate_type === 'formula' ? r.fat_multiplier : '-'}</td><td class="text-right">${r.rate_type === 'formula' ? r.snf_multiplier : '-'}</td><td class="text-right">${r.rate_type === 'formula' ? formatCurrency(r.extra_per_unit||0) : '-'}</td><td class="text-right">${r.rate_type === 'fixed' ? formatCurrency(r.fixed_rate) : '-'}</td><td>${escapeHtml(r.notes||'')}</td></tr>`).join('')}</tbody>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
     printHTML(html);

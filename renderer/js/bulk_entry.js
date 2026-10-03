@@ -18,7 +18,7 @@ let bulk = {
 };
 
 function _bulkBlankRow(mod) {
-    if (mod === 'milk') return { party_name: '', party_id: '', milk_type: 'cow', quantity: '', fat_percent: '', snf_percent: '', rate: '' };
+    if (mod === 'milk') return { party_name: '', party_id: '', milk_type: 'cow', quantity: '', fat_percent: '', snf_percent: '', rate: '', rate_override_reason: '' };
     if (mod === 'purchases') return { party_name: '', party_id: '', product_name: '', product_id: '', quantity: '', rate: '', bill_no: '', payment_mode: 'credit' };
     return { party_name: '', party_id: '', product_name: '', product_id: '', quantity: '', rate: '', invoice_no: '', payment_mode: 'credit' };
 }
@@ -34,7 +34,8 @@ function _bulkRowCells(mod, r) {
             <td><input class="form-control be-input be-num" data-f="quantity" value="${escapeHtml(String(r.quantity))}" inputmode="decimal" placeholder="0"></td>
             <td><input class="form-control be-input be-num" data-f="fat_percent" value="${escapeHtml(String(r.fat_percent))}" inputmode="decimal" placeholder="0.0"></td>
             <td><input class="form-control be-input be-num" data-f="snf_percent" value="${escapeHtml(String(r.snf_percent))}" inputmode="decimal" placeholder="0.0"></td>
-            <td><input class="form-control be-input be-num" data-f="rate" value="${escapeHtml(String(r.rate))}" inputmode="decimal" placeholder="auto"></td>
+            <td><input class="form-control be-input be-num" data-f="rate" value="${escapeHtml(String(r.rate))}" inputmode="decimal" placeholder="auto" title="Leave blank — the supplier's own rate is applied automatically"></td>
+            <td><input class="form-control be-input" data-f="rate_override_reason" value="${escapeHtml(String(r.rate_override_reason || ''))}" placeholder="required only if Rate ≠ calculated"></td>
             <td class="text-right be-amount">—</td>`;
     }
     const productCol = `
@@ -57,7 +58,7 @@ function _bulkRowCells(mod, r) {
 
 function _bulkHeaders(mod) {
     if (mod === 'milk') {
-        return '<th style="min-width:170px">Farmer</th><th>Type</th><th>Qty (L)</th><th>FAT</th><th>SNF</th><th>Rate</th><th class="text-right">Amount</th>';
+        return '<th style="min-width:170px">Farmer</th><th>Type</th><th>Qty (L)</th><th>FAT</th><th>SNF</th><th>Rate</th><th style="min-width:160px">Override Reason</th><th class="text-right">Amount</th>';
     }
     if (mod === 'purchases') return '<th style="min-width:170px">Supplier</th><th>Product</th><th>Qty</th><th>Rate</th><th>Bill No</th><th>Mode</th><th class="text-right">Amount</th>';
     return '<th style="min-width:170px">Customer</th><th>Product</th><th>Qty</th><th>Rate</th><th>Invoice No</th><th>Mode</th><th class="text-right">Amount</th>';
@@ -66,7 +67,7 @@ function _bulkHeaders(mod) {
 function _bulkEstimate(mod, r) {
     const qty = parseFloat(r.quantity) || 0;
     let rate = parseFloat(r.rate) || 0;
-    if (mod === 'milk' && !(rate > 0)) rate = window._bulkCalcRate ? window._bulkCalcRate(r.fat_percent, r.snf_percent) : 0;
+    if (mod === 'milk' && !(rate > 0)) rate = window._bulkCalcRate ? window._bulkCalcRate(r.fat_percent, r.snf_percent, r.party_id, r.milk_type) : 0;
     return qty > 0 ? qty * rate : 0;
 }
 
@@ -110,7 +111,13 @@ function _rebindGrid() {
         bulk.rows[idx][el.dataset.f] = el.value;
         if (el.dataset.f === 'party_name' && window._bulkPartyCache) {
             const hit = window._bulkPartyCache.find(p => p.name.toLowerCase() === el.value.trim().toLowerCase());
-            if (hit) bulk.rows[idx].party_id = hit.id;
+            if (hit) {
+                bulk.rows[idx].party_id = hit.id;
+                if (window._bulkPrefetchRate) window._bulkPrefetchRate(hit.id, bulk.rows[idx].milk_type);
+            }
+        }
+        if (el.dataset.f === 'milk_type' && bulk.rows[idx].party_id && window._bulkPrefetchRate) {
+            window._bulkPrefetchRate(bulk.rows[idx].party_id, el.value);
         }
         if (el.dataset.f === 'product_name' && window._bulkProductCache) {
             const hit = window._bulkProductCache.find(p => p.name.toLowerCase() === el.value.trim().toLowerCase());
@@ -160,7 +167,7 @@ function _rebindGrid() {
 }
 
 function _bulkFieldOrder(mod) {
-    if (mod === 'milk') return ['party_name', 'milk_type', 'quantity', 'fat_percent', 'snf_percent', 'rate'];
+    if (mod === 'milk') return ['party_name', 'milk_type', 'quantity', 'fat_percent', 'snf_percent', 'rate', 'rate_override_reason'];
     if (mod === 'purchases') return ['party_name', 'product_name', 'quantity', 'rate', 'bill_no', 'payment_mode'];
     return ['party_name', 'product_name', 'quantity', 'rate', 'invoice_no', 'payment_mode'];
 }
@@ -202,11 +209,29 @@ async function renderBulkEntry() {
     window._bulkPartyCache = parties;
     window._bulkProductCache = products;
     const chart = ratesR && ratesR.success !== false ? (ratesR.data || ratesR) : null;
-    window._bulkCalcRate = (fat, snf) => {
-        if (!chart) return 0;
+    window._bulkPlantChart = chart;
+    window._bulkRateCharts = new Map();   // `${partyId}|${milkType}` → that supplier's chart
+    // Preview rate: supplier chart when we have it, plant chart otherwise. The
+    // SAVE always re-resolves server-side, so this can only mirror, never decide.
+    window._bulkCalcRate = (fat, snf, partyId, milkType) => {
+        const key = `${partyId || ''}|${milkType || ''}`;
+        const c = (partyId && window._bulkRateCharts.get(key)) || window._bulkPlantChart;
+        if (!c) return 0;
         const f = parseFloat(fat) || 0, s = parseFloat(snf) || 0;
-        if (chart.rate_type === 'fixed') return parseFloat(chart.fixed_rate) || 0;
-        return (f * (parseFloat(chart.fat_multiplier) || 7.15)) + (s * (parseFloat(chart.snf_multiplier) || 4.55)) + (parseFloat(chart.extra_per_unit) || 0);
+        if (c.rate_type === 'fixed') return parseFloat(c.fixed_rate) || 0;
+        return (f * (parseFloat(c.fat_multiplier) || 7.15)) + (s * (parseFloat(c.snf_multiplier) || 4.55)) + (parseFloat(c.extra_per_unit) || 0);
+    };
+    window._bulkPrefetchRate = (partyId, milkType) => {
+        if (!partyId || !window.api.resolveMilkRate) return;
+        const key = `${partyId}|${milkType || ''}`;
+        if (window._bulkRateCharts.has(key)) return;
+        window.api.resolveMilkRate({ date: bulk.date || today(), party_id: Number(partyId), milk_type: milkType || '', fat: 4, snf: 8.5 })
+            .then(rr => {
+                if (rr && rr.success && rr.data && rr.data.chart) {
+                    window._bulkRateCharts.set(key, rr.data.chart);
+                    _refreshBulkTotals();
+                }
+            }).catch(() => { /* preview stays on the plant chart */ });
     };
 
     if (!bulk.date) bulk.date = today();
@@ -323,7 +348,7 @@ async function bulkLoadExisting() {
     if (bulk.module === 'milk') {
         const r = await window.api.loadBulkCollections({ date, shift: shift || undefined });
         if (r && r.success !== false) rows = (r.data || r) || [];
-        bulk.rows = rows.map(c => ({ party_name: c.party_name || '', party_id: c.party_id, milk_type: c.milk_type || 'cow', quantity: c.quantity_liters, fat_percent: c.fat_percent, snf_percent: c.snf_percent, rate: c.rate, _id: c.id, _no: c.collection_no }));
+        bulk.rows = rows.map(c => ({ party_name: c.party_name || '', party_id: c.party_id, milk_type: c.milk_type || 'cow', quantity: c.quantity_liters, fat_percent: c.fat_percent, snf_percent: c.snf_percent, rate: c.rate, rate_override_reason: c.rate_override_reason || '', _id: c.id, _no: c.collection_no }));
     } else if (bulk.module === 'purchases') {
         const r = await window.api.loadBulkPurchases({ date });
         if (r && r.success !== false) rows = (r.data || r) || [];
@@ -390,7 +415,7 @@ async function bulkSaveAll() {
     errBox.innerHTML = '';
 
     const payloadRows = bulk.rows.map(r => bulk.module === 'milk'
-        ? { party_id: r.party_id || undefined, party_name: r.party_name, milk_type: r.milk_type, quantity_liters: parseFloat(r.quantity), fat_percent: parseFloat(r.fat_percent) || 0, snf_percent: parseFloat(r.snf_percent) || 0, rate: parseFloat(r.rate) || 0 }
+        ? { party_id: r.party_id || undefined, party_name: r.party_name, milk_type: r.milk_type, quantity_liters: parseFloat(r.quantity), fat_percent: parseFloat(r.fat_percent) || 0, snf_percent: parseFloat(r.snf_percent) || 0, rate: parseFloat(r.rate) || 0, rate_override_reason: String(r.rate_override_reason || '').trim() || undefined }
         : { party_id: r.party_id || undefined, party_name: r.party_name, product_id: r.product_id || undefined, product_name: r.product_name, quantity: parseFloat(r.quantity), rate: parseFloat(r.rate), bill_no: (r.bill_no || '').trim() || undefined, invoice_no: (r.invoice_no || '').trim() || undefined, payment_mode: r.payment_mode }
     );
 

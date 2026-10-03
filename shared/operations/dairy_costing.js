@@ -122,9 +122,16 @@ function getDailyMilkCost(db, { date } = {}) {
         FROM milk_collections WHERE date = ? GROUP BY milk_type
     `).all(d);
 
+    // Row detail for the procurement metrics (supplier count, min/max rate,
+    // fixed vs fat-SNF litres) — §6. Aggregates alone cannot answer these.
+    const detail = db.prepare(`
+        SELECT party_id, milk_type, quantity_liters, rate, rate_type
+        FROM milk_collections WHERE date = ?
+    `).all(d);
+
     // Unlinked milk lines still sitting on purchase bills.
     const unlinked = db.prepare(`
-        SELECT pi.product_name, pi.quantity, pi.amount, pi.rate, pi.unit
+        SELECT pi.product_name, pi.quantity, pi.amount, pi.rate, pi.unit, p.party_id
         FROM purchase_items pi
         JOIN purchases p ON p.id = pi.purchase_id
         WHERE p.date = ?
@@ -133,8 +140,21 @@ function getDailyMilkCost(db, { date } = {}) {
 
     const buckets = new Map();
     const bucket = (type) => {
-        if (!buckets.has(type)) buckets.set(type, { milk_type: type, liters: 0, amount: 0, fat_liters: 0, snf_liters: 0, collections_liters: 0, collections_amount: 0, purchase_liters: 0, purchase_amount: 0 });
+        if (!buckets.has(type)) buckets.set(type, {
+            milk_type: type, liters: 0, amount: 0, fat_liters: 0, snf_liters: 0,
+            collections_liters: 0, collections_amount: 0, purchase_liters: 0, purchase_amount: 0,
+            suppliers: new Set(), min_rate: null, max_rate: null,
+            fixed_liters: 0, formula_liters: 0
+        });
         return buckets.get(type);
+    };
+    const noteRate = (b, rate, liters) => {
+        const r = num(rate);
+        if (r > 0) {
+            b.min_rate = b.min_rate === null ? r : Math.min(b.min_rate, r);
+            b.max_rate = b.max_rate === null ? r : Math.max(b.max_rate, r);
+        }
+        if (liters) b.fixed_liters = round2(b.fixed_liters + num(liters));
     };
     for (const r of collections) {
         const b = bucket(r.type || 'mixed');
@@ -145,17 +165,33 @@ function getDailyMilkCost(db, { date } = {}) {
         b.collections_liters = round2(b.collections_liters + num(r.liters));
         b.collections_amount = round2(b.collections_amount + num(r.amount));
     }
+    // Pricing method split: every collection row says which method priced it.
+    const allSuppliers = new Set();
+    for (const r of detail) {
+        const b = bucket(r.milk_type || 'mixed');
+        if (r.party_id != null) { b.suppliers.add(r.party_id); allSuppliers.add(r.party_id); }
+        noteRate(b, r.rate, 0);
+        if (String(r.rate_type) === 'fixed') b.fixed_liters = round2(b.fixed_liters + num(r.quantity_liters));
+        else b.formula_liters = round2(b.formula_liters + num(r.quantity_liters));
+    }
     for (const r of unlinked) {
         const b = bucket(classifyMilkType(r.product_name));
         b.liters = round2(b.liters + num(r.quantity));
         b.amount = round2(b.amount + num(r.amount));
         b.purchase_liters = round2(b.purchase_liters + num(r.quantity));
         b.purchase_amount = round2(b.purchase_amount + num(r.amount));
+        if (r.party_id != null) { b.suppliers.add(r.party_id); allSuppliers.add(r.party_id); }
+        // A purchase bill carries a contracted rate, not a fat/SNF formula.
+        noteRate(b, r.rate, r.quantity);
     }
 
     const categories = [...buckets.values()].map(b => ({
         ...b,
+        supplier_count: b.suppliers.size,
+        suppliers: undefined,
         avg_rate: b.liters > 0 ? round2(b.amount / b.liters) : 0,
+        min_rate: b.min_rate === null ? 0 : round2(b.min_rate),
+        max_rate: b.max_rate === null ? 0 : round2(b.max_rate),
         fat_percent: b.liters > 0 ? round2(b.fat_liters / b.liters) : 0,
         snf_percent: b.liters > 0 ? round2(b.snf_liters / b.liters) : 0
     })).sort((a, b) => a.milk_type.localeCompare(b.milk_type));
@@ -164,6 +200,7 @@ function getDailyMilkCost(db, { date } = {}) {
     const totalAmount = round2(categories.reduce((s, c) => s + c.amount, 0));
     const fatL = round2(categories.reduce((s, c) => s + c.fat_liters, 0));
     const snfL = round2(categories.reduce((s, c) => s + c.snf_liters, 0));
+    const positiveRates = categories.filter(c => c.min_rate > 0);
     return {
         date: d,
         categories,
@@ -175,7 +212,13 @@ function getDailyMilkCost(db, { date } = {}) {
         collections_liters: round2(categories.reduce((s, c) => s + c.collections_liters, 0)),
         collections_amount: round2(categories.reduce((s, c) => s + c.collections_amount, 0)),
         purchase_liters: round2(categories.reduce((s, c) => s + c.purchase_liters, 0)),
-        purchase_amount: round2(categories.reduce((s, c) => s + c.purchase_amount, 0))
+        purchase_amount: round2(categories.reduce((s, c) => s + c.purchase_amount, 0)),
+        // §6 procurement metrics
+        supplier_count: allSuppliers.size,
+        min_rate: positiveRates.length ? round2(Math.min(...positiveRates.map(c => c.min_rate))) : 0,
+        max_rate: positiveRates.length ? round2(Math.max(...positiveRates.map(c => c.max_rate))) : 0,
+        fixed_liters: round2(categories.reduce((s, c) => s + c.fixed_liters, 0)),
+        formula_liters: round2(categories.reduce((s, c) => s + c.formula_liters, 0))
     };
 }
 
@@ -509,9 +552,7 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
                 value: m.outward_qty > 0 && lotValue > 0 ? round2(-lotValue) : round2((inQty - outQty) * unitCost)
             });
         }
-        const lotValueNow = round2(num(db.prepare(
-            'SELECT COALESCE(SUM(qty_remaining * unit_cost),0) v FROM stock_lots WHERE product_id = ?'
-        ).get(p.id).v));
+        const lotValueNow = productLotValue(db, p.id);
         ledger.push({
             product_id: p.id, product_name: p.name, unit: p.unit, category: p.category,
             inventory_category: classifyInventoryCategory(p),
@@ -521,6 +562,17 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
         });
     }
     return { from_date: from, to_date: to, products: ledger };
+}
+
+/**
+ * Lot value of one product — THE stock-valuation expression (Phase 27).
+ * Every module that needs "what is this product's stock worth at actual
+ * cost" goes through here instead of restating the SQL.
+ */
+function productLotValue(db, productId) {
+    return round2(num(db.prepare(
+        'SELECT COALESCE(SUM(qty_remaining * unit_cost),0) v FROM stock_lots WHERE product_id = ?'
+    ).get(productId).v));
 }
 
 /** Inventory value grouped by Raw Materials / WIP / Finished Goods. */
@@ -533,7 +585,7 @@ function getInventoryValuation(db) {
             'SELECT COALESCE(SUM(inward_qty - outward_qty),0) s FROM stock_movements WHERE product_id = ?'
         ).get(p.id).s));
         const lotQty = round2(num(db.prepare('SELECT COALESCE(SUM(qty_remaining),0) q FROM stock_lots WHERE product_id = ?').get(p.id).q));
-        const lotValue = round2(num(db.prepare('SELECT COALESCE(SUM(qty_remaining * unit_cost),0) v FROM stock_lots WHERE product_id = ?').get(p.id).v));
+        const lotValue = productLotValue(db, p.id);
         if (qtyMove === 0 && lotQty === 0 && lotValue === 0) continue;
         const cat = classifyInventoryCategory(p);
         groups[cat] = round2(groups[cat] + lotValue);
@@ -780,7 +832,7 @@ module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
-    getProductCostReport, getStockLedger, getInventoryValuation,
+    getProductCostReport, getStockLedger, getInventoryValuation, productLotValue,
     getManagementDashboard, getDailyClosing,
     getSaleTraceability, getBatchTraceability, traceBatchChain
 };

@@ -563,14 +563,15 @@ async function showStockStatement() {
             </div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyStockStatement()">Filter</button></div>
         </div>
-        <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+        <div class="summary-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">📦 Products</span><span class="value" style="font-size:20px">${data.total_products}</span></div>
             <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">📏 Total Quantity</span><span class="value" style="font-size:20px">${formatNumber(data.total_quantity)}</span></div>
-            <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">💰 Total Value</span><span class="value" style="font-size:20px">${formatCurrency(data.total_value)}</span></div>
+            <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">💰 Stock Value (master rate)</span><span class="value" style="font-size:20px">${formatCurrency(data.total_value)}</span></div>
+            <div class="summary-card card-warning" style="margin:0;padding:12px"><span class="label">📦 Stock Value (lot cost / FIFO)</span><span class="value" style="font-size:20px">${data.lot_valuation_available ? formatCurrency(data.total_lot_value) : '—'}</span><span class="sub">${data.lot_valuation_available ? `Variance vs master rate: ${formatCurrency(data.lot_vs_master_diff)}` : 'Lot costing unavailable'}</span></div>
         </div>
         <div class="table-container">
             <table>
-                <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th class="text-right">Stock Qty</th><th class="text-right">Rate</th><th class="text-right">Stock Value</th><th>Status</th></tr></thead>
+                <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th class="text-right">Stock Qty</th><th class="text-right">Rate</th><th class="text-right">Stock Value</th><th class="text-right">Lot Qty</th><th class="text-right">Lot Cost</th><th class="text-right">Lot Value</th><th>Status</th></tr></thead>
                 <tbody>
                     ${data.items.map(i => {
                         const stock = i.current_stock || 0;
@@ -584,16 +585,21 @@ async function showStockStatement() {
                             <td class="text-right">${formatNumber(stock)}</td>
                             <td class="text-right">${formatCurrency(i.rate || 0)}</td>
                             <td class="text-right" style="font-weight:600">${formatCurrency(i.stock_value || 0)}</td>
+                            <td class="text-right">${i.lot_quantity === null || i.lot_quantity === undefined ? '—' : formatNumber(i.lot_quantity)}</td>
+                            <td class="text-right">${i.lot_unit_cost === null || i.lot_unit_cost === undefined ? '—' : formatCurrency(i.lot_unit_cost)}</td>
+                            <td class="text-right" style="font-weight:600" title="${escapeHtml(i.valuation_basis || '')}">${i.lot_value === null || i.lot_value === undefined ? '—' : formatCurrency(i.lot_value)}</td>
                             <td><span class="badge badge-${status}">${statusLabel}</span></td>
                         </tr>`;
                     }).join('')}
-                    ${data.items.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No products found</td></tr>' : ''}
+                    ${data.items.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No products found</td></tr>' : ''}
                 </tbody>
                 <tfoot><tr>
                     <td colspan="3"><strong>Total</strong></td>
                     <td class="text-right"><strong>${formatNumber(data.total_quantity)}</strong></td>
                     <td></td>
                     <td class="text-right"><strong>${formatCurrency(data.total_value)}</strong></td>
+                    <td colspan="2"></td>
+                    <td class="text-right"><strong>${data.lot_valuation_available ? formatCurrency(data.total_lot_value) : '—'}</strong></td>
                     <td></td>
                 </tr></tfoot>
             </table>
@@ -1278,6 +1284,7 @@ async function editPaymentRecord(id) {
                     <option value="loan_received" ${p.transaction_type === 'loan_received' ? 'selected' : ''}>🏦 Loan / Sapati Received</option>
                     <option value="loan_repayment" ${p.transaction_type === 'loan_repayment' ? 'selected' : ''}>🔁 Loan / Sapati Repayment</option>
                     <option value="advance_adjustment" ${p.transaction_type === 'advance_adjustment' ? 'selected' : ''}>⚡ Advance Adjustment</option>
+                    <option value="advance_returned" ${p.transaction_type === 'advance_returned' ? 'selected' : ''}>↩ Advance Returned (money came back)</option>
                     <option value="settlement" ${p.transaction_type === 'settlement' ? 'selected' : ''}>✓ Settlement</option>
                     <option value="other" ${p.transaction_type === 'other' ? 'selected' : ''}>… Other</option>
                 </select>
@@ -1369,7 +1376,8 @@ const PAYMENT_TYPE_TREATMENTS = {
     loan_given:        { dir: 'out', label: '🤝 Loan / Sapati Given', treat: 'Balance sheet — Loan Receivable ↑, no P&L effect', pnl: false },
     loan_received:     { dir: 'in',  label: '🏦 Loan / Sapati Received', treat: 'Balance sheet — Loan Payable ↑, NOT income', pnl: false },
     loan_repayment:    { dir: 'out', label: '🔁 Loan Repayment (we repay)', treat: 'Balance sheet — Loan Payable ↓, no P&L effect (interest only if typed as expense)', pnl: false },
-    advance_adjustment:{ dir: 'out', label: '⚡ Advance Adjustment', treat: 'P&L expense now — Advance Receivable ↓ (actual usage recognised)', pnl: true }
+    advance_adjustment:{ dir: 'out', label: '⚡ Advance Adjustment', treat: 'P&L expense now — Advance Receivable ↓ (actual usage recognised)', pnl: true },
+    advance_returned:   { dir: 'in',  label: '↩ Advance Returned',   treat: 'Balance sheet — Advance Receivable ↓ (cash came back), no P&L effect', pnl: false }
 };
 
 function showPaymentEntryForm() {
@@ -1391,6 +1399,7 @@ function showPaymentEntryForm() {
                         <option value="loan_received">🏦 Loan / Sapati Received</option>
                         <option value="loan_repayment">🔁 Loan / Sapati Repayment (we repay)</option>
                         <option value="advance_adjustment">⚡ Advance Adjustment (advance used for expense)</option>
+                        <option value="advance_returned">↩ Advance Returned (money came back)</option>
                     </select>
                 </div>
                 <div class="form-group">

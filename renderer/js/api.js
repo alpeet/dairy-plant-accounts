@@ -140,6 +140,10 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getSalesRegister: (opts) => apiPost('/reports/sales-register', opts || {}),
         getPurchaseRegister: (opts) => apiPost('/reports/purchase-register', opts || {}),
         getProfitLoss: (opts) => apiPost('/reports/profit-loss', opts || {}),
+        getCompanyLedger: (opts) => apiPost('/reports/company-ledger', opts || {}),
+        getExpenseAnalysis: (opts) => apiPost('/reports/expense-analysis', opts || {}),
+        getBoardReport: (opts) => apiPost('/reports/board-report', opts || {}),
+        getManagementReport: (opts) => apiPost('/reports/management', opts || {}),
         getProfitLossByMonth: (opts) => apiPost('/reports/profit-loss-by-month', opts || {}),
         getStockStatement: (opts) => apiPost('/reports/stock-statement', opts || {}),
         getEnhancedDaybook: (opts) => apiPost('/reports/enhanced-daybook', opts || {}),
@@ -222,7 +226,8 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getRateChart: (id) => apiPost('/rates/get', { id }),
         saveRateChart: (data) => apiPost('/rates/save', data),
         deleteRateChart: (id) => apiPost('/rates/delete', { id }),
-        getEffectiveRate: (date) => apiPost('/rates/effective', { date }),
+        getEffectiveRate: (date, opts) => apiPost('/rates/effective', Object.assign({ date }, opts || {})),
+        resolveMilkRate: (data) => apiPost('/rates/resolve', data),
         calculateMilkRate: (data) => apiPost('/rates/calculate', data),
 
         // Production
@@ -280,6 +285,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
 
         // Payment accounting by transaction type
         getPaymentTransactionTypes: () => apiPost('/payments/transaction-types'),
+        getAdvanceRecoveryRegister: (params) => apiPost('/payments/advance-register', params || {}),
         getLoanAdvanceBalances: (params) => apiPost('/payments/loan-advance-balances', params || {}),
 
         // Partner Capital

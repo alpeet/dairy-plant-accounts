@@ -123,9 +123,15 @@ CREATE TABLE IF NOT EXISTS milk_rate_chart (
     extra_per_unit REAL DEFAULT 0.0,
     fixed_rate REAL DEFAULT 0.0,
     notes TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    -- Supplier-specific pricing (Migration 26): NULL party_id = the plant-wide
+    -- chart every supplier follows unless a more specific row wins.
+    party_id INTEGER DEFAULT NULL,
+    effective_to TEXT DEFAULT NULL,
+    milk_type TEXT DEFAULT '',
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (party_id) REFERENCES parties(id)
 );
-
 -- ============================================================
 -- STOCK MOVEMENTS (inventory ledger)
 -- ============================================================
@@ -271,6 +277,7 @@ CREATE TABLE IF NOT EXISTS milk_collections (
     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'processed', 'paid')),
     notes TEXT DEFAULT '',
     purchase_ref_id INTEGER DEFAULT NULL,
+    rate_override_reason TEXT DEFAULT '',
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),

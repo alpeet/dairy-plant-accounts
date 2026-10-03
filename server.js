@@ -981,7 +981,7 @@ app.post('/api/stock/movements', (req, res) => {
 app.post('/api/stock/adjust', requireRole('operator'), (req, res) => {
     const validationError = validateStockAdjust(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
-    res.json(safeRun(() => ops.adjustStock(db, req.body)));
+    res.json(safeRun(() => ops.adjustStock(db, req.body, req.user?.id || null)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1040,6 +1040,9 @@ app.post('/api/milk/get', (req, res) => {
 app.post('/api/milk/save', requireRole('operator'), (req, res) => {
     const validationError = validateMilkCollection(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
+    // A rate that departs from the supplier's calculated rate needs a reason.
+    const overrideError = ops.rateOverrideError(db, req.body || {});
+    if (overrideError) return res.json({ success: false, error: overrideError });
     res.json(safeRun(() => ops.saveMilkCollection(db, req.body)));
 });
 
@@ -1096,6 +1099,23 @@ app.post('/api/reports/profit-loss', (req, res) => {
 
 app.post('/api/reports/profit-loss-by-month', (req, res) => {
     res.json(safeRun(() => ops.getProfitLossByMonth(db, req.body || {})));
+});
+
+// Company Ledger — every major financial movement, grouped daily/weekly/
+// monthly/custom, with run-time checks that it agrees with the P&L.
+app.post('/api/reports/company-ledger', (req, res) => {
+    res.json(safeRun(() => ops.getCompanyLedger(db, req.body || {})));
+});
+
+// Management reports — Expense Analysis, Board Report, weekly/monthly report
+app.post('/api/reports/expense-analysis', (req, res) => {
+    res.json(safeRun(() => ops.getExpenseAnalysis(db, req.body || {})));
+});
+app.post('/api/reports/board-report', (req, res) => {
+    res.json(safeRun(() => ops.getBoardReport(db, req.body || {})));
+});
+app.post('/api/reports/management', (req, res) => {
+    res.json(safeRun(() => ops.getManagementReport(db, req.body || {})));
 });
 
 app.post('/api/reports/stock-statement', (req, res) => {
@@ -1558,7 +1578,14 @@ app.post('/api/rates/delete', requireRole('operator'), (req, res) => {
 });
 
 app.post('/api/rates/effective', (req, res) => {
-    res.json(safeRun(() => ops.getEffectiveRate(db, req.body.date)));
+    const b = req.body || {};
+    res.json(safeRun(() => ops.getEffectiveRate(db, b.date, { party_id: b.party_id, milk_type: b.milk_type })));
+});
+
+// What THIS litre must cost: supplier-specific chart (falls back to the plant
+// chart) — the same engine every entry path uses.
+app.post('/api/rates/resolve', (req, res) => {
+    res.json(safeRun(() => ops.resolveMilkRate(db, req.body || {})));
 });
 
 app.post('/api/rates/calculate', (req, res) => {
@@ -1767,6 +1794,10 @@ app.post('/api/bulk/load-purchases', (req, res) => {
 // ── Payment accounting by transaction type (advances/loans never hit P&L) ──
 app.post('/api/payments/transaction-types', (req, res) => {
     res.json(safeRun(() => ops.TRANSACTION_TYPES));
+});
+
+app.post('/api/payments/advance-register', (req, res) => {
+    res.json(safeRun(() => ops.getAdvanceRecoveryRegister(db, req.body || {})));
 });
 
 app.post('/api/payments/loan-advance-balances', (req, res) => {

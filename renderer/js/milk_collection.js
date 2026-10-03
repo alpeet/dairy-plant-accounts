@@ -166,14 +166,22 @@ function generateCollectionNo() {
 // Milk Collection Form (Enhanced)
 // ============================================================
 async function showMilkCollectionForm(recordId = null) {
-    // Load farmers (type=farmer) and routes
-    const [farmersResult, routesResult, rateChartsResult] = await Promise.all([
+    // Load farmers + suppliers (both can carry their own pricing rule) and routes
+    const [farmersResult, suppliersResult, routesResult, rateChartsResult] = await Promise.all([
         window.api.getParties({ type: 'farmer' }),
+        window.api.getParties({ type: 'supplier' }),
         window.api.getRoutes({}),
         window.api.getRateCharts()
     ]);
 
-    const farmers = farmersResult.success ? farmersResult.data : [];
+    const farmersRaw = farmersResult.success ? farmersResult.data : [];
+    const suppliersRaw = suppliersResult.success ? suppliersResult.data : [];
+    const seenParties = new Set();
+    const farmers = [...farmersRaw, ...suppliersRaw].filter(p => {
+        if (seenParties.has(p.id)) return false;
+        seenParties.add(p.id);
+        return true;
+    });
     const routes = routesResult.success ? routesResult.data : [];
     const rateCharts = rateChartsResult.success ? rateChartsResult.data : [];
 
@@ -185,6 +193,12 @@ async function showMilkCollectionForm(recordId = null) {
 
     const isEdit = !!record;
     const todayStr = today();
+
+    // Opening an existing override must keep the operator's final rate + reason.
+    _mcFinalTouched = !!(record && record.calculated_rate != null
+        && Math.abs(Number(record.rate) - Number(record.calculated_rate)) > 0.005);
+    _mcLastCalc = record && record.calculated_rate != null ? Number(record.calculated_rate) : null;
+    _resolveCache = null;
 
     showModal(`
         <div class="modal-header">
@@ -204,12 +218,12 @@ async function showMilkCollectionForm(recordId = null) {
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Farmer *</label>
-                    <select class="form-control" name="party_id" id="mcFarmer" required>
-                        <option value="">-- Select Farmer --</option>
+                    <label>Farmer / Supplier *</label>
+                    <select class="form-control" name="party_id" id="mcFarmer" required onchange="refreshEffectiveRate()">
+                        <option value="">-- Select Farmer / Supplier --</option>
                         ${farmers.map(p => `<option value="${p.id}" ${record && record.party_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} ${p.phone ? '- ' + escapeHtml(p.phone) : ''}</option>`).join('')}
                     </select>
-                    <small style="color:var(--text-light)">Add farmers in Party Management with type "farmer"</small>
+                    <small style="color:var(--text-light)">The supplier's own pricing rule (fixed or FAT/SNF) is applied automatically</small>
                 </div>
                 <div class="form-row-3">
                     <div class="form-group">
@@ -221,7 +235,7 @@ async function showMilkCollectionForm(recordId = null) {
                     </div>
                     <div class="form-group">
                         <label>Milk Type</label>
-                        <select class="form-control" name="milk_type">
+                        <select class="form-control" name="milk_type" id="mcMilkType" onchange="refreshEffectiveRate()">
                             <option value="cow" ${record && record.milk_type === 'cow' ? 'selected' : ''}>Cow Milk</option>
                             <option value="buffalo" ${record && record.milk_type === 'buffalo' ? 'selected' : ''}>Buffalo Milk</option>
                             <option value="mixed" ${record && record.milk_type === 'mixed' ? 'selected' : ''}>Mixed</option>
@@ -269,12 +283,12 @@ async function showMilkCollectionForm(recordId = null) {
                             <input type="number" class="form-control" name="clr_percent" id="mcClr" value="${record ? record.clr_percent || '' : ''}" min="0" step="0.1" placeholder="e.g., 28.5">
                         </div>
                         <div class="form-group">
-                            <label>Extra / Unit</label>
-                            <input type="number" class="form-control" name="extra_per_unit" id="mcExtra" value="${record ? record.extra_per_unit || 0 : 0}" min="0" step="0.01" oninput="calcMilkAmount()">
+                            <label>Chart Extra / Unit</label>
+                            <input type="text" class="form-control" id="mcExtraDisplay" readonly value="${formatCurrency(0)}" style="background:var(--bg)" title="Comes from the applicable rate chart — edit it on the Rate Charts screen">
                         </div>
                     </div>
                     <div style="padding:8px 12px;background:#e8f4f8;border-radius:4px;font-size:13px;margin-bottom:12px">
-                        <strong>Formula:</strong> Rate = (FAT × <span id="mcFatMultDisplay">7.15</span>) + (SNF × <span id="mcSnfMultDisplay">4.55</span>) + Extra/Unit
+                        <strong>Formula:</strong> Rate = (FAT × <span id="mcFatMultDisplay">7.15</span>) + (SNF × <span id="mcSnfMultDisplay">4.55</span>) + chart extra
                         = <strong id="mcCalcRateDisplay" style="color:var(--accent)">—</strong>/L
                     </div>
                 </div>
@@ -288,18 +302,31 @@ async function showMilkCollectionForm(recordId = null) {
                 </div>
 
                 <div class="form-section-title">Quantity & Total</div>
-                <div class="form-row-3">
+                <div class="form-row-4">
                     <div class="form-group">
                         <label>Quantity (Liters) *</label>
                         <input type="number" class="form-control" name="quantity_liters" id="mcLiters" value="${record ? record.quantity_liters : 0}" min="0" step="0.01" required oninput="calcMilkAmount()">
                     </div>
                     <div class="form-group">
                         <label>Calculated Rate / L</label>
-                        <input type="text" class="form-control" id="mcCalcRate" readonly style="background:#f5f5f5;font-weight:700;font-size:15px;color:var(--accent)">
+                        <input type="text" class="form-control" id="mcCalcRate" readonly style="background:#f5f5f5;font-weight:700;font-size:15px;color:var(--accent)" title="What the applicable rate chart says this litre must cost">
+                    </div>
+                    <div class="form-group">
+                        <label>Final Rate / L</label>
+                        <input type="number" class="form-control" name="rate" id="mcFinalRate" value="${record ? record.rate : ''}" min="0" step="0.01" oninput="_mcFinalTouched = true; calcMilkAmount()" style="font-weight:700;font-size:15px" title="Leave equal to the calculated rate, or enter an override (a reason is required)">
                     </div>
                     <div class="form-group">
                         <label>Total Amount</label>
                         <input type="text" class="form-control" name="amount" id="mcAmount" readonly style="background:#f5f5f5;font-weight:700;font-size:18px;color:var(--primary)">
+                    </div>
+                </div>
+                <div id="mcOverrideBox" style="display:none;padding:10px 12px;border:1px solid var(--warning);background:#fff8e6;border-radius:6px;margin-bottom:12px">
+                    <div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:6px">
+                        ⚠️ Rate override — the final rate differs from the calculated rate. A reason is mandatory and is written to the audit log.
+                    </div>
+                    <div class="form-group" style="margin:0">
+                        <label>Override Reason *</label>
+                        <textarea class="form-control" id="mcOverrideReason" rows="2" placeholder="e.g., agreed with supplier, fat corrected by lab test…">${escapeHtml(record && record.rate_override_reason ? record.rate_override_reason : '')}</textarea>
                     </div>
                 </div>
 
@@ -348,43 +375,80 @@ function toggleMilkRateType() {
     calcMilkAmount(); // Recalculate immediately when rate type changes
 }
 
-let _effectiveRateCache = null;
+let _effectiveRateCache = null;   // the winning rate-chart row
+let _resolveCache = null;         // full resolveMilkRate answer (source, calculated rate…)
+let _mcFinalTouched = false;      // operator deliberately departed from the calculated rate
+let _mcLastCalc = null;           // last calculated rate shown
 
 async function refreshEffectiveRate() {
     const dateEl = document.getElementById('mcDate');
     if (!dateEl) return;
     const date = dateEl.value || today();
+    const partyId = document.getElementById('mcFarmer')?.value;
+    const milkType = document.getElementById('mcMilkType')?.value || 'cow';
 
     try {
-        const result = await window.api.getEffectiveRate(date);
-        if (result.success) {
-            _effectiveRateCache = result.data;
-            const r = result.data;
-
-            // Update rate chart info display
-            const displayEl = document.getElementById('mcRateChartDisplay');
-            if (displayEl) {
-                if (r.id) {
-                    displayEl.innerHTML = `📋 Effective rate from chart <strong>#${r.id}</strong> (effective ${formatDate(r.effective_from)}) — ` +
-                        (r.rate_type === 'formula'
-                            ? `FAT Mult: ${r.fat_multiplier}, SNF Mult: ${r.snf_multiplier}, Extra: ${formatCurrency(r.extra_per_unit || 0)}`
-                            : `Fixed Rate: ${formatCurrency(r.fixed_rate)}/L`);
-                } else {
-                    displayEl.innerHTML = `⚠️ ${escapeHtml(r.notes || 'Using default rate')} — ${r.rate_type === 'formula' ? `FAT: ${r.fat_multiplier}, SNF: ${r.snf_multiplier}` : `Fixed: ${formatCurrency(r.fixed_rate || 0)}`}`;
-                }
+        // ONE engine: the same resolveMilkRate the server enforces on save.
+        let resolved = null;
+        if (window.api.resolveMilkRate) {
+            const rr = await window.api.resolveMilkRate({
+                date,
+                party_id: partyId ? parseInt(partyId) : null,
+                milk_type: milkType,
+                fat: parseFloat(document.getElementById('mcFat')?.value || 0),
+                snf: parseFloat(document.getElementById('mcSnf')?.value || 0)
+            });
+            if (rr && rr.success) resolved = rr.data;
+        }
+        if (!resolved) {
+            const result = await window.api.getEffectiveRate(date, { party_id: partyId ? parseInt(partyId) : null, milk_type: milkType });
+            if (result && result.success) {
+                resolved = { chart: result.data, source: result.data && result.data.id ? 'plant' : 'default', calculated_rate: null };
             }
+        }
+        if (!resolved) return;
 
-            // Update displayed multipliers
+        _resolveCache = resolved;
+        const r = resolved.chart || {};
+        _effectiveRateCache = r;
+        const partyName = partyId
+            ? String(document.getElementById('mcFarmer')?.selectedOptions?.[0]?.text || '').split(' - ')[0]
+            : '';
+
+        const displayEl = document.getElementById('mcRateChartDisplay');
+        if (displayEl) {
+            const detail = r.rate_type === 'formula'
+                ? `FAT Mult: ${r.fat_multiplier}, SNF Mult: ${r.snf_multiplier}, Extra: ${formatCurrency(r.extra_per_unit || 0)}`
+                : `Fixed Rate: ${formatCurrency(r.fixed_rate)}/L`;
+            if (resolved.source === 'supplier') {
+                displayEl.innerHTML = `🌾 Supplier rule for <strong>${escapeHtml(partyName)}</strong> — chart <strong>#${r.id}</strong> (effective ${formatDate(r.effective_from)}) · ${detail}`;
+            } else if (r.id) {
+                displayEl.innerHTML = `📋 Plant-wide chart <strong>#${r.id}</strong> (effective ${formatDate(r.effective_from)}) · ${detail}`;
+            } else {
+                displayEl.innerHTML = `⚠️ ${escapeHtml(r.notes || 'No rate chart entry for this date — using defaults from settings')}`;
+            }
+        }
+
+        // The chart decides the pricing METHOD — keep the form in step with it.
+        if (r.id) {
+            const typeSel = document.getElementById('mcRateType');
+            if (typeSel && r.rate_type && typeSel.value !== r.rate_type) {
+                typeSel.value = r.rate_type;
+                toggleMilkRateType();
+            }
             const fatDisp = document.getElementById('mcFatMultDisplay');
             const snfDisp = document.getElementById('mcSnfMultDisplay');
             if (fatDisp) fatDisp.textContent = r.fat_multiplier;
             if (snfDisp) snfDisp.textContent = r.snf_multiplier;
-
-            calcMilkAmount();
-        } else {
-            const displayEl = document.getElementById('mcRateChartDisplay');
-            if (displayEl) displayEl.innerHTML = `⚠️ Could not load rate: ${result.error}`;
+            const extraDisp = document.getElementById('mcExtraDisplay');
+            if (extraDisp) extraDisp.value = formatCurrency(r.extra_per_unit || 0);
+            if (r.rate_type === 'fixed') {
+                const frEl = document.getElementById('mcFixedRate');
+                if (frEl) frEl.value = r.fixed_rate || 0;
+            }
         }
+
+        calcMilkAmount();
     } catch (e) {
         console.error('Rate lookup failed:', e);
     }
@@ -393,35 +457,54 @@ async function refreshEffectiveRate() {
 function calcMilkAmount() {
     const liters = parseFloat(document.getElementById('mcLiters')?.value || 0);
     const rateType = document.getElementById('mcRateType')?.value || 'formula';
+    // Server-resolved chart first (supplier-specific), legacy cache as fallback.
+    const chart = (_resolveCache && _resolveCache.chart) || _effectiveRateCache || {};
 
     let calculatedRate = 0;
-    let formulaBreakdown = '';
-
     if (rateType === 'formula') {
         const fat = parseFloat(document.getElementById('mcFat')?.value || 0);
         const snf = parseFloat(document.getElementById('mcSnf')?.value || 0);
-        const extra = parseFloat(document.getElementById('mcExtra')?.value || 0);
-
-        // Use multiplier values from effective rate cache, or defaults
-        const rateChart = _effectiveRateCache || {};
-        const fatMult = parseFloat(rateChart.fat_multiplier) || 7.15;
-        const snfMult = parseFloat(rateChart.snf_multiplier) || 4.55;
-
+        const fatMult = parseFloat(chart.fat_multiplier) || 7.15;
+        const snfMult = parseFloat(chart.snf_multiplier) || 4.55;
+        const extra = parseFloat(chart.extra_per_unit) || 0;
         calculatedRate = (fat * fatMult) + (snf * snfMult) + extra;
-        formulaBreakdown = `(${fat} × ${fatMult}) + (${snf} × ${snfMult}) + ${extra} = ${calculatedRate.toFixed(2)}`;
     } else {
-        calculatedRate = parseFloat(document.getElementById('mcFixedRate')?.value || 0);
-        formulaBreakdown = `Fixed rate: ${calculatedRate.toFixed(2)}/L`;
+        // A fixed chart is authoritative for a fixed-rate supplier.
+        calculatedRate = (chart.rate_type === 'fixed' && parseFloat(chart.fixed_rate) > 0)
+            ? parseFloat(chart.fixed_rate)
+            : parseFloat(document.getElementById('mcFixedRate')?.value || 0);
     }
+    calculatedRate = Math.round((calculatedRate + Number.EPSILON) * 100) / 100;
 
-    const amount = liters * calculatedRate;
+    // The Final Rate follows the calculated rate until the operator departs from it.
+    const finalEl = document.getElementById('mcFinalRate');
+    if (finalEl) {
+        const finalNow = parseFloat(finalEl.value);
+        const follows = !_mcFinalTouched || !(finalNow > 0) || Math.abs(finalNow - (_mcLastCalc || 0)) < 0.005;
+        if (follows) {
+            finalEl.value = calculatedRate.toFixed(2);
+            _mcFinalTouched = false;
+        }
+    }
+    const finalRate = finalEl && parseFloat(finalEl.value) > 0 ? parseFloat(finalEl.value) : calculatedRate;
+    const overridden = Math.abs(finalRate - calculatedRate) > 0.005;
 
-    // Update displays
+    const amount = liters * finalRate;
+
     document.getElementById('mcCalcRate').value = formatCurrency(calculatedRate);
     document.getElementById('mcAmount').value = formatCurrency(amount);
-
     const calcDisplay = document.getElementById('mcCalcRateDisplay');
     if (calcDisplay) calcDisplay.textContent = formatCurrency(calculatedRate);
+
+    const overrideBox = document.getElementById('mcOverrideBox');
+    if (overrideBox) overrideBox.style.display = overridden ? 'block' : 'none';
+    if (finalEl) {
+        finalEl.style.borderColor = overridden ? 'var(--warning)' : '';
+        finalEl.title = overridden
+            ? `Override: ${formatCurrency(calculatedRate)} → ${formatCurrency(finalRate)}/L — a reason is required`
+            : 'Matches the calculated rate';
+    }
+    _mcLastCalc = calculatedRate;
 }
 
 // ============================================================
@@ -437,21 +520,34 @@ async function saveMilkCollection(recordId) {
     const fat = parseFloat(formData.get('fat_percent') || 0);
     const snf = parseFloat(formData.get('snf_percent') || 0);
     const rateType = formData.get('rate_type') || 'formula';
-    const extraPerUnit = parseFloat(formData.get('extra_per_unit') || 0);
+    const rateChart = (_resolveCache && _resolveCache.chart) || _effectiveRateCache || {};
+    const extraPerUnit = parseFloat(rateChart.extra_per_unit) || 0;
     const fixedRate = parseFloat(formData.get('fixed_rate') || 0);
 
-    // Calculate rate using the active rate chart
-    const rateChart = _effectiveRateCache || {};
+    // ── One authoritative price ───────────────────────────────────────
+    // calculated = what the applicable chart says; final = what the operator
+    // confirms (equal to calculated unless an explained override was entered).
     let calculatedRate = 0;
     if (rateType === 'formula') {
         const fatMult = parseFloat(rateChart.fat_multiplier) || 7.15;
         const snfMult = parseFloat(rateChart.snf_multiplier) || 4.55;
         calculatedRate = (fat * fatMult) + (snf * snfMult) + extraPerUnit;
     } else {
-        calculatedRate = fixedRate;
+        calculatedRate = (rateChart.rate_type === 'fixed' && parseFloat(rateChart.fixed_rate) > 0)
+            ? parseFloat(rateChart.fixed_rate) : fixedRate;
+    }
+    calculatedRate = Math.round((calculatedRate + Number.EPSILON) * 100) / 100;
+
+    const finalRate = parseFloat(formData.get('rate')) || calculatedRate;
+    const overrideReason = String(formData.get('rate_override_reason') || document.getElementById('mcOverrideReason')?.value || '').trim();
+    const overridden = Math.abs(finalRate - calculatedRate) > 0.005;
+    if (overridden && !overrideReason) {
+        showToast(`Rate override: calculated ${formatCurrency(calculatedRate)}/L vs final ${formatCurrency(finalRate)}/L — a reason is required.`, 'error');
+        document.getElementById('mcOverrideReason')?.focus();
+        return;
     }
 
-    const amount = liters * calculatedRate;
+    const amount = Math.round(finalRate * liters * 100) / 100;
 
     const data = {
         id: recordId || null,
@@ -471,7 +567,8 @@ async function saveMilkCollection(recordId) {
         fat_multiplier: rateType === 'formula' ? (parseFloat(rateChart.fat_multiplier) || 7.15) : 0,
         snf_multiplier: rateType === 'formula' ? (parseFloat(rateChart.snf_multiplier) || 4.55) : 0,
         calculated_rate: calculatedRate,
-        rate: calculatedRate,
+        rate: finalRate,
+        rate_override_reason: overrideReason,
         amount: amount,
         shift: formData.get('shift'),
         status: formData.get('status'),

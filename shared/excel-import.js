@@ -1127,9 +1127,8 @@ function importCollections(db, sheetData, opts) {
             const mode = mapPaymentMode(toStr(row[modeIdx]));
             // Preserve the selected transaction type across the round-trip
             // (advance / loan_given / loan_received / loan_repayment / …).
-            const rawTransType = toStr(row[transTypeIdx]).trim().toLowerCase().replace(/[\s-]+/g, '_');
-            const KNOWN_TT = new Set(['actual_expense', 'advance', 'loan_given', 'loan_received',
-                'loan_repayment', 'advance_adjustment', 'settlement', 'other']);
+            const rawTransType = toStr(row[transTypeIdx]).trim().toLowerCase().replace(/[\s-]+/g, '_');                    const KNOWN_TT = new Set(['actual_expense', 'advance', 'advance_returned', 'loan_given', 'loan_received',
+                        'loan_repayment', 'advance_adjustment', 'settlement', 'other']);
             const transactionType = KNOWN_TT.has(rawTransType) ? rawTransType : null;
             const remarksSource = KNOWN_TT.has(rawTransType) ? toStr(row[remarkIdx + 1]) : toStr(row[remarkIdx]);
             const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${remarksSource}`;

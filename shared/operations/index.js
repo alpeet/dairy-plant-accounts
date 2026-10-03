@@ -91,6 +91,17 @@ const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
 // ── Financial Reports ──
 const { getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook } = require('./financial_reports');
 
+// ── Company Ledger — one page with every major financial movement, grouped
+// daily / weekly / monthly, proving it agrees with the P&L on every call.
+const { getCompanyLedger } = require('./company_ledger');
+
+// ── Management reports — one expense vocabulary, Expense Analysis, Board
+// Report and the daily/weekly/monthly management report (Phases 11–16).
+const {
+    EXPENSE_CATEGORIES, normalizeExpenseCategory,
+    getExpenseAnalysis, getBoardReport, getManagementReport
+} = require('./management_reports');
+
 // ── Cash Deposits ──
 const {
     listCashDeposits, getCashDeposit, saveCashDeposit,
@@ -99,7 +110,7 @@ const {
 
 // ── Routes, Rates, Production, Partners ──
 const { listRoutes, getRoute, saveRoute, deleteRoute, getRouteSummary } = require('./routes');
-const { listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffectiveRate, calculateMilkRate } = require('./rates');
+const { listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffectiveRate, calculateMilkRate, resolveMilkRate, rateOverrideError } = require('./rates');
 const { listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes } = require('./production');
 const { listPartnerCapital, getPartnerCapital, savePartnerCapital, deletePartnerCapital, getPartnerStatement, listPartnersWithBalance } = require('./partners');
 
@@ -225,6 +236,9 @@ module.exports = {
 
     // Financial Reports
     getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook,
+    getCompanyLedger,
+    EXPENSE_CATEGORIES, normalizeExpenseCategory,
+    getExpenseAnalysis, getBoardReport, getManagementReport,
 
     // Cash Deposits
     listCashDeposits, getCashDeposit, saveCashDeposit,
@@ -247,6 +261,7 @@ module.exports = {
 
     // Rate Charts
     listRateCharts, getRateChart, saveRateChart, deleteRateChart, getEffectiveRate, calculateMilkRate,
+    resolveMilkRate, rateOverrideError,
 
     // Production
     listProductionBatches, getProductionBatch, saveProductionBatch, deleteProductionBatch, getProcessTypes,
@@ -328,6 +343,7 @@ module.exports = {
     getReconciliation: accounting.getReconciliation,
     getPaymentPostingRule: accounting.getPaymentPostingRule,
     getLoanAdvanceBalances: accounting.getLoanAdvanceBalances,
+    getAdvanceRecoveryRegister: accounting.getAdvanceRecoveryRegister,
     TRANSACTION_TYPES: accounting.TRANSACTION_TYPES,
 
     // Bulk (date-wise) entry — Mode B data entry. Every row reuses

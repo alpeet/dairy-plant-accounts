@@ -10,7 +10,7 @@
     <title>Prarambha Account &amp; Stock Management</title>
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="shortcut icon" type="image/png" href="favicon.png">
-    <link rel="stylesheet" href="css/style.css?v=3">
+    <link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
     <div class="app-container">
@@ -93,10 +93,10 @@
                     </ul>
                 </li>
 
-                <!-- ====== CORE TRANSACTIONS ====== -->
-                <li class="nav-group" data-group="core-transactions">
-                    <div class="nav-group-header" onclick="toggleNavGroup('core-transactions')">
-                        <span class="nav-group-label">Core Transactions</span>
+                <!-- ====== OPERATIONS ====== -->
+                <li class="nav-group" data-group="operations">
+                    <div class="nav-group-header" onclick="toggleNavGroup('operations')">
+                        <span class="nav-group-label">Operations</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
@@ -116,13 +116,31 @@
                             <span class="nav-icon">🥛</span>
                             <span class="nav-text">Milk Collection</span>
                         </li>
-                        <li class="nav-item" data-page="production" data-min-role="staff">
-                            <span class="nav-icon">🏭</span>
-                            <span class="nav-text">Production</span>
-                        </li>
                         <li class="nav-item" data-page="bulk-entry" data-min-role="agent">
                             <span class="nav-icon">⚡</span>
                             <span class="nav-text">Bulk Entry</span>
+                        </li>
+                        <li class="nav-item" data-page="cash-collection" data-min-role="operator">
+                            <span class="nav-icon">💵</span>
+                            <span class="nav-text">Payment Collection</span>
+                        </li>
+                        <li class="nav-item" data-page="cash-deposit" data-min-role="operator">
+                            <span class="nav-icon">🏦</span>
+                            <span class="nav-text">Cash Deposit</span>
+                        </li>
+                    </ul>
+                </li>
+
+                <!-- ====== PRODUCTION ====== -->
+                <li class="nav-group" data-group="production">
+                    <div class="nav-group-header" onclick="toggleNavGroup('production')">
+                        <span class="nav-group-label">Production</span>
+                        <span class="nav-group-chevron">▾</span>
+                    </div>
+                    <ul class="nav-group-items">
+                        <li class="nav-item" data-page="production" data-min-role="staff">
+                            <span class="nav-icon">🏭</span>
+                            <span class="nav-text">Production</span>
                         </li>
                         <li class="nav-item" data-page="dairy-costing" data-min-role="staff">
                             <span class="nav-icon">🧮</span>
@@ -132,31 +150,75 @@
                             <span class="nav-icon">⚙️</span>
                             <span class="nav-text">Production Setup</span>
                         </li>
+                    </ul>
+                </li>
+
+                <!-- ====== INVENTORY ====== -->
+                <li class="nav-group" data-group="inventory">
+                    <div class="nav-group-header" onclick="toggleNavGroup('inventory')">
+                        <span class="nav-group-label">Inventory</span>
+                        <span class="nav-group-chevron">▾</span>
+                    </div>
+                    <ul class="nav-group-items">
                         <li class="nav-item" data-page="stock" data-min-role="staff">
                             <span class="nav-icon">📋</span>
                             <span class="nav-text">Stock</span>
                         </li>
-                        <li class="nav-item" data-page="parties" data-min-role="staff">
-                            <span class="nav-icon">👥</span>
-                            <span class="nav-text">Parties</span>
+                        <li class="nav-item" data-page="stock-statement" data-min-role="staff">
+                            <span class="nav-icon">🧾</span>
+                            <span class="nav-text">Stock Statement</span>
                         </li>
                     </ul>
                 </li>
 
-                <!-- ====== CASH & FINANCE ====== -->
-                <li class="nav-group" data-group="cash-finance">
-                    <div class="nav-group-header" onclick="toggleNavGroup('cash-finance')">
-                        <span class="nav-group-label">Cash & Finance</span>
+                <!-- ====== MASTER DATA ====== -->
+                <li class="nav-group" data-group="master-data">
+                    <div class="nav-group-header" onclick="toggleNavGroup('master-data')">
+                        <span class="nav-group-label">Master Data</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
-                        <li class="nav-item" data-page="cash-collection" data-min-role="operator">
-                            <span class="nav-icon">💵</span>
-                            <span class="nav-text">Payment Collection</span>
+                        <li class="nav-item" data-page="parties" data-min-role="staff">
+                            <span class="nav-icon">👥</span>
+                            <span class="nav-text">Parties</span>
                         </li>
-                        <li class="nav-item" data-page="cash-deposit" data-min-role="operator">
-                            <span class="nav-icon">🏦</span>
-                            <span class="nav-text">Cash Deposit</span>
+                        <li class="nav-item" data-page="routes" data-min-role="operator">
+                            <span class="nav-icon">🛣️</span>
+                            <span class="nav-text">Routes</span>
+                        </li>
+                        <li class="nav-item" data-page="rate-charts" data-min-role="operator">
+                            <span class="nav-icon">📊</span>
+                            <span class="nav-text">Milk Rate Charts</span>
+                        </li>
+                    </ul>
+                </li>
+
+                <!-- ====== ACCOUNTS ====== -->
+                <li class="nav-group" data-group="accounts">
+                    <div class="nav-group-header" onclick="toggleNavGroup('accounts')">
+                        <span class="nav-group-label">Accounts</span>
+                        <span class="nav-group-chevron">▾</span>
+                    </div>
+                    <ul class="nav-group-items">
+                        <li class="nav-item" data-page="company-ledger" data-min-role="operator">
+                            <span class="nav-icon">📒</span>
+                            <span class="nav-text">Company Ledger</span>
+                        </li>
+                        <li class="nav-item" data-page="daybook" data-min-role="operator">
+                            <span class="nav-icon">📅</span>
+                            <span class="nav-text">Daybook</span>
+                        </li>
+                        <li class="nav-item" data-page="receivable-payable" data-min-role="operator">
+                            <span class="nav-icon">💰</span>
+                            <span class="nav-text">Receivable/Payable</span>
+                        </li>
+                        <li class="nav-item" data-page="farmer-payments" data-min-role="operator">
+                            <span class="nav-icon">💵</span>
+                            <span class="nav-text">Farmer Payments</span>
+                        </li>
+                        <li class="nav-item" data-page="advances" data-min-role="operator">
+                            <span class="nav-icon">⏳</span>
+                            <span class="nav-text">Advances</span>
                         </li>
                         <li class="nav-item" data-page="bank" data-min-role="operator">
                             <span class="nav-icon">💳</span>
@@ -212,29 +274,9 @@
                             <span class="nav-icon">📊</span>
                             <span class="nav-text">Profit & Loss</span>
                         </li>
-                        <li class="nav-item" data-page="receivable-payable" data-min-role="operator">
-                            <span class="nav-icon">💰</span>
-                            <span class="nav-text">Receivable/Payable</span>
-                        </li>
-                        <li class="nav-item" data-page="daybook" data-min-role="operator">
-                            <span class="nav-icon">📅</span>
-                            <span class="nav-text">Daybook</span>
-                        </li>
-                        <li class="nav-item" data-page="stock-statement" data-min-role="staff">
-                            <span class="nav-icon">📋</span>
-                            <span class="nav-text">Stock Statement</span>
-                        </li>
-                        <li class="nav-item" data-page="rate-charts" data-min-role="operator">
-                            <span class="nav-icon">📊</span>
-                            <span class="nav-text">Rate Charts</span>
-                        </li>
-                        <li class="nav-item" data-page="farmer-payments" data-min-role="operator">
-                            <span class="nav-icon">💵</span>
-                            <span class="nav-text">Farmer Payments</span>
-                        </li>
-                        <li class="nav-item" data-page="routes" data-min-role="operator">
-                            <span class="nav-icon">🛣️</span>
-                            <span class="nav-text">Routes</span>
+                        <li class="nav-item" data-page="management-reports" data-min-role="operator">
+                            <span class="nav-icon">🏛</span>
+                            <span class="nav-text">Board & Management</span>
                         </li>
                     </ul>
                 </li>
@@ -365,6 +407,9 @@
                 <!-- Cash Collection -->
                 <div class="page-section" id="page-cash-collection"></div>
 
+                <!-- Advance Recovery Register -->
+                <div class="page-section" id="page-advances"></div>
+
                 <!-- Cash Deposit -->
                 <div class="page-section" id="page-cash-deposit"></div>
 
@@ -376,6 +421,12 @@
 
                 <!-- Daybook -->
                 <div class="page-section" id="page-daybook"></div>
+
+                <!-- Company Ledger (classified whole-business movements) -->
+                <div class="page-section" id="page-company-ledger"></div>
+
+                <!-- Management Reports (Expense Analysis / Board / Period) -->
+                <div class="page-section" id="page-management-reports"></div>
 
                 <!-- Stock Statement -->
                 <div class="page-section" id="page-stock-statement"></div>
@@ -412,7 +463,7 @@
     <script src="js/api.js?v=4"></script>
     <script src="js/utils.js?v=3"></script>
     <script src="js/version-label.js"></script>
-    <script src="js/dashboard.js?v=3"></script>
+    <script src="js/dashboard.js?v=4"></script>
     <script src="js/sales.js?v=4"></script>
     <script src="js/invoice_generator.js?v=1"></script>
     <script src="js/purchases.js?v=3"></script>
@@ -435,6 +486,9 @@
     <script src="js/production_settings.js?v=1"></script>
     <script src="js/partner_capital.js?v=3"></script>
     <script src="js/financial_reports.js?v=4"></script>
+    <script src="js/company_ledger.js?v=1"></script>
+    <script src="js/advances.js?v=1"></script>
+    <script src="js/management_reports.js?v=1"></script>
     <script src="js/cash_deposit.js?v=3"></script>
     <script src="js/bank.js?v=1"></script>
     <script src="js/pdc.js?v=1"></script>
