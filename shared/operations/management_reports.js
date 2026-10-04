@@ -23,7 +23,7 @@
 const accounting = require('./accounting');
 const { getProfitLoss, getProfitLossByMonth } = require('./financial_reports');
 const { classifySaleName } = require('./company_ledger');
-const { adToBS, bsToAD } = require('../excel-import');
+const { adToBS, bsToAD, todayBSDate } = require('../excel-import');
 
 const round2 = accounting.round2;
 
@@ -98,8 +98,7 @@ function normalizeExpenseCategory(input) {
 // ──────────────────────────────────────────────────────────────
 
 function _todayBS() {
-    const ad = new Date().toISOString().split('T')[0];
-    try { return adToBS(ad) || ad; } catch (e) { return ad; }
+    return todayBSDate();
 }
 
 /** Shift a BS date by `n` days (negative allowed) via real AD arithmetic. */

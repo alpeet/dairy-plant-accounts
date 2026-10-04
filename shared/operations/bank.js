@@ -12,6 +12,7 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const crypto = require('crypto');
 const accounting = require('./accounting');
 const { logAudit } = require('./audit');
 
@@ -25,6 +26,74 @@ const CLASS_META = {
         note: 'office/operating expense paid from the bank: Expense DR / Bank CR — no party ledger posting'
     }
 };
+
+/**
+ * Content identity of a bank row: date + direction + amount + counterparty +
+ * description + account + type. Used to build the stable txn_uid key so a
+ * source statement re-imported later is recognised instead of re-inserted.
+ * Never keyed on amount+date alone — two legitimate rows can share those.
+ * @private
+ */
+function _rowIdentityKey(r) {
+    const dir = (r.credit || 0) > 0 ? 'C' : 'D';
+    const amt = Math.abs(Number((r.credit || r.debit || 0)) || 0).toFixed(2);
+    const raw = [r.date || '', dir, amt, r.counterparty_name || '', r.description || '',
+                 r.bank_account || '', r.txn_type || '', r.payment_mode || ''].join('|');
+    return crypto.createHash('sha1').update(raw).digest('hex').slice(0, 20);
+}
+
+/**
+ * Next free content-based uid (imp:<hash>#<n>) excluding one row id.
+ * @private
+ */
+function _uidForContent(db, r, excludeId = null) {
+    const prefix = `imp:${_rowIdentityKey(r)}#`;
+    const rows = db.prepare(
+        'SELECT id, txn_uid FROM bank_transactions WHERE txn_uid LIKE ?'
+    ).all(prefix + '%');
+    const used = new Set(rows.filter(x => x.id !== excludeId).map(x => x.txn_uid));
+    let i = 0;
+    while (used.has(prefix + i)) i++;
+    return prefix + i;
+}
+
+/**
+ * One-time idempotency migration: every bank row gets a stable txn_uid —
+ * ref:<reference_no> when it has a reference, otherwise imp:<hash>#<n>
+ * (identity key + occurrence rank so already-duplicated historical rows keep
+ * distinct uids). A UNIQUE index then enforces "insert once" at the DB level.
+ * Idempotent and cheap after the first run (0 pending rows → no-op).
+ * @private
+ */
+function _migrateTxnUid(db) {
+    const pending = db.prepare(`
+        SELECT id, date, debit, credit, amount, counterparty_name, description,
+               bank_account, txn_type, payment_mode, reference_no
+          FROM bank_transactions WHERE txn_uid IS NULL ORDER BY id
+    `).all();
+    if (pending.length === 0) {
+        try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_txn_uid ON bank_transactions(txn_uid)'); } catch (e) { /* ok */ }
+        return;
+    }
+    const taken = new Set(
+        db.prepare('SELECT txn_uid FROM bank_transactions WHERE txn_uid IS NOT NULL').all().map(x => x.txn_uid)
+    );
+    const upd = db.prepare('UPDATE bank_transactions SET txn_uid = ? WHERE id = ?');
+    for (const r of pending) {
+        const ref = String(r.reference_no || '').trim();
+        let uid = ref ? `ref:${ref}` : null;
+        if (uid && taken.has(uid)) uid = null; // duplicate reference already claimed
+        if (!uid) {
+            const prefix = `imp:${_rowIdentityKey(r)}#`;
+            let i = 0;
+            while (taken.has(prefix + i)) i++;
+            uid = prefix + i;
+        }
+        upd.run(uid, r.id);
+        taken.add(uid);
+    }
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_txn_uid ON bank_transactions(txn_uid)');
+}
 
 function ensureBankTable(db) {
     db.exec(`
@@ -63,6 +132,39 @@ function ensureBankTable(db) {
     // customer receipt / supplier payment). A deposit of cash sales must never
     // be treated as a sale, income, receivable or customer payment again.
     try { db.exec("ALTER TABLE bank_transactions ADD COLUMN accounting_class TEXT DEFAULT ''"); } catch (e) { /* ok */ }
+    // Stable idempotency key (Migration 27): ref:<reference> or imp:<hash>#<n>.
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN txn_uid TEXT DEFAULT NULL"); } catch (e) { /* ok */ }
+    try { _migrateTxnUid(db); } catch (e) { console.log('txn_uid migration error (non-fatal):', e.message); }
+    // Heal rows written before accounting_class existed — with class '' they
+    // were hidden from the review queue, never posted, and never surfaced.
+    try { _healAccountingClass(db); } catch (e) { console.log('accounting_class heal error (non-fatal):', e.message); }
+}
+
+/**
+ * Classify-on-read: derive and persist accounting_class for legacy rows whose
+ * stored class is empty, from their own wording (one pass; afterwards the
+ * WHERE matches nothing). Non-party rows also get the standard non-party
+ * treatment (posted-in-place, match_status auto) so they leave the review
+ * queue and become visible to the Cash Deposit view.
+ * @private
+ */
+function _healAccountingClass(db) {
+    const stale = db.prepare(
+        "SELECT * FROM bank_transactions WHERE COALESCE(accounting_class, '') = ''"
+    ).all();
+    if (stale.length === 0) return;
+    const setClass = db.prepare(
+        `UPDATE bank_transactions SET accounting_class = ?, updated_at = datetime('now','localtime') WHERE id = ?`
+    );
+    for (const r of stale) {
+        const cls = accounting.classifyBankRow(r) || 'unclassified';
+        if (cls === 'cash_to_bank_transfer' || cls === 'expense') {
+            setClass.run(cls, r.id);
+            _markNonParty(db, r.id, cls);
+        } else {
+            setClass.run(cls, r.id);
+        }
+    }
 }
 
 /**
@@ -280,32 +382,67 @@ function saveBankTransaction(db, data, userId = null) {
     const status = nonParty ? 'auto' : (match_status || (party_id ? 'auto' : 'review'));
 
     const oldRow = id ? db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id) : null;
+    const refTrim = String(reference_no || '').trim();
 
     if (id) {
+        // Keep the idempotency key stable across edits: adopt ref:<ref> when a
+        // reference is set (rejecting a clash with a different row), fall back
+        // to content identity when the reference is cleared.
+        let uid = (oldRow && oldRow.txn_uid) || null;
+        if (refTrim) {
+            const cand = `ref:${refTrim}`;
+            const clash = db.prepare('SELECT id FROM bank_transactions WHERE txn_uid = ? AND id != ?').get(cand, id);
+            if (clash) return { success: false, error: `Reference ${refTrim} already used by transaction #${clash.id}` };
+            uid = cand;
+        } else if (!uid || String(uid).startsWith('ref:')) {
+            uid = _uidForContent(db, { date, debit, credit, counterparty_name, description, bank_account, txn_type, payment_mode }, id);
+        }
         db.prepare(`
             UPDATE bank_transactions SET
                 date = ?, reference_no = ?, counterparty_name = ?, description = ?,
                 debit = ?, credit = ?, amount = ?, payment_mode = ?, bank_account = ?,
                 txn_type = ?, party_id = ?, match_status = ?, accounting_class = ?, remarks = ?,
+                txn_uid = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
         `).run(date, reference_no || '', counterparty_name || '', description || '',
               debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-              txn_type || '', party_id || null, status, cls, remarks || '', id);
+              txn_type || '', party_id || null, status, cls, remarks || '', uid, id);
         logAudit(db, 'bank_transactions', id, 'update', oldRow || null,
             getBankTransaction(db, id), userId);
         if (nonParty) return { success: true, data: getBankTransaction(db, id), accounting_class: cls };
         return { success: true, data: getBankTransaction(db, id) };
     }
 
+    // Idempotency (insert): a reference is the source transaction's identity —
+    // never insert a second row for one. Identical payload re-submitted within
+    // 10 seconds is a double-click/retry: return the existing row instead.
+    if (refTrim) {
+        const dup = db.prepare('SELECT id FROM bank_transactions WHERE txn_uid = ?').get(`ref:${refTrim}`);
+        if (dup) return { success: false, error: `Reference ${refTrim} already exists on transaction #${dup.id} — duplicate skipped`, duplicate_of: dup.id };
+    }
+    const recent = db.prepare(`
+        SELECT id FROM bank_transactions
+         WHERE date = ? AND amount = ? AND COALESCE(reference_no, '') = ?
+           AND COALESCE(counterparty_name, '') = ? AND COALESCE(description, '') = ?
+           AND COALESCE(bank_account, '') = ? AND COALESCE(txn_type, '') = ?
+           AND created_at >= datetime('now', 'localtime', '-10 seconds')
+         LIMIT 1
+    `).get(date, amount, reference_no || '', counterparty_name || '', description || '',
+           bank_account || '', txn_type || '');
+    if (recent) return { success: true, data: getBankTransaction(db, recent.id), accounting_class: cls, duplicate: true };
+    const uid = refTrim
+        ? `ref:${refTrim}`
+        : _uidForContent(db, { date, debit, credit, counterparty_name, description, bank_account, txn_type, payment_mode });
+
     const ins = db.prepare(`
         INSERT INTO bank_transactions
             (date, reference_no, counterparty_name, description, debit, credit, amount,
-             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class, remarks, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class, remarks, created_by, txn_uid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(date, reference_no || '', counterparty_name || '', description || '',
            debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-           txn_type || '', nonParty ? null : (party_id || null), status, cls, remarks || '', userId);
+           txn_type || '', nonParty ? null : (party_id || null), status, cls, remarks || '', userId, uid);
     const newId = Number(ins.lastInsertRowid);
     if (nonParty) {
         _markNonParty(db, newId, cls);
@@ -357,6 +494,42 @@ function setBankMatch(db, id, { party_id, match_status, post } = {}, userId = nu
 }
 
 /**
+ * Manually override a bank row's accounting classification (audited).
+ * Automatic classification from wording is the default; this exists for the
+ * cases where the narration is ambiguous. Switching away from a non-party
+ * class re-opens party matching so the row can post as a receipt/payment.
+ */
+function setBankAccountingClass(db, id, accounting_class, userId = null) {
+    ensureBankTable(db);
+    const allowed = ['cash_to_bank_transfer', 'expense', 'customer_receipt', 'supplier_payment', 'unclassified'];
+    if (!allowed.includes(accounting_class)) return { success: false, error: 'Unknown classification: ' + accounting_class };
+    const oldRow = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
+    if (!oldRow) return { success: false, error: 'Bank transaction not found' };
+    const wasNonParty = isNonPartyRow(oldRow);
+    const isNonParty = accounting_class === 'cash_to_bank_transfer' || accounting_class === 'expense';
+
+    db.prepare(
+        `UPDATE bank_transactions SET accounting_class = ?, updated_at = datetime('now','localtime') WHERE id = ?`
+    ).run(accounting_class, id);
+    if (isNonParty) {
+        _markNonParty(db, id, accounting_class);
+    } else if (wasNonParty) {
+        // Previously treated as internal: re-open party matching so it can be
+        // matched and posted as a customer receipt / supplier payment again.
+        db.prepare(`
+            UPDATE bank_transactions SET ledger_posted = 0,
+                match_status = CASE WHEN COALESCE(party_id, '') != '' THEN 'auto' ELSE 'review' END,
+                updated_at = datetime('now','localtime')
+            WHERE id = ?
+        `).run(id);
+        if (oldRow.party_id) postBankToLedger(db, id);
+    }
+    const after = getBankTransaction(db, id);
+    logAudit(db, 'bank_transactions', id, 'update', oldRow, after, userId);
+    return { success: true, data: after };
+}
+
+/**
  * Bank statement with running balance (optionally per account).
  */
 function getBankStatement(db, { bank_account, from_date, to_date } = {}) {
@@ -390,6 +563,15 @@ function importBankRows(db, rows) {
     const existingRefs = new Set(
         db.prepare("SELECT reference_no FROM bank_transactions WHERE reference_no != ''").all().map(r => r.reference_no)
     );
+    // Every txn_uid already claimed in the DB — a re-imported statement row
+    // matches its previous uid and is skipped instead of inserted again.
+    const takenUids = new Set(
+        db.prepare('SELECT txn_uid FROM bank_transactions WHERE txn_uid IS NOT NULL').all().map(r => r.txn_uid)
+    );
+    // Occurrence rank of each content identity *within this file*, so a file
+    // legitimately containing two identical no-reference rows still imports
+    // both, while re-importing the same file imports neither twice.
+    const fileOcc = new Map();
     const allParties = db.prepare('SELECT id, name FROM parties WHERE archived = 0').all();
     const exactNameMap = new Map();
     for (const p of allParties) exactNameMap.set(normalizeName(p.name), p.id);
@@ -397,8 +579,8 @@ function importBankRows(db, rows) {
     const insert = db.prepare(`
         INSERT INTO bank_transactions
             (date, reference_no, counterparty_name, description, debit, credit, amount,
-             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class, txn_uid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const doImport = db.transaction(() => {
@@ -407,6 +589,11 @@ function importBankRows(db, rows) {
             report.read++;
             const ref = String(r.reference_no || '').trim();
             if (ref && existingRefs.has(ref)) { report.skipped_dup++; continue; }
+            const hash = _rowIdentityKey(r);
+            const occ = fileOcc.get(hash) || 0;
+            fileOcc.set(hash, occ + 1);
+            const uid = ref ? `ref:${ref}` : `imp:${hash}#${occ}`;
+            if (takenUids.has(uid)) { report.skipped_dup++; continue; }
 
             const isCredit = (r.credit || 0) > 0;
             const debit = isCredit ? 0 : (r.debit || 0);
@@ -423,9 +610,10 @@ function importBankRows(db, rows) {
 
             const res = insert.run(r.date, ref, r.counterparty_name || '', r.description || '',
                 debit, credit, amount, r.payment_mode || 'QR/Bank', r.bank_account || '',
-                r.txn_type || '', partyId, status, cls);
+                r.txn_type || '', partyId, status, cls, uid);
             const newId = Number(res.lastInsertRowid);
             if (ref) existingRefs.add(ref);
+            takenUids.add(uid);
             report.inserted++;
 
             if (nonParty) {
@@ -460,6 +648,7 @@ module.exports = {
     saveBankTransaction,
     deleteBankTransaction,
     setBankMatch,
+    setBankAccountingClass,
     postBankToLedger,
     importBankRows,
     findPartyByName,

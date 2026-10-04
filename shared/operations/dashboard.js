@@ -6,7 +6,7 @@
  */
 
 // Exact AD → BS conversion (the whole ledger uses BS dates)
-const { adToBS } = require('../excel-import');
+const { adToBS, todayBSDate } = require('../excel-import');
 // Post-dated cheque position (read-only — a held cheque moves no money)
 const pdcOps = require('./pdc');
 
@@ -18,8 +18,7 @@ const pdcOps = require('./pdc');
 function getDashboard(db) {
     // All stored dates are BS (Bikram Sambat) — "today" must be BS too,
     // otherwise the Today panels always compare against the wrong day.
-    const today = adToBS(new Date().toISOString().split('T')[0])
-        || new Date().toISOString().split('T')[0];
+    const today = todayBSDate();
 
     const todaySales = db.prepare(
         "SELECT COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(paid_amount), 0) as paid FROM sales WHERE date = ?"

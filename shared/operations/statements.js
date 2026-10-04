@@ -7,6 +7,8 @@
  * Used by both Electron (main.js) and Web (server.js).
  */
 
+const { todayBSDate } = require('../excel-import');
+
 // ── Number formatting helpers for statement display ──
 // Kill floating-point noise (97.64999999999999 → "97.65") and trim needless
 // trailing zeros (93.00 → "93"). Amounts keep exactly two decimals.
@@ -72,7 +74,7 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
     // empty. MAX(date) is in the same calendar as the data itself.
     const from = from_date || '2000-01-01';
     const to = to_date || (db.prepare('SELECT COALESCE(MAX(date), ?) AS d FROM ledger_entries WHERE party_id = ?')
-        .get(new Date().toISOString().split('T')[0], party_id).d);
+        .get(todayBSDate(), party_id).d);
 
     // Get opening balance (balance from before the from_date)
     // Opening balance is the closing balance from all entries before the from_date
@@ -422,7 +424,9 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
  * Useful for statement selection screen.
  */
 function listPartiesWithBalance(db, { type, as_of_date } = {}) {
-    const asOf = as_of_date || new Date().toISOString().split('T')[0];
+    // BS as-of date: an AD default put the cutoff before every BS row and
+    // returned zero balances for every party.
+    const asOf = as_of_date || todayBSDate();
     let query = "SELECT * FROM parties WHERE 1=1";
     const params = [];
     if (type) {

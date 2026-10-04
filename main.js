@@ -201,6 +201,71 @@ function saveWindowState() {
 // Application menu
 // ============================================================
 
+/** Numeric-ish version compare: <0 a older, 0 equal, >0 a newer. */
+function compareVersions(a, b) {
+    const pa = String(a).split('.').map(n => parseInt(n, 10) || 0);
+    const pb = String(b).split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const d = (pa[i] || 0) - (pb[i] || 0);
+        if (d !== 0) return d;
+    }
+    return 0;
+}
+
+/**
+ * Help → Check for Updates…
+ * Compares the installed version with the latest GitHub release and offers to
+ * open the release page. Notify-only — never downloads or installs silently.
+ */
+function checkForUpdates() {
+    const https = require('https');
+    const current = app.getVersion();
+    const RELEASES_URL = 'https://api.github.com/repos/alpeet/dairy-plant-accounts/releases/latest';
+    const RELEASES_PAGE = 'https://github.com/alpeet/dairy-plant-accounts/releases';
+    const show = (opts) => (mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts));
+    const failed = (reason) => show({
+        type: 'warning',
+        title: 'Update Check Failed',
+        message: 'Could not check for updates.',
+        detail: `${reason}\n\nCheck your internet connection and try again.\nInstalled version: ${current}`
+    });
+
+    const req = https.get(RELEASES_URL, {
+        headers: { 'User-Agent': 'prarambha-accounting/' + current, Accept: 'application/vnd.github+json' },
+        timeout: 8000
+    }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => {
+            try {
+                if (res.statusCode !== 200) throw new Error(`GitHub API returned HTTP ${res.statusCode}`);
+                const json = JSON.parse(body);
+                const latest = String(json.tag_name || '').replace(/^v/i, '');
+                if (!latest) throw new Error('No release tag found');
+                if (compareVersions(latest, current) > 0) {
+                    show({
+                        type: 'info',
+                        title: 'Update Available',
+                        message: `Version ${latest} is available`,
+                        detail: `You are running version ${current}.\n\nOpen the release page to download the new installer.`,
+                        buttons: ['Open Release Page', 'Later'],
+                        defaultId: 0, cancelId: 1
+                    }).then((r) => { if (r.response === 0) shell.openExternal(json.html_url || RELEASES_PAGE); });
+                } else {
+                    show({
+                        type: 'info',
+                        title: 'You are up to date',
+                        message: 'No updates available.',
+                        detail: `Installed version: ${current}\nLatest release: ${latest}`
+                    });
+                }
+            } catch (e) { failed(e.message); }
+        });
+    });
+    req.on('timeout', () => req.destroy(new Error('Request timed out')));
+    req.on('error', (e) => failed(e.message));
+}
+
 function buildAppMenu() {
     const isMac = process.platform === 'darwin';
 
@@ -318,6 +383,10 @@ function buildAppMenu() {
                     }
                 },
                 { type: 'separator' },
+                {
+                    label: 'Check for Updates…',
+                    click: () => checkForUpdates()
+                },
                 {
                     label: 'About Prarambha Account & Stock Management',
                     click: () => {
@@ -901,6 +970,10 @@ authHandle('db:bank:statement', async (event, params = {}) => {
 
 authHandle('db:bank:match', async (event, data) => {
     return safeRun(() => ops.setBankMatch(db, data.id, data, currentUser && currentUser.id));
+});
+
+authHandle('db:bank:class', async (event, data) => {
+    return safeRun(() => ops.setBankAccountingClass(db, data.id, data.accounting_class, currentUser && currentUser.id));
 });
 
 authHandle('db:bank:post', async (event, id) => {

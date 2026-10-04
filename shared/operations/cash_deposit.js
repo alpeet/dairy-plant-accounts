@@ -8,17 +8,23 @@
  */
 
 const { logAudit } = require('./audit');
+const accounting = require('./accounting');
+const { todayBSDate } = require('../excel-import');
 
 /**
  * Generate a unique deposit number for a given date.
  */
 function generateDepositNo(db, date) {
-    const d = date || new Date().toISOString().split('T')[0];
+    const d = date || todayBSDate();
     const prefix = 'DEP';
-    const count = db.prepare(
-        "SELECT COUNT(*) as c FROM cash_deposits WHERE date = ?"
+    // Highest existing sequence for the day, NOT COUNT(*) — COUNT breaks and
+    // reissues an already-used number after any deletion (two deposits then
+    // share a deposit_no). Position 14 = after "DEP-YYYYMMDD-".
+    const row = db.prepare(
+        `SELECT COALESCE(MAX(CAST(SUBSTR(deposit_no, 14) AS INTEGER)), 0) AS m
+           FROM cash_deposits WHERE date = ? AND deposit_no LIKE 'DEP-%'`
     ).get(d);
-    const seq = (count.c || 0) + 1;
+    const seq = (row.m || 0) + 1;
     return `${prefix}-${d.replace(/-/g, '')}-${String(seq).padStart(3, '0')}`;
 }
 
@@ -48,7 +54,7 @@ function getCashDeposit(db, id) {
 function saveCashDeposit(db, data, userId = null) {
     const oldRow = data.id ? db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(data.id) : null;
     const trx = db.transaction(() => {
-        const date = data.date || new Date().toISOString().split('T')[0];
+        const date = data.date || todayBSDate();
 
         if (data.id) {
             // Update existing
@@ -74,7 +80,18 @@ function saveCashDeposit(db, data, userId = null) {
             );
             return { id: data.id, action: 'updated' };
         } else {
-            // Create new
+            // Double-submit / retry guard: the same deposit payload submitted
+            // within 10 seconds returns the row already created — it never
+            // inserts a second deposit for the same money.
+            const recent = db.prepare(`
+                SELECT id, deposit_no FROM cash_deposits
+                 WHERE date = ? AND amount = ?
+                   AND COALESCE(bank_name, '') = ? AND COALESCE(account_no, '') = ?
+                   AND COALESCE(reference_no, '') = ?
+                   AND created_at >= datetime('now', 'localtime', '-10 seconds')
+                 LIMIT 1
+            `).get(date, data.amount || 0, data.bank_name || '', data.account_no || '', data.reference_no || '');
+            if (recent) return { id: recent.id, action: 'duplicate_skipped', deposit_no: recent.deposit_no };
             const deposit_no = generateDepositNo(db, date);
             const result = db.prepare(`
                 INSERT INTO cash_deposits (date, deposit_no, bank_name, branch, account_no, amount,
@@ -119,7 +136,9 @@ function deleteCashDeposit(db, id, userId = null) {
  */
 function getCashDepositSummary(db, { from_date, to_date } = {}) {
     const from = from_date || '2000-01-01';
-    const to = to_date || new Date().toISOString().split('T')[0];
+    // Open upper bound when not supplied — a UTC AD "today" fallback excluded
+    // every BS row and made an unbounded summary come back empty.
+    const to = to_date || '2999-12-31';
 
     const total = db.prepare(`
         SELECT COALESCE(SUM(amount), 0) as total_deposited,
@@ -142,11 +161,47 @@ function getCashDepositSummary(db, { from_date, to_date } = {}) {
         GROUP BY deposit_mode ORDER BY total DESC
     `).all(from, to);
 
+    // ── Bank-statement deposits with no register row (surfaced once) ──
+    // Classification + mirror-dedup come from getCashBankPosition — the single
+    // authoritative place that decides what counts as a cash-to-bank transfer.
+    const position = accounting.getCashBankPosition(db, { from_date: from, to_date: to });
+    const bankRows = position.unmatched_transfer_rows || [];
+    const round2 = accounting.round2;
+
+    // ── Expected vs actual cash (full history — actual = latest count) ──
+    // Expected Closing = Opening + Cash Receipts − Cash Payments − Cash Deposits
+    const allTime = accounting.getCashBankPosition(db);
+    const lastCount = db.prepare(
+        `SELECT date, total_cash, expected_cash, difference FROM denomination_counts
+          ORDER BY date DESC, id DESC LIMIT 1`
+    ).get() || null;
+    const expectedClosing = allTime.cash.balance;
+    const actualCash = lastCount ? (Number(lastCount.total_cash) || 0) : null;
+
     return {
         total_deposited: total.total_deposited,
         total_count: total.total_count,
         by_bank: byBank,
-        by_mode: byMode
+        by_mode: byMode,
+        bank_transfers: {
+            rows: bankRows,
+            count: bankRows.length,
+            total_in: round2(bankRows.reduce((s, r) => s + (Number(r.credit) || 0), 0)),
+            total_out: round2(bankRows.reduce((s, r) => s + (Number(r.debit) || 0), 0))
+        },
+        reconciliation: {
+            opening_cash: 0,
+            cash_sales: allTime.cash.cash_sales,
+            cash_receipts: allTime.cash.cash_receipts,
+            cash_payments: allTime.cash.cash_payments,
+            cash_expenses: allTime.cash.cash_expenses,
+            petty_cash: allTime.cash.petty_cash,
+            cash_deposited: allTime.cash.deposited_to_bank,
+            expected_closing: expectedClosing,
+            actual_count_date: lastCount ? lastCount.date : null,
+            actual_cash: actualCash,
+            difference: (actualCash === null) ? null : round2(expectedClosing - actualCash)
+        }
     };
 }
 

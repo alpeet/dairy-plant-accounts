@@ -285,11 +285,10 @@ function deleteMilkCollection(db, id, changedBy = null) {
  */
 
 // Exact AD → BS conversion (stored dates are BS dates)
-const { adToBS } = require('../excel-import');
+const { adToBS, todayBSDate } = require('../excel-import');
 
 function getMilkSummary(db, { date } = {}) {
-    const adToday = new Date().toISOString().split('T')[0];
-    const today = date || adToBS(adToday) || adToday;
+    const today = date || todayBSDate();
     const bsMonthPrefix = today.slice(0, 7);
     // "Last 7 days" boundary: convert the AD date 7 days ago to BS (exact)
     const weekAgoAD = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];

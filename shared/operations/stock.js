@@ -6,6 +6,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { todayBSDate } = require('../excel-import');
 
 /**
  * Get current stock levels for all products with optional search.
@@ -50,7 +51,7 @@ function getStockMovements(db, { product_id, from_date, to_date } = {}) {
  */
 function adjustStock(db, { product_id, date, quantity, rate, notes }, userId) {
     const qty = parseFloat(quantity) || 0;
-    const movementDate = date || new Date().toISOString().split('T')[0];
+    const movementDate = date || todayBSDate();
     const trx = db.transaction(() => {
         // Current balance must be computed EXACTLY like getCurrentStock replays it
         // (SUM of movements, falling back to opening_stock when there are none).

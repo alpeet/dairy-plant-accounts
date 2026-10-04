@@ -559,11 +559,6 @@ function runMigrations(db) {
         } catch (e) {
             hasBusinessData = false;
         }
-        let freshStartMarker = null;
-        try {
-            freshStartMarker = db.prepare("SELECT value FROM settings WHERE key = 'fresh_start_completed_at'").get() || null;
-        } catch (e) { /* settings table missing */ }
-
         if (!hasBusinessData) {
             console.log('Migration 21 (milk/production/employee backfill) skipped — empty book (fresh start).');
         } else {
@@ -572,9 +567,6 @@ function runMigrations(db) {
             db.transaction(() => {
                 const milk = excelImport.backfillMilkCollectionsFromPurchases(db, backfillLog);
                 const prod = excelImport.deriveProductionBatches(db, backfillLog);
-                if (!freshStartMarker) {
-                    excelImport.ensureRequiredEmployees(db);
-                }
                 if (milk.created > 0 || prod.mixBatches > 0 || prod.gapBatches > 0) {
                     excelImport.rebuildStockLedger(db, backfillLog);
                 }

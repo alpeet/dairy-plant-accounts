@@ -129,6 +129,7 @@ const productionSettings = require('./production_settings');
 const {
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
     getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
+    setBankAccountingClass,
     postBankToLedger, importBankRows, findPartyByName, normalizeName,
     bankRowClass, isNonPartyRow
 } = require('./bank');
@@ -321,6 +322,7 @@ module.exports = {
     // Bank Transactions
     ensureBankTable, listBankTransactions, getBankTransaction, getBankReviewQueue,
     getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
+    setBankAccountingClass,
     postBankToLedger, importBankRows, findPartyByName, normalizeName,
     bankRowClass, isNonPartyRow,
 

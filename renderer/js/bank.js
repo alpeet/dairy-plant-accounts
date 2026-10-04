@@ -78,7 +78,7 @@ async function renderBank() {
                     <tr>
                         <th>Date</th><th>Ref</th><th>Counterparty</th><th>Description</th><th>Type</th>
                         <th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th>
-                        <th>Party</th><th>Status</th><th class="actions">Actions</th>
+                        <th>Party</th><th>Class</th><th>Status</th><th class="actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -93,14 +93,16 @@ async function renderBank() {
                             <td class="text-right">${r.credit > 0 ? formatCurrency(r.credit) : '-'}</td>
                             <td class="text-right">${formatCurrency(r.running_balance)}</td>
                             <td>${escapeHtml(r.party_name || '')}</td>
+                            <td>${classifyBadge(r)}</td>
                             <td>${bankStatusBadge(r)}</td>
                             <td class="actions">
+                                <button class="btn btn-secondary btn-sm" onclick="showClassifyBank(${r.id})" title="Set accounting classification">🏷</button>
                                 <button class="btn btn-info btn-sm" onclick="editBank(${r.id})">✏️</button>
                                 <button class="btn btn-danger btn-sm" onclick="deleteBankEntry(${r.id})">🗑</button>
                             </td>
                         </tr>
                     `).join('')}
-                    ${rows.length === 0 ? '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No bank transactions in this range</td></tr>' : ''}
+                    ${rows.length === 0 ? '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">No bank transactions in this range</td></tr>' : ''}
                 </tbody>
             </table>
         </div>
@@ -114,6 +116,61 @@ function bankStatusBadge(r) {
     if (r.match_status === 'review') return '<span class="badge badge-warning">Review</span>';
     if (r.match_status === 'unmatched') return '<span class="badge badge-danger">Unmatched</span>';
     return '<span class="badge badge-secondary">—</span>';
+}
+
+const BANK_CLASS_LABELS = {
+    cash_to_bank_transfer: ['🏦 Transfer', 'badge-info', 'Cash → Bank transfer (internal money movement — never income)'],
+    expense: ['🧾 Expense', 'badge-warning', 'Operating expense paid from the bank'],
+    customer_receipt: ['💰 Receipt', 'badge-success', 'Money received from a customer'],
+    supplier_payment: ['📤 Payment', 'badge-danger', 'Money paid to a supplier'],
+    unclassified: ['— Auto', 'badge-secondary', 'Classification derived from wording']
+};
+
+function classifyBadge(r) {
+    const meta = BANK_CLASS_LABELS[r.accounting_class] || BANK_CLASS_LABELS.unclassified;
+    return `<span class="badge ${meta[1]}" title="${meta[2]}">${meta[0]}</span>`;
+}
+
+/** Manual classification modal (audited server-side) — for ambiguous narrations. */
+function showClassifyBank(id) {
+    const r = (window._lastBankRows || []).find(x => x.id === id);
+    const current = (r && r.accounting_class) || 'unclassified';
+    const options = [
+        ['cash_to_bank_transfer', 'Cash → Bank Transfer (internal — not income)'],
+        ['expense', 'Bank Expense (operating expense)'],
+        ['customer_receipt', 'Customer Receipt'],
+        ['supplier_payment', 'Supplier Payment'],
+        ['unclassified', 'Unclassified (derive from wording)']
+    ];
+    showModal(`
+        <div class="modal-header">
+            <h2>🏷 Classification</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:13px;color:var(--text-light)">How should this transaction be classified? The choice is recorded in the audit log and drives posting: transfers/expenses never become income or customer payments.</p>
+            <div class="form-group">
+                <label>Accounting Classification</label>
+                <select class="form-control" id="bkClass">
+                    ${options.map(([v, label]) => `<option value="${v}" ${current === v ? 'selected' : ''}>${label}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveBankClass(${id})">Save Classification</button>
+        </div>
+    `);
+}
+
+async function saveBankClass(id) {
+    const v = document.getElementById('bkClass')?.value;
+    if (!v) { closeModal(); return; }
+    const res = await window.api.setBankAccountingClass({ id, accounting_class: v });
+    if (!res.success) { showToast(res.error, 'error'); return; }
+    closeModal();
+    showToast('✅ Classification updated (audited)', 'success');
+    renderBank();
 }
 
 async function refreshBank() {
@@ -135,7 +192,9 @@ async function getPartyOptions(selectedId) {
 }
 
 async function showAddBank() {
-    const today = new Date().toISOString().slice(0, 10);
+    // BS today (Nepali calendar) — an ISO/UTC default wrote AD dates into a
+    // BS-dated system, making new rows invisible to every date filter.
+    const todayStr = today();
     showModal(`
         <div class="modal-header">
             <h2>🏦 New Bank Transaction</h2>
@@ -143,7 +202,7 @@ async function showAddBank() {
         </div>
         <div class="modal-body">
             <form id="bankForm">
-                <div class="form-group"><label>Date</label><input type="date" class="form-control" id="bkDate" value="${today}"></div>
+                <div class="form-group"><label>Date</label><input type="date" class="form-control" id="bkDate" value="${todayStr}"></div>
                 <div class="form-row">
                     <div class="form-group"><label>Reference No</label><input type="text" class="form-control" id="bkRef" placeholder="QR-001 / CHQ-..."></div>
                     <div class="form-group"><label>Bank Account</label><input type="text" class="form-control" id="bkAccount" value="Sushil QR"></div>
@@ -216,7 +275,9 @@ async function editBank(id) {
     `);
 }
 
+let _bankSaving = false;
 async function saveBank(id) {
+    if (_bankSaving) return; // double-submit guard: second click is a no-op
     const data = {
         id: id || undefined,
         date: document.getElementById('bkDate')?.value,
@@ -234,11 +295,16 @@ async function saveBank(id) {
     };
     if (!data.date) { showToast('Date is required', 'warning'); return; }
     if (data.debit <= 0 && data.credit <= 0) { showToast('Enter a debit or credit amount', 'warning'); return; }
-    const result = await window.api.saveBankTransaction(data);
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    showToast('✅ Bank transaction saved');
-    closeModal();
-    renderBank();
+    _bankSaving = true;
+    try {
+        const result = await window.api.saveBankTransaction(data);
+        if (!result.success) { showToast(result.error, 'error'); return; }
+        showToast('✅ Bank transaction saved');
+        closeModal();
+        renderBank();
+    } finally {
+        _bankSaving = false;
+    }
 }
 
 async function deleteBankEntry(id) {
@@ -356,3 +422,5 @@ window.showBankReviewQueue = showBankReviewQueue;
 window.resolveBankReview = resolveBankReview;
 window.printBank = printBank;
 window.exportBankPDF = exportBankPDF;
+window.showClassifyBank = showClassifyBank;
+window.saveBankClass = saveBankClass;

@@ -1363,6 +1363,10 @@ app.post('/api/bank/match', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.setBankMatch(db, req.body.id, req.body, req.user?.id)));
 });
 
+app.post('/api/bank/classify', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.setBankAccountingClass(db, req.body.id, req.body.accounting_class, req.user?.id)));
+});
+
 app.post('/api/bank/post', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.postBankToLedger(db, req.body.id)));
 });

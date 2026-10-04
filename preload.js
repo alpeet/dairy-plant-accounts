@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('api', {
     getBankReviewQueue: () => ipcRenderer.invoke('db:bank:review-queue'),
     getBankStatement: (opts) => ipcRenderer.invoke('db:bank:statement', opts),
     matchBankTransaction: (data) => ipcRenderer.invoke('db:bank:match', data),
+    setBankAccountingClass: (data) => ipcRenderer.invoke('db:bank:class', data),
     postBankToLedger: (id) => ipcRenderer.invoke('db:bank:post', id),
 
     // Salary

@@ -6,7 +6,7 @@
  */
 
 const accounting = require('./accounting');
-const { adToBS } = require('../excel-import');
+const { adToBS, todayBSDate } = require('../excel-import');
 
 /**
  * Attach the actual-receipts settlement (received / outstanding / status) to
@@ -84,7 +84,7 @@ function getPurchasesReport(db, { from_date, to_date, party_id, payment_mode, st
  * Daybook — all transactions for a given date range with running balance.
  */
 function getDaybook(db, { from_date, to_date } = {}) {
-    const from = from_date || new Date().toISOString().split('T')[0];
+    const from = from_date || todayBSDate();
     const to = to_date || from;
 
     // Get all sales in range
@@ -564,7 +564,7 @@ function getFarmerStatement(db, { party_id, from_date, to_date } = {}) {
     if (!farmer) throw new Error('Farmer not found');
 
     const from = from_date || '2000-01-01';
-    const to = to_date || new Date().toISOString().split('T')[0];
+    const to = to_date || todayBSDate();
 
     // Get opening balance (balance from before from_date)
     const openingEntry = db.prepare(`

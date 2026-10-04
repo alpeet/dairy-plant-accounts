@@ -5,6 +5,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { todayBSDate } = require('../excel-import');
 
 function listRoutes(db, { search } = {}) {
     let query = "SELECT * FROM routes WHERE 1=1";
@@ -49,7 +50,7 @@ function deleteRoute(db, id, changedBy = null) {
 
 function getRouteSummary(db, { from_date, to_date } = {}) {
     const from = from_date || '2000-01-01';
-    const to = to_date || new Date().toISOString().split('T')[0];
+    const to = to_date || todayBSDate();
 
     const routes = db.prepare(`
         SELECT r.*,

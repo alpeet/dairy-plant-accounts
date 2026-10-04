@@ -6,6 +6,7 @@
  */
 
 const accounting = require('./accounting');
+const { todayBSDate } = require('../excel-import');
 const round2 = accounting.round2;
 
 /**
@@ -41,8 +42,11 @@ const round2 = accounting.round2;
  * @returns {object} { income, expenses, gross_profit, net_profit, ... }
  */
 function getProfitLoss(db, { from_date, to_date } = {}) {
-    const from = from_date || new Date().toISOString().split('T')[0];
-    const to = to_date || from;
+    // Default = current BS fiscal year to date (BS year starts in Baisakh).
+    // A UTC AD "today" fallback excluded every BS row and returned an empty P&L.
+    const todayBS = todayBSDate();
+    const from = from_date || `${String(todayBS).slice(0, 4)}-01-01`;
+    const to = to_date || todayBS;
 
     // ── Income Sources ──
 
@@ -220,8 +224,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
  * @returns {object} { from_date, to_date, months: [...], totals: {...} }
  */
 function getProfitLossByMonth(db, { from_date, to_date } = {}) {
-    const { adToBS } = require('../excel-import');
-    const todayBS = adToBS(new Date().toISOString().split('T')[0]) || new Date().toISOString().split('T')[0];
+    const todayBS = todayBSDate();
     const from = from_date || `${String(todayBS).slice(0, 4)}-01-01`;
     const to = to_date || todayBS;
 
@@ -475,7 +478,7 @@ function getStockStatement(db, { category, search } = {}) {
  * adding them again would count the same money twice.
  */
 function getEnhancedDaybook(db, { from_date, to_date } = {}) {
-    const from = from_date || new Date().toISOString().split('T')[0];
+    const from = from_date || todayBSDate();
     const to = to_date || from;
 
     // Get base daybook from existing reports module

@@ -187,6 +187,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getBankReviewQueue: () => apiPost('/bank/review-queue'),
         getBankStatement: (opts) => apiPost('/bank/statement', opts || {}),
         matchBankTransaction: (data) => apiPost('/bank/match', data),
+        setBankAccountingClass: (data) => apiPost('/bank/classify', data),
         postBankToLedger: (id) => apiPost('/bank/post', { id }),
 
         // Salary

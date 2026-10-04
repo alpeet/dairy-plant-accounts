@@ -236,7 +236,9 @@ function updateSalaryNet() {
     if (el) el.value = '₹ ' + net.toLocaleString('en-IN', { minimumFractionDigits: 2 });
 }
 
+let _salarySaving = false;
 async function saveSalaryEntry(id) {
+    if (_salarySaving) return; // double-submit guard: second click is a no-op
     const basic = parseFloat(document.getElementById('salBasic')?.value || 0);
     const allowance = parseFloat(document.getElementById('salAllowance')?.value || 0);
     const advance = parseFloat(document.getElementById('salAdvance')?.value || 0);
@@ -258,15 +260,20 @@ async function saveSalaryEntry(id) {
 
     if (!data.employee_name || !data.month) { showToast('Employee name and month are required', 'error'); return; }
 
-    const result = await window.api.saveSalaryRecord(data);
-    if (result.success) {
-        closeModal();
-        showToast(id ? 'Salary updated' : 'Salary record saved', 'success');
-        // Reload the month the record was saved to, so the new entry is immediately visible.
-        renderSalary(data.month);
-    } else {
-        showToast(result.error || 'Failed to save salary record', 'error');
-        // Keep the modal open so the entered data is not lost.
+    _salarySaving = true;
+    try {
+        const result = await window.api.saveSalaryRecord(data);
+        if (result.success) {
+            closeModal();
+            showToast(id ? 'Salary updated' : 'Salary record saved', 'success');
+            // Reload the month the record was saved to, so the new entry is immediately visible.
+            renderSalary(data.month);
+        } else {
+            showToast(result.error || 'Failed to save salary record', 'error');
+            // Keep the modal open so the entered data is not lost.
+        }
+    } finally {
+        _salarySaving = false;
     }
 }
 

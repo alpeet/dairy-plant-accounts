@@ -5,6 +5,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { todayBSDate } = require('../excel-import');
 
 /** Currency precision — every reported figure adds up at 2 decimals. */
 function round2(v) {
@@ -109,7 +110,7 @@ function deleteRateChart(db, id, changedBy = null) {
  * @param {object} opts      { party_id, milk_type }
  */
 function getEffectiveRate(db, date, opts = {}) {
-    const effectiveDate = date || new Date().toISOString().split('T')[0];
+    const effectiveDate = date || todayBSDate();
     const partyId = opts.party_id || null;
     const milkType = opts.milk_type ? String(opts.milk_type).trim().toLowerCase() : '';
 

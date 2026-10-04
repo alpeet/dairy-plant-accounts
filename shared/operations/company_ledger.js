@@ -38,13 +38,12 @@
 
 const accounting = require('./accounting');
 const { getProfitLoss } = require('./financial_reports');
-const { adToBS, bsToAD } = require('../excel-import');
+const { adToBS, bsToAD, todayBSDate } = require('../excel-import');
 
 const round2 = accounting.round2;
 
 function todayBS() {
-    const ad = new Date().toISOString().split('T')[0];
-    try { return adToBS(ad) || ad; } catch (e) { return ad; }
+    return todayBSDate();
 }
 
 /** Sales line → which revenue bucket this invoice belongs to (display only). */

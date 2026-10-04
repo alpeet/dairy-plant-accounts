@@ -16,8 +16,55 @@ async function renderCashDeposit() {
     ]);
 
     const deposits = listResult.success ? listResult.data : [];
-    const summary = summaryResult.success ? summaryResult.data : { total_deposited: 0, total_count: 0, by_bank: [], by_mode: [] };
+    const summary = summaryResult.success ? summaryResult.data
+        : { total_deposited: 0, total_count: 0, by_bank: [], by_mode: [], bank_transfers: { rows: [], count: 0, total_in: 0, total_out: 0 }, reconciliation: null };
+    const recon = summary.reconciliation || null;
+    const bt = summary.bank_transfers || { rows: [], count: 0, total_in: 0, total_out: 0 };
+    window._lastBankTransferRows = bt.rows;
+    const depositPrelude = `
+        <!-- Cash reconciliation — Expected vs Actual (authoritative accounting ledger) -->
+        ${recon ? `
+        <div class="table-container" style="margin-bottom:16px">
+            <h3 style="margin:0 0 4px">💵 Cash Reconciliation</h3>
+            <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">Expected = Opening + Cash Receipts − Cash Payments − Cash Deposited · Actual = latest denomination count${recon.actual_count_date ? ` (${formatDate(recon.actual_count_date)})` : ''}</div>
+            <div class="summary-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+                <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Cash Sales Received</span><span class="value" style="font-size:18px">${formatCurrency(recon.cash_sales)}</span></div>
+                <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Cash Receipts</span><span class="value" style="font-size:18px">${formatCurrency(recon.cash_receipts)}</span></div>
+                <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">Payments & Cash Expenses</span><span class="value" style="font-size:18px">${formatCurrency((recon.cash_payments || 0) + (recon.cash_expenses || 0) + (recon.petty_cash || 0))}</span></div>
+                <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">Cash Deposited to Bank</span><span class="value" style="font-size:18px">${formatCurrency(recon.cash_deposited)}</span></div>
+            </div>
+            <table>
+                <tbody>
+                    <tr><td>Opening Cash</td><td class="text-right">${formatCurrency(recon.opening_cash || 0)}</td></tr>
+                    <tr><td><strong>Expected Closing Cash</strong></td><td class="text-right"><strong>${formatCurrency(recon.expected_closing)}</strong></td></tr>
+                    <tr><td>Actual Cash Balance${recon.actual_count_date ? ` (counted ${formatDate(recon.actual_count_date)})` : ''}</td><td class="text-right">${recon.actual_cash === null || recon.actual_cash === undefined ? '<span style="color:var(--text-light)">No count recorded</span>' : formatCurrency(recon.actual_cash)}</td></tr>
+                    <tr><td><strong>Difference</strong></td><td class="text-right"><strong>${recon.difference === null || recon.difference === undefined ? '—' : (Math.abs(recon.difference) < 0.01 ? '<span style="color:var(--success)">✅ Balanced</span>' : `<span style="color:var(--danger)">⚠ ${formatCurrency(recon.difference)}</span>`)}</strong></td></tr>
+                </tbody>
+            </table>
+        </div>` : ''}
 
+        <!-- Bank-statement deposits with no register record (counted once, never as income) -->
+        ${bt.rows.length ? `
+        <div class="table-container" style="margin-bottom:16px">
+            <h3 style="margin:0 0 4px">🏦 Bank Statement Deposits — not in register (${bt.count})</h3>
+            <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">Classified as cash→bank transfers from the bank statement and already counted exactly once as an internal transfer — never as new sales or income. Copy one to the register if you also track it there.</div>
+            <table>
+                <thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Bank Account</th><th class="text-right">Amount</th><th class="actions">Actions</th></tr></thead>
+                <tbody>
+                    ${bt.rows.map((r, i) => `
+                        <tr>
+                            <td>${formatDate(r.date)}</td>
+                            <td style="font-size:11px">${escapeHtml(r.reference_no || '-')}</td>
+                            <td>${escapeHtml(r.description || r.counterparty_name || '-')}</td>
+                            <td style="font-size:11px">${escapeHtml(r.bank_account || '-')}</td>
+                            <td class="text-right" style="font-weight:600">${formatCurrency(Number(r.credit) || Number(r.debit) || 0)}</td>
+                            <td class="actions"><button class="btn btn-primary btn-sm" onclick="copyBankDepositToRegister(${i})" title="Copy this statement deposit into the Cash Deposit register">➕ To Register</button></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>` : ''}
+`;
     container.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
             <h2 style="margin:0">🏦 Cash Deposits</h2>
@@ -58,6 +105,7 @@ async function renderCashDeposit() {
                 <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('this_month');document.getElementById('cdFrom').value=p.from;document.getElementById('cdTo').value=p.to;refreshCashDeposits()">This Month</button>
             </div>
         </div>
+        ${depositPrelude}
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Total Deposits</span><span class="value" style="font-size:20px">${summary.total_count}</span></div>
             <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">Total Amount</span><span class="value" style="font-size:20px">${formatCurrency(summary.total_deposited)}</span></div>
@@ -130,9 +178,7 @@ async function refreshCashDeposits() {
     } else {
         showToast(listResult.error, 'error');
     }
-}
-
-async function showAddCashDeposit(existingData) {
+}async function showAddCashDeposit(existingData) {
     const todayStr = today();
     const d = existingData || { 
         date: todayStr, bank_name: '', branch: '', account_no: '', 
@@ -142,7 +188,7 @@ async function showAddCashDeposit(existingData) {
 
     showModal(`
         <div class="modal-header">
-            <h2>${existingData ? 'Edit' : 'New'} Cash Deposit</h2>
+            <h2>${existingData && existingData.id ? 'Edit' : 'New'} Cash Deposit</h2>
             <button class="close-btn" onclick="closeModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -189,7 +235,7 @@ async function showAddCashDeposit(existingData) {
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveCashDeposit(${existingData ? existingData.id : 'null'})">Save Deposit</button>
+            <button class="btn btn-primary" onclick="saveCashDeposit(${existingData && existingData.id ? existingData.id : 'null'})">Save Deposit</button>
         </div>
     `);
 
@@ -203,7 +249,26 @@ async function showAddCashDeposit(existingData) {
     }
 }
 
+let _depositSaving = false;
+/**
+ * Prefill a new register record from a bank-statement deposit row.
+ */
+function copyBankDepositToRegister(idx) {
+    const r = (window._lastBankTransferRows || [])[idx];
+    if (!r) return;
+    showAddCashDeposit({
+        date: r.date || today(),
+        bank_name: '', branch: '', account_no: r.bank_account || '',
+        amount: Number(r.credit) || Number(r.debit) || 0,
+        cash_source: 'mixed', deposit_mode: 'cash',
+        reference_no: r.reference_no || '',
+        remarks: `From bank statement: ${r.description || r.counterparty_name || ''}`.trim(),
+        deposited_by: ''
+    });
+}
+
 async function saveCashDeposit(id) {
+    if (_depositSaving) return; // double-submit guard: second click is a no-op
     const bankSelect = document.getElementById('cdBankName');
     let bankName = bankSelect?.value || '';
     if (bankName === 'Other') {
@@ -228,13 +293,18 @@ async function saveCashDeposit(id) {
     if (!data.bank_name) { showToast('Bank name is required', 'error'); return; }
     if (data.amount <= 0) { showToast('Amount must be greater than 0', 'error'); return; }
 
-    const result = await window.api.saveCashDeposit(data);
-    if (result.success) {
-        closeModal();
-        showToast(id ? 'Deposit updated' : 'Deposit saved', 'success');
-        renderCashDeposit();
-    } else {
-        showToast(result.error, 'error');
+    _depositSaving = true;
+    try {
+        const result = await window.api.saveCashDeposit(data);
+        if (result.success) {
+            closeModal();
+            showToast(id ? 'Deposit updated' : 'Deposit saved', 'success');
+            renderCashDeposit();
+        } else {
+            showToast(result.error, 'error');
+        }
+    } finally {
+        _depositSaving = false;
     }
 }
 

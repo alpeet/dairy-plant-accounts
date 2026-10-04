@@ -8,6 +8,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { todayBSDate } = require('../excel-import');
 
 /**
  * Get daily cash collection report for a given date range.
@@ -153,7 +154,7 @@ function deleteCashCollection(db, id, userId = null) {
 }
 
 function getDailyCashCollection(db, { from_date, to_date } = {}) {
-    const from = from_date || new Date().toISOString().split('T')[0];
+    const from = from_date || todayBSDate();
     const to = to_date || from;
 
     // Total sales for the day — this is the EXPECTED money for the day

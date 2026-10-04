@@ -2399,23 +2399,147 @@ function ensureEmployeesTable(db) {
     )`);
 }
 
-const REQUIRED_EMPLOYEES = [
-    ['EMP-001', 'Dipak Nepal', 'Plant Operator'],
-    ['EMP-002', 'Sawaswati Rayamajhi', 'Staff'],
-    ['EMP-003', 'Nar Bahadur Rana', 'Driver'],
-];
-
-function ensureRequiredEmployees(db) {
+// ---------------------------------------------------------------
+// Salary Advance sheet → salary_records.
+//
+// The workbook ships this sheet in TWO layouts, so the reader DETECTS the
+// header instead of assuming one (hardcoding column positions silently
+// shifted every field when the sheet was re-exported by the app, which
+// collapsed all rows into a single voucher "duplicate" and dropped every
+// employee except one — the Phase-9 salary bug):
+//
+//  A) generic export layout (current sheet):
+//     ID | Employee Name | Position | Month | Basic | Allowance | Advance |
+//     Deduction | Net | Payment Date | Mode | Remarks
+//     → upsert keyed on month + employee name; employees resolved/created
+//       from the rows themselves (no hardcoded employee names anywhere).
+//
+//  B) legacy statement layout (old workbooks):
+//     Date | AD | Voucher | EmpID | Name | Dept | Description | Advance |
+//     SALARY PAYMENT | Balance | Mode | Approved | Remarks
+//     → kept for old files; dedupes on a NON-EMPTY voucher only.
+// ---------------------------------------------------------------
+function importSalaryAdvanceSheet(db, data, { log }) {
     ensureEmployeesTable(db);
-    const ins = db.prepare(`INSERT INTO employees (code, name, position, notes) VALUES (?, ?, ?, 'Seeded from Excel employee records')`);
-    for (const [code, name, position] of REQUIRED_EMPLOYEES) {
-        const hit = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get(name);
-        if (!hit) ins.run(code, name, position);
-    }
+    const hr = (data || []).findIndex((row, idx) => {
+        if (idx > 12) return false;
+        const cells = (row || []).map(c => toStr(c).trim().toLowerCase());
+        return cells.some(c => c.startsWith('month')) &&
+               cells.some(c => c.includes('employee') || c === 'name');
+    });
+    if (hr >= 0) return importSalaryGenericSheet(db, data, hr, { log });
+    return importSalaryLegacySheet(db, data, { log });
 }
 
-function importSalaryAdvanceSheet(db, data, { log }) {
-    ensureRequiredEmployees(db);
+function importSalaryGenericSheet(db, data, hr, { log }) {
+    const header = (data[hr] || []).map(c => toStr(c).trim().toLowerCase());
+    const col = (names) => {
+        for (const n of names) {
+            let i = header.indexOf(n);
+            if (i >= 0) return i;
+            i = header.findIndex(c => c.startsWith(n));   // "month *" → "month"
+            if (i >= 0) return i;
+        }
+        return -1;
+    };
+    const cId = col(['id']);
+    const cName = col(['employee name', 'employee', 'name']);
+    const cPos = col(['position', 'designation']);
+    const cMonth = col(['month']);
+    const cBasic = col(['basic salary', 'basic']);
+    const cAllow = col(['allowance']);
+    const cAdv = col(['advance']);
+    const cDed = col(['deduction']);
+    const cNet = col(['net salary', 'net']);
+    const cPayDate = col(['payment date', 'payment_date']);
+    const cMode = col(['payment mode', 'mode']);
+    const cRemarks = col(['remarks', 'notes']);
+    const res = { added: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0 };
+    if (cName < 0 || cMonth < 0) {
+        log('  ⚠️  Salary Advance sheet: no header row found');
+        return { ...res, note: 'No header row found' };
+    }
+
+    const findEmp = (rawName, empCode, dept) => {
+        const name = String(rawName || '').replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+        const hit = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get(name);
+        if (hit) return hit.id;
+        const code = String(empCode || '').trim() || ('EMP-' + String(Date.now()).slice(-6));
+        const ins = db.prepare(`INSERT INTO employees (code, name, position, notes) VALUES (?, ?, ?, 'Imported from Salary Advance sheet')`);
+        ins.run(code, name, String(dept || '').trim());
+        return Number(db.prepare('SELECT last_insert_rowid() AS id').get().id);
+    };
+    const findExisting = db.prepare(
+        'SELECT * FROM salary_records WHERE month=? AND LOWER(employee_name)=LOWER(?) ORDER BY id DESC LIMIT 1'
+    );
+    const insert = db.prepare(`INSERT INTO salary_records
+        (employee_id, employee_name, position, month, basic_salary, allowance, advance, deduction, net_salary, payment_date, payment_mode, remarks, voucher_no)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const update = db.prepare(`UPDATE salary_records SET
+        employee_id=?, position=?, basic_salary=?, allowance=?, advance=?, deduction=?, net_salary=?,
+        payment_date=?, payment_mode=?, remarks=?, updated_at=datetime('now','localtime')
+        WHERE id=?`);
+    const seen = new Set();
+
+    for (let i = hr + 1; i < data.length; i++) {
+        const row = data[i];
+        if (!row) continue;
+        const name = toStr(row[cName]);
+        const month = toStr(row[cMonth]);
+        if (!name || !month) { if (row.some(x => toStr(x) !== '')) res.skipped++; continue; }
+        const key = month + '|' + normalize(name);
+        if (seen.has(key)) { res.skipped++; continue; }   // duplicate row inside the sheet
+        seen.add(key);
+        try {
+            const basic = toNum(row[cBasic]);
+            const allowance = toNum(row[cAllow]);
+            const advance = toNum(row[cAdv]);
+            const deduction = toNum(row[cDed]);
+            const net = toNum(row[cNet]) || (basic + allowance - advance - deduction);
+            const payDate = cPayDate >= 0 ? toBSDate(row[cPayDate]) : null;
+            const mode = mapPaymentMode(row[cMode]) || 'cash';
+            const pos = cPos >= 0 ? toStr(row[cPos]) : '';
+            const employeeId = findEmp(name, cId >= 0 ? row[cId] : '', pos);
+            const cand = {
+                employee_id: employeeId,
+                employee_name: name,
+                position: pos,
+                month,
+                basic_salary: basic,
+                allowance,
+                advance,
+                deduction,
+                net_salary: net,
+                payment_date: payDate,
+                payment_mode: mode,
+                remarks: cRemarks >= 0 ? toStr(row[cRemarks]) : ''
+            };
+            const existing = findExisting.get(month, name);
+            if (!existing) {
+                insert.run(cand.employee_id, cand.employee_name, cand.position, cand.month,
+                    cand.basic_salary, cand.allowance, cand.advance, cand.deduction, cand.net_salary,
+                    cand.payment_date, cand.payment_mode, cand.remarks, '');
+                res.added++;
+            } else if (rowDiffers(existing, cand)) {
+                update.run(cand.employee_id, cand.position, cand.basic_salary, cand.allowance,
+                    cand.advance, cand.deduction, cand.net_salary, cand.payment_date,
+                    cand.payment_mode, cand.remarks, existing.id);
+                res.updated++;
+            } else {
+                res.unchanged++;
+            }
+        } catch (e) {
+            res.failed++;
+            log(`  ⚠️ Salary row ${i + 1} failed: ${e.message}`);
+        }
+    }
+    log(`  💰 Salary: ${res.added} added, ${res.updated} updated, ${res.unchanged} unchanged`
+        + (res.skipped ? `, ${res.skipped} skipped` : '') + (res.failed ? `, ${res.failed} FAILED` : ''));
+    return res;
+}
+
+function importSalaryLegacySheet(db, data, { log }) {
+    ensureEmployeesTable(db);
     // Cols: 0 Date, 1 AD, 2 Voucher, 3 EmpID, 4 Name, 5 Dept, 6 Description,
     //       7 Advance, 8 SALARY PAYMENT, 9 Balance, 10 Mode, 11 Approved, 12 Remarks
     const findEmp = (rawName, empId, dept) => {
@@ -2445,7 +2569,9 @@ function importSalaryAdvanceSheet(db, data, { log }) {
         const salaryPaid = toNum(r[8]);
         if (!date || !voucher) { if (r.some(x => toStr(x) !== '')) report.undated++; continue; }
         if (salaryPaid <= 0) continue;      // advance row → already imported via PETTY CASH
-        if (existing.has(voucher)) { report.skipped_dup++; continue; }
+        // Dedupe ONLY on a real voucher. An empty voucher must never make every
+        // subsequent row look like a duplicate of the previous one.
+        if (voucher && existing.has(voucher)) { report.skipped_dup++; continue; }
 
         const empName = toStr(r[4]);
         const empId = findEmp(empName, r[3], r[5]);
@@ -2455,7 +2581,7 @@ function importSalaryAdvanceSheet(db, data, { log }) {
             monthOf(date), salaryPaid, salaryPaid, date,
             (toStr(r[10]) || 'CASH').toLowerCase(), toStr(r[12]) || voucher, voucher
         );
-        existing.add(voucher);
+        if (voucher) existing.add(voucher);
         report.imported++;
     }
     log(`  💰 Salary: ${report.imported} salary payment(s) imported as persistent salary_records` +
@@ -2736,6 +2862,19 @@ function importExcelFile({ excelPath, dbPath, mode, log }) {
     }
 }
 
+/**
+ * Today's business date in BS, computed from LOCAL time.
+ * The single default for report date bounds and new-record dates:
+ * new Date().toISOString() is UTC (wrong calendar day before 05:45 Nepal
+ * time) and AD (never matches BS-stored rows) — a bound falling back to it
+ * excluded every row and returned empty results.
+ */
+function todayBSDate() {
+    const n = new Date();
+    const ad = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+    try { return adToBS(ad) || ad; } catch (e) { return ad; }
+}
+
 module.exports = {
     runExcelImport,
     importExcelFile,
@@ -2753,9 +2892,9 @@ module.exports = {
     absentSheetResult,
     backfillMilkCollectionsFromPurchases,
     deriveProductionBatches,
-    ensureRequiredEmployees,
     importSalaryAdvanceSheet,
     adToBS,
+    todayBSDate,
     bsToAD,
     toBSDate,
     TRANSACTIONAL_TABLES

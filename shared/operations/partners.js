@@ -5,6 +5,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { todayBSDate } = require('../excel-import');
 
 /**
  * List partner capital transactions for a specific partner.
@@ -92,7 +93,7 @@ function getPartnerStatement(db, { party_id, from_date, to_date } = {}) {
     if (!party) throw new Error('Partner not found');
 
     const from = from_date || '2000-01-01';
-    const to = to_date || new Date().toISOString().split('T')[0];
+    const to = to_date || todayBSDate();
 
     // Get opening balance (before from_date)
     const opening = db.prepare(`

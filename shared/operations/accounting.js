@@ -725,6 +725,16 @@ function getCashBankPosition(db, opts = {}) {
             id: r.id, date: r.date, reference_no: r.reference_no,
             counterparty_name: r.counterparty_name, description: r.description,
             amount: round2(Number(r.debit) || 0)
+        })),
+        // Bank-statement deposits with NO matching cash_deposits register row —
+        // surfaced once by the Cash Deposit view so statement-side deposits are
+        // never invisible. Same single-source rule used for cash-to-bank above.
+        unmatched_transfer_rows: unmatchedTransfers.map(r => ({
+            id: r.id, date: r.date, reference_no: r.reference_no,
+            counterparty_name: r.counterparty_name, description: r.description,
+            bank_account: r.bank_account,
+            credit: round2(Number(r.credit) || 0),
+            debit: round2(Number(r.debit) || 0)
         }))
     };
 }
@@ -1070,9 +1080,8 @@ function _ageBucket(age) {
 function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
     let cutoff = as_of;
     if (!cutoff) {
-        const { adToBS } = require('../excel-import');
-        const ad = new Date().toISOString().split('T')[0];
-        try { cutoff = adToBS(ad) || ad; } catch (e) { cutoff = ad; }
+        const { todayBSDate } = require('../excel-import');
+        cutoff = todayBSDate();
     }
 
     let sql = `SELECT id, party_id, date, reference_type, reference_id, description, debit, credit
