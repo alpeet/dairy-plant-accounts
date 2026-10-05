@@ -861,6 +861,19 @@ function runMigrations(db) {
         console.log('Migration 26 (supplier milk pricing) skipped:', e26.message);
     }
 
+    // Migration 27: persistent link cash_deposits ↔ bank_transactions.
+    // Lets a register deposit be traced to the exact bank-statement row it
+    // deposited (and back), with the audit trail already written on every
+    // cash_deposits change. Purely additive/idempotent.
+    try {
+        const cdCols27 = db.prepare('PRAGMA table_info(cash_deposits)').all().map(c => c.name);
+        if (!cdCols27.includes('bank_txn_id')) {
+            db.exec('ALTER TABLE cash_deposits ADD COLUMN bank_txn_id INTEGER DEFAULT NULL;');
+        }
+    } catch (e27) {
+        console.log('Migration 27 (cash deposit ↔ bank link) skipped:', e27.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

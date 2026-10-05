@@ -721,6 +721,7 @@ CREATE TABLE IF NOT EXISTS cash_deposits (
     remarks TEXT DEFAULT '',
     deposited_by TEXT DEFAULT '',
     created_by INTEGER DEFAULT NULL,
+    bank_txn_id INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (created_by) REFERENCES users(id)

@@ -1042,7 +1042,9 @@ function importPurchases(db, sheetData, opts) {
                         'MC-IMP-' + String(milkSeq).padStart(4, '0'),
                         bsDate, partyId, milkType, qty,
                         toNum(row[fatIdx]), toNum(row[snfIdx]),
-                        rate, amount, shift, milkStatus,
+                        // Paisa policy: collection amounts are stored at 2 dp
+                        // (qty × rate from sheets otherwise carries 4+ decimals).
+                        rate, Math.round((Number(amount) || 0) * 100) / 100, shift, milkStatus,
                         ('Milk purchase - bill ' + billNo + (remarks ? ' - ' + remarks : '')).substring(0, 190),
                         purchaseId
                     );
@@ -1226,7 +1228,7 @@ function importMilkCollectionsSheet(db, data, { log }) {
                 fat_percent: toNum(row[fatI]),
                 snf_percent: toNum(row[snfI]),
                 rate: rate > 0 ? rate : (qty > 0 && amount > 0 ? _r2(amount / qty) : 0),
-                amount: amount > 0 ? amount : (rate > 0 ? _r2(rate * qty) : 0),
+                amount: _r2(amount > 0 ? amount : (rate > 0 ? rate * qty : 0)),
                 notes: toStr(row[notesI]).trim()
             };
             if (existing) {
@@ -1389,7 +1391,7 @@ function backfillMilkCollectionsFromPurchases(db, log) {
             insert.run(
                 'MC-IMP-' + String(seq).padStart(4, '0'),
                 r.date, r.party_id, r.milkType, toNum(r.quantity),
-                toNum(r.rate), toNum(r.amount),
+                toNum(r.rate), Math.round((Number(r.amount) || 0) * 100) / 100,
                 r.status === 'paid' ? 'paid' : 'pending',
                 ('Milk purchase - bill ' + r.bill_no).substring(0, 190),
                 r.purchase_id

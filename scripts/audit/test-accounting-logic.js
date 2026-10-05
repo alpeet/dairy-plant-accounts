@@ -384,6 +384,10 @@ if (!fs.existsSync(livePath)) {
         milk: mdb.prepare('SELECT COUNT(*) n, COALESCE(SUM(amount),0) t FROM milk_collections').get(),
         purchases: mdb.prepare('SELECT COUNT(*) n, COALESCE(SUM(grand_total),0) t FROM purchases').get(),
         sales: mdb.prepare('SELECT COUNT(*) n, COALESCE(SUM(grand_total),0) t FROM sales').get(),
+        // Row-rounded sales total: the ONE policy for money aggregates — the
+        // same Σ round2(row) the company ledger and the P&L both display.
+        sales_r2: accounting.round2(mdb.prepare('SELECT grand_total FROM sales').all()
+            .reduce((s, r) => s + accounting.round2(r.grand_total), 0)),
         receipts: mdb.prepare("SELECT COUNT(*) n, COALESCE(SUM(amount),0) t FROM payments WHERE type IN ('receipt','advance')").get()
     };
     console.log(`  migrated rows — sales ${raw.sales.n} (${money(raw.sales.t)}), milk ${raw.milk.n} (${money(raw.milk.t)}), ` +
@@ -399,9 +403,17 @@ if (!fs.existsSync(livePath)) {
     ok(milk.cogs < (milk.milk_collections + milk.purchases_total),
         'B1: COGS is below the naive "milk + purchases" sum — the duplicate is removed',
         { cogs: milk.cogs, naive: accounting.round2(milk.milk_collections + milk.purchases_total) });
-    ok(near(milk.non_milk_purchases, accounting.round2(milk.purchases_total - milk.linked_to_purchase - milk.unlinked_milk_lines), 0.01),
+    const nonMilkComputed = accounting.round2(milk.purchases_total - milk.linked_to_purchase - milk.unlinked_milk_lines);
+    // Row policy: every bill's value is rounded to paisa first, then summed —
+    // so the aggregate identity holds to within 0.005 per bill.
+    const perBillTol = 0.01 + 0.005 * milk.purchases_count;
+    ok(near(milk.non_milk_purchases, nonMilkComputed, perBillTol),
         'B1: the milk portion of linked bills is exactly what was taken out of purchases',
-        { nonMilk: milk.non_milk_purchases, computed: accounting.round2(milk.purchases_total - milk.linked_to_purchase - milk.unlinked_milk_lines) });
+        { nonMilk: milk.non_milk_purchases, computed: nonMilkComputed, tol: perBillTol });
+    const clB1 = ops.getCompanyLedger(mdb, ALL);
+    ok(near(milk.non_milk_purchases, clB1.totals.purchases),
+        'B1: non-milk purchases = the purchase rows the company ledger displays',
+        { nonMilk: milk.non_milk_purchases, ledger: clB1.totals.purchases });
 
     const plAll = ops.getProfitLoss(mdb, ALL);
     ok(near(plAll.cogs, milk.cogs), 'B1: P&L COGS uses the once-only milk cost', { cogs: plAll.cogs, milk: milk.cogs });
@@ -460,7 +472,7 @@ if (!fs.existsSync(livePath)) {
     ok(!ops.getBankReviewQueue(mdb).some(r => ops.classifyBankRow(r) === 'expense'),
         'B4: expense rows are not queueing for party matching');
     const income = ops.getProfitLoss(mdb, ALL).income;
-    ok(near(income.total_sales, raw.sales.t), 'B4: P&L income is sales (deposits/expenses are not income)');
+    ok(near(income.total_sales, raw.sales_r2), 'B4: P&L income is sales at the row-rounded policy (deposits/expenses are not income)', { pnl: income.total_sales, sales: raw.sales_r2 });
     ok(near(income.total_other_income, 0) || income.total_other_income >= 0, 'B4: other income stays separate from the transfers');
 
     // ── 5. Daybook direction ──

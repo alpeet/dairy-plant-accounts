@@ -45,6 +45,10 @@ async function renderBank() {
                 <span class="value" style="font-size:20px">${reviewCount}</span>
             </div>
         </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+            <span style="font-size:12px;color:var(--text-light);font-weight:600">Quick range:</span>
+            ${datePresetBar('bkFrom', 'bkTo', 'refreshBank', ['today', 'yesterday', 'last_7', 'last_30', 'last_90', 'this_month', 'last_month', 'this_year', 'all'])}
+        </div>
         <div class="filter-bar">
             <div class="form-group">
                 <label>From</label>

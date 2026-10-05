@@ -305,6 +305,23 @@ function getMilkFlow(db, { date } = {}) {
 // ──────────────────────────────────────────────────────────────
 
 /**
+ * Has the FIFO lot engine ever produced lots (cutover set or lots exist)?
+ * Used to decide whether an observed COGS of 0 means "free" or "not costed".
+ * Lazy require avoids a circular load with production_costing.
+ */
+function _lotCostingActive(db) {
+    try {
+        const pc = require('./production_costing');
+        if (pc.getLotCutover && pc.getLotCutover(db)) return true;
+    } catch (e) { /* costing module absent */ }
+    try {
+        if (db.prepare('SELECT 1 FROM stock_lots LIMIT 1').get()) return true;
+        if (db.prepare('SELECT 1 FROM milk_lots LIMIT 1').get()) return true;
+    } catch (e) { /* lot tables not migrated */ }
+    return false;
+}
+
+/**
  * Actual milk sales realization for a date: gross, discounts, returns, net,
  * litres and net/L — plus the production cost/L and gross margin/L so purchase
  * cost, processing cost and selling price are never confused.
@@ -355,6 +372,10 @@ function getDailySalesRealization(db, { date } = {}) {
     const netLitres = round2(qty - returnsQty);
     const netSales = round2(gross - discount - returnsValue);
 
+    // Honest COGS basis (audit req: never print an inflated margin): margin is
+    // only meaningful when the lot engine has actually costed the sale.
+    const lotCostingActive = _lotCostingActive(db);
+
     // Actual cost of the milk sold — from the finished-goods lots consumed by
     // sales that day (never today's purchase price).
     const cogs = round2(db.prepare(`
@@ -378,7 +399,12 @@ function getDailySalesRealization(db, { date } = {}) {
         cogs: cogs,
         cost_per_liter: netLitres > 0 ? round2(cogs / netLitres) : 0,
         gross_margin: round2(netSales - cogs),
-        gross_margin_per_liter: netLitres > 0 ? round2((netSales - cogs) / netLitres) : 0
+        gross_margin_per_liter: netLitres > 0 ? round2((netSales - cogs) / netLitres) : 0,
+        // COGS comes from FIFO lot consumption; when the lot engine has never
+        // run, cogs is 0 and the margin above is NOT a real margin — the UI
+        // must show the basis instead of an inflated number.
+        lot_costing_active: lotCostingActive,
+        cogs_available: lotCostingActive && (cogs > 0 || netLitres <= 0)
     };
 }
 
@@ -440,7 +466,12 @@ function getDailyMilkCostVsSales(db, { from_date, to_date, groupBy = 'daily' } =
         gross_margin: round2(r.net_sales - r.cogs),
         gross_margin_per_liter: r.sold_liters > 0 ? round2((r.net_sales - r.cogs) / r.sold_liters) : 0
     }));
-    return { from_date: from, to_date: to, group_by: groupBy, rows };
+    return {
+        from_date: from, to_date: to, group_by: groupBy, rows,
+        // Honest basis flag: margin/L on these rows is only real COGS when the
+        // lot engine has produced lots (see getDailySalesRealization).
+        lot_costing_active: _lotCostingActive(db)
+    };
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -516,27 +547,52 @@ function getProductCostReport(db, { from_date, to_date, product_id } = {}) {
  * quantities replay `stock_movements`, values read the lots.
  */
 function getStockLedger(db, { product_id, from_date, to_date } = {}) {
-    const from = String(from_date || todayBS());
-    const to = String(to_date || todayBS());
+    // Explicit empty string = "no bound" (All Dates); undefined keeps the
+    // single-day default. The date layer sends '' for the 'all' preset.
+    const from = (from_date === undefined || from_date === null) ? todayBS() : String(from_date);
+    const to = (to_date === undefined || to_date === null) ? todayBS() : String(to_date);
     const products = product_id
         ? db.prepare('SELECT * FROM products WHERE id = ?').all(product_id)
         : db.prepare('SELECT * FROM products ORDER BY name').all();
 
+    // Reference labels, batch-loaded once (no per-row lookups).
+    const refLabel = new Map();
+    const loadRefs = (sql, prefix) => {
+        try { for (const r of db.prepare(sql).all()) refLabel.set(`${prefix}:${r.id}`, r.label); } catch (e) { /* table absent */ }
+    };
+    loadRefs('SELECT id, batch_no AS label FROM production_batches', 'production');
+    loadRefs('SELECT id, invoice_no AS label FROM sales', 'sale');
+    loadRefs('SELECT id, bill_no AS label FROM purchases', 'purchase');
+    loadRefs('SELECT id, collection_no AS label FROM milk_collections', 'milk_collection');
+
     const ledger = [];
     for (const p of products) {
-        const openingQty = round2(num(db.prepare(
+        const openingQty = from ? round2(num(db.prepare(
             'SELECT COALESCE(SUM(inward_qty - outward_qty),0) s FROM stock_movements WHERE product_id = ? AND date < ?'
-        ).get(p.id, from).s));
+        ).get(p.id, from).s)) : 0;
+        let moveCond = 'sm.product_id = ?';
+        const moveParams = [p.id];
+        if (from) { moveCond += ' AND sm.date >= ?'; moveParams.push(from); }
+        if (to) { moveCond += ' AND sm.date <= ?'; moveParams.push(to); }
         const movements = db.prepare(`
             SELECT sm.* FROM stock_movements sm
-            WHERE sm.product_id = ? AND sm.date BETWEEN ? AND ?
+            WHERE ${moveCond}
             ORDER BY sm.date, sm.id
-        `).all(p.id, from, to);
+        `).all(...moveParams);
         const rows = [];
+        // Per-type buckets for the Product Summary view — computed from the
+        // SAME rows the detailed ledger shows (one engine, no second query).
+        const buckets = {
+            collection_in: 0, purchase_in: 0, production_in: 0, production_out: 0,
+            sales_out: 0, returns_in: 0, returns_out: 0, wastage_out: 0,
+            adjustment_in: 0, adjustment_out: 0, other_in: 0, other_out: 0
+        };
         let balance = openingQty;
+        let totalIn = 0, totalOut = 0;
         for (const m of movements) {
             const inQty = round2(m.inward_qty), outQty = round2(m.outward_qty);
             balance = round2(balance + inQty - outQty);
+            totalIn += inQty; totalOut += outQty;
             // Value from the lot layer where it exists (finished goods), else the
             // movement's own rate. Outward value is the lot cost when available.
             const lotValue = round2(db.prepare(`
@@ -544,24 +600,88 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
                 WHERE lot_type = 'stock' AND date = ? AND lot_id IN (SELECT id FROM stock_lots WHERE product_id = ?)
             `).get(m.date, p.id).v);
             const unitCost = round2(num(m.rate));
+            const label = movementLabel(m);
+            // Bucket the movement for the summary view.
+            switch (m.type) {
+                case 'milk_collection': buckets.collection_in += inQty; break;
+                case 'purchase': buckets.purchase_in += inQty; break;
+                case 'production_output': buckets.production_in += inQty; break;
+                case 'production_input': buckets.production_out += outQty; break;
+                case 'sale': buckets.sales_out += outQty; break;
+                case 'return_in': buckets.returns_in += inQty; break;
+                case 'return_out': buckets.returns_out += outQty; break;
+                case 'adjustment':
+                    if (m.reference_type === 'wastage') buckets.wastage_out += outQty;
+                    else if (inQty > 0) buckets.adjustment_in += inQty;
+                    else buckets.adjustment_out += outQty;
+                    break;
+                default:
+                    if (inQty > 0) buckets.other_in += inQty;
+                    else if (outQty > 0) buckets.other_out += outQty;
+            }
+            const createdAt = m.created_at || '';
+            // Stored timestamp as-is (space = local datetime(), T = ISO) — never invented.
+            const timeRaw = createdAt.includes('T')
+                ? (createdAt.split('T')[1] || '')
+                : (createdAt.includes(' ') ? createdAt.split(' ')[1] : '');
             rows.push({
-                date: m.date, reference_type: m.reference_type, reference_id: m.reference_id,
-                type: m.type, notes: m.notes,
+                date: m.date,
+                time: timeRaw.slice(0, 8),
+                created_at: createdAt,
+                reference_type: m.reference_type, reference_id: m.reference_id,
+                reference: (m.reference_id != null && refLabel.get(`${m.reference_type}:${m.reference_id}`)) || m.notes || '',
+                type: m.type, label, notes: m.notes,
                 inward_qty: inQty, outward_qty: outQty, balance,
                 unit_cost: unitCost,
                 value: m.outward_qty > 0 && lotValue > 0 ? round2(-lotValue) : round2((inQty - outQty) * unitCost)
             });
         }
         const lotValueNow = productLotValue(db, p.id);
+        const summary = {
+            opening: openingQty,
+            collection_in: round2(buckets.collection_in),
+            purchase_in: round2(buckets.purchase_in),
+            production_in: round2(buckets.production_in),
+            production_out: round2(buckets.production_out),
+            sales_out: round2(buckets.sales_out),
+            returns_in: round2(buckets.returns_in),
+            returns_out: round2(buckets.returns_out),
+            wastage_out: round2(buckets.wastage_out),
+            adjustment_in: round2(buckets.adjustment_in),
+            adjustment_out: round2(buckets.adjustment_out),
+            other_in: round2(buckets.other_in),
+            other_out: round2(buckets.other_out),
+            total_in: round2(totalIn),
+            total_out: round2(totalOut),
+            closing: balance
+        };
         ledger.push({
             product_id: p.id, product_name: p.name, unit: p.unit, category: p.category,
             inventory_category: classifyInventoryCategory(p),
             opening_qty: openingQty, closing_qty: balance,
             lot_value: lotValueNow,
+            summary,
             rows
         });
     }
     return { from_date: from, to_date: to, products: ledger };
+}
+
+/** Human movement name for the detailed stock ledger (req: labeled movements). */
+function movementLabel(m) {
+    switch (m.type) {
+        case 'opening': return 'Opening Balance';
+        case 'milk_collection': return 'Milk Collection';
+        case 'purchase': return 'Purchase';
+        case 'production_output': return 'Production Output';
+        case 'production_input': return 'Production Consumption';
+        case 'sale': return 'Sales';
+        case 'return_in': return m.reference_type === 'sale' ? 'Sales Return' : 'Return IN';
+        case 'return_out': return 'Return OUT';
+        case 'adjustment': return m.reference_type === 'wastage' ? 'Wastage'
+            : m.reference_type === 'purchase' ? 'Purchase Reversal' : 'Stock Adjustment';
+        default: return m.type || 'Movement';
+    }
 }
 
 /**

@@ -12,7 +12,7 @@
  * can never drift from the balance sheet. This screen never recalculates.
  */
 
-let _advState = { as_of: '', data: null };
+let _advState = { as_of: '', from: '', data: null };
 
 async function renderAdvances() {
     const container = document.getElementById('page-advances');
@@ -25,15 +25,22 @@ async function renderAdvances() {
 
     container.innerHTML = `
         <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+                <span style="font-size:12px;color:var(--text-light);font-weight:600">Quick range:</span>
+                ${datePresetBar('advFrom', 'advTo', 'advancesLoad', ['today', 'yesterday', 'this_week', 'this_month', 'last_month', 'this_year', 'all'])}
+            </div>
             <div class="filter-bar" style="margin:0">
-                <div class="form-group"><label>As of Date</label>
-                    <input type="date" class="form-control" id="advAsOf" value="${_advState.as_of}"></div>
+                <div class="form-group"><label>From</label>
+                    <input type="date" class="form-control" id="advFrom" value="${_advState.from || ''}"></div>
+                <div class="form-group"><label>To (as of)</label>
+                    <input type="date" class="form-control" id="advTo" value="${_advState.as_of}"></div>
                 <div class="form-group"><label>&nbsp;</label>
                     <button class="btn btn-primary btn-sm" onclick="advancesLoad()">Apply</button></div>
                 <div class="form-group" style="flex:1"><label>&nbsp;</label>
                     <div style="font-size:12px;color:var(--text-light);padding-top:6px">
                         Record an advance with <strong>Payment → Advance</strong>, a cash return with <strong>Advance Returned</strong>,
                         and consumption with <strong>Advance Adjustment</strong>. Advances never appear in the P&amp;L.
+                        Leave <em>From</em> empty for all history; <em>To</em> is the as-of cutoff.
                     </div></div>
             </div>
         </div>
@@ -46,9 +53,12 @@ async function renderAdvances() {
 async function advancesLoad() {
     const body = document.getElementById('advBody');
     if (!body) return;
-    _advState.as_of = document.getElementById('advAsOf')?.value || _advState.as_of;
+    _advState.as_of = document.getElementById('advTo')?.value || _advState.as_of;
+    _advState.from = document.getElementById('advFrom')?.value || '';
 
-    const result = await window.api.getAdvanceRecoveryRegister({ as_of: _advState.as_of });
+    const opts = { as_of: _advState.as_of };
+    if (_advState.from) opts.from_date = _advState.from;
+    const result = await window.api.getAdvanceRecoveryRegister(opts);
     if (!result || !result.success) {
         body.innerHTML = `<div style="padding:20px;color:var(--danger)">Could not load the advance register: ${escapeHtml((result && result.error) || 'unknown error')}</div>`;
         return;

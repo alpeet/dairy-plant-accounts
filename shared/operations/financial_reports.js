@@ -50,13 +50,15 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
 
     // ── Income Sources ──
 
-    // Total sales (all modes)
-    const totalSales = db.prepare(`
-        SELECT COALESCE(SUM(grand_total), 0) as total,
-               COALESCE(SUM(paid_amount), 0) as paid,
-               COUNT(*) as count
-        FROM sales WHERE date >= ? AND date <= ?
-    `).get(from, to);
+    // Total sales (all modes)    // Sales revenue at the SAME rounding the company ledger displays per row
+    // (row-rounded 2 dp sums — audit decision: aggregates = Σ round2(row)).
+    const saleRows = db.prepare(
+        `SELECT grand_total FROM sales WHERE date >= ? AND date <= ?`
+    ).all(from, to);
+    const totalSales = {
+        total: round2(saleRows.reduce((s, r) => s + round2(r.grand_total), 0)),
+        count: saleRows.length
+    };
 
     // Cash receipts from payments — reference only (cash flow), NOT income:
     // these collect against the same sales invoices counted below.
@@ -128,7 +130,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         total_sales: totalSales.total,
         total_receipts: totalReceipts.total,
         total_other_income: totalOtherIncome.total,
-        total_income: totalSales.total + totalOtherIncome.total
+        total_income: round2(totalSales.total + totalOtherIncome.total)
     };
 
     // Build expense breakdown (cash payments to suppliers are cash flow,
@@ -146,10 +148,11 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         bank_expenses: { total: totalBankExpenses.total, count: totalBankExpenses.count },
         cash_payments: { total: totalCashPayments.total, count: totalCashPayments.count },
         typed_payment_expenses: totalTypedExpenses,
-        total_expenses: totalMilkCost.total + totalPurchases.total +
+        total_expenses: round2(totalMilkCost.total + totalPurchases.total +
                        totalOtherExpenses.total +
                        totalPettyCash.total + totalSalary.total + totalVehicle.total +
                        totalBankExpenses.total + totalTypedExpenses.total
+    )
     };
 
     // Balance-sheet movements — reference only, outside every P&L total.

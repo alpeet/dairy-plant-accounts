@@ -434,6 +434,22 @@ function getDatePreset(preset) {
     switch (preset) {
         case 'today':
             return { from: todayStr, to: todayStr };
+        case 'yesterday': {
+            const from = bsSubtractDays(todayStr, 1);
+            return { from, to: from };
+        }
+        case 'last_7': {
+            // Inclusive of today: today − 6 … today = 7 days.
+            return { from: bsSubtractDays(todayStr, 6), to: todayStr };
+        }
+        case 'last_90': {
+            // Inclusive of today: today − 89 … today = 90 days.
+            return { from: bsSubtractDays(todayStr, 89), to: todayStr };
+        }
+        case 'all': {
+            // Open range — every backend query treats an empty bound as "no filter".
+            return { from: '', to: '' };
+        }
         case 'this_week': {
             // Go back up to 6 days to find start of BS week (approximate)
             const from = bsSubtractDays(todayStr, 6);
@@ -464,4 +480,50 @@ function getDatePreset(preset) {
         default:
             return { from: '', to: todayStr };
     }
+}
+
+// ============================================================
+// Shared date-preset button bar (single source, requirement: one date layer)
+// ============================================================
+const DATE_PRESET_LABELS = {
+    today: 'Today',
+    yesterday: 'Yesterday',
+    last_7: 'Last 7',
+    last_30: 'Last 30',
+    last_90: 'Last 90',
+    this_week: 'This Week',
+    this_month: 'This Month',
+    last_month: 'Prev Month',
+    this_year: 'This Year',
+    all: 'All'
+};
+
+/**
+ * Render a preset button bar wired to two date inputs and a refresh handler.
+ * Every screen uses this so the preset set stays identical everywhere.
+ *
+ * @param {string} fromId  id of the From input
+ * @param {string} toId    id of the To input
+ * @param {string} refreshFnName global function name to call after setting dates
+ * @param {string[]} presets which presets to show (defaults to the full set)
+ */
+function datePresetBar(fromId, toId, refreshFnName, presets) {
+    const list = presets || Object.keys(DATE_PRESET_LABELS);
+    return list.map(p =>
+        `<button type="button" class="btn btn-secondary btn-sm" data-preset="${p}" ` +
+        `onclick="applyDatePreset('${p}', '${fromId}', '${toId}', '${refreshFnName}')">${DATE_PRESET_LABELS[p] || p}</button>`
+    ).join('');
+}
+
+/**
+ * Apply a preset to the named inputs and trigger the refresh handler.
+ * Used by every screen's preset bar — no per-screen date logic.
+ */
+function applyDatePreset(preset, fromId, toId, refreshFnName) {
+    const p = getDatePreset(preset);
+    const f = document.getElementById(fromId);
+    const t = document.getElementById(toId);
+    if (f) f.value = p.from;
+    if (t) t.value = p.to;
+    if (refreshFnName && typeof window[refreshFnName] === 'function') window[refreshFnName]();
 }

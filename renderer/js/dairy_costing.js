@@ -237,6 +237,14 @@ async function dairyTabSales() {
     const r = await window.api.getDailySalesRealization({ date: dairyState.date });
     const d = (r && r.success !== false) ? (r.data || r) : null;
     if (!d) return '<div class="card"><p>No data.</p></div>';
+    // Honest margin: only show Margin/L when the FIFO lot engine actually costed
+    // the sale. Otherwise the number would be inflated (COGS = 0 ≠ free milk).
+    const marginShown = d.cogs_available !== false;
+    const basisNote = marginShown
+        ? 'Cost/L is the actual FIFO lot cost of the milk sold — never today\'s purchase price. Margin = realization − actual COGS.'
+        : (d.lot_costing_active
+            ? '⚠ No lot COGS recorded for this day (sold from stock with no costed lots) — Margin/L hidden rather than shown inflated.'
+            : '⚠ Lot costing (FIFO COGS) is NOT active — no lots exist, so COGS = 0. Margin/L hidden. Activate it from Production → "Activate lot costing" to get real margins.');
     return dairyCard('Sales Realization — ' + formatDate(d.date), dairyKpiRow([
         dairyKpi('Litres Sold', dairyNum(d.net_liters) + ' L'),
         dairyKpi('Gross Sales', dairyMoney(d.gross_sales)),
@@ -244,9 +252,9 @@ async function dairyTabSales() {
         dairyKpi('Returns', dairyMoney(d.returns_value)),
         dairyKpi('Net Sales', dairyMoney(d.net_sales)),
         dairyKpi('Realization/L', dairyMoney(d.realization_per_liter)),
-        dairyKpi('Cost/L (actual)', dairyMoney(d.cost_per_liter)),
-        dairyKpi('Gross Margin/L', dairyMoney(d.gross_margin_per_liter))
-    ]) + `<p style="color:var(--text-light);font-size:12px;margin-top:10px">Cost/L is the actual FIFO lot cost of the milk sold — never today's purchase price. Margin = realization − actual COGS.</p>`);
+        dairyKpi('Cost/L (actual)', marginShown ? dairyMoney(d.cost_per_liter) : '—'),
+        dairyKpi('Milk Gross Margin/L', marginShown ? dairyMoney(d.gross_margin_per_liter) : '—')
+    ]) + `<p style="color:var(--text-light);font-size:12px;margin-top:10px">${basisNote}</p>`);
 }
 
 // ── Milk cost vs sales over a range ──
@@ -254,13 +262,15 @@ async function dairyTabCostVsSales() {
     const r = await window.api.getDailyMilkCostVsSales({ from_date: dairyState.from, to_date: dairyState.to, groupBy: dairyState.groupBy });
     const d = (r && r.success !== false) ? (r.data || r) : null;
     if (!d) return '<div class="card"><p>No data.</p></div>';
+    const lotActive = d.lot_costing_active !== false;
     const rows = (d.rows || []).map(x =>
         `<tr><td>${escapeHtml(x.period)}</td><td class="text-right">${dairyNum(x.received_liters)}</td>
          <td class="text-right">${dairyMoney(x.avg_purchase_cost)}</td><td class="text-right">${dairyNum(x.sold_liters)}</td>
-         <td class="text-right">${dairyMoney(x.avg_sales_realization)}</td><td class="text-right">${dairyMoney(x.production_cost_per_liter)}</td>
-         <td class="text-right" style="color:${x.gross_margin_per_liter >= 0 ? 'var(--success)' : 'var(--danger)'}">${dairyMoney(x.gross_margin_per_liter)}</td></tr>`).join('')
+         <td class="text-right">${dairyMoney(x.avg_sales_realization)}</td><td class="text-right">${lotActive ? dairyMoney(x.production_cost_per_liter) : '—'}</td>
+         <td class="text-right" style="color:${!lotActive ? 'var(--text-light)' : x.gross_margin_per_liter >= 0 ? 'var(--success)' : 'var(--danger)'}">${lotActive ? dairyMoney(x.gross_margin_per_liter) : '—'}</td></tr>`).join('')
         || '<tr><td colspan="7" style="text-align:center;color:var(--text-light)">No data in range</td></tr>';
     return dairyCard(`Milk Cost vs Sales (${d.group_by})`, `
+        ${lotActive ? '' : '<p style="color:var(--warning);font-size:12px;margin-bottom:8px">⚠ Lot costing is not active — COGS is 0, so Production Cost/L and Margin/L are hidden rather than shown inflated. Activate FIFO lot costing from the Production page.</p>'}
         <table class="data-table"><thead><tr>
             <th>Period</th><th class="text-right">Milk Received (L)</th><th class="text-right">Avg Purchase/L</th>
             <th class="text-right">Milk Sold (L)</th><th class="text-right">Avg Sales/L</th>

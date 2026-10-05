@@ -53,6 +53,19 @@ function getCashDeposit(db, id) {
  */
 function saveCashDeposit(db, data, userId = null) {
     const oldRow = data.id ? db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(data.id) : null;
+
+    // Persistent statement link (audit requirement 19). An update that does not
+    // mention the link keeps the one it had; unknown transaction ids are dropped
+    // rather than stored as dangling references.
+    let bankTxnId = data.bank_txn_id !== undefined
+        ? (data.bank_txn_id || null)
+        : (oldRow ? (oldRow.bank_txn_id || null) : null);
+    if (bankTxnId != null) {
+        try {
+            if (!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(bankTxnId)) bankTxnId = null;
+        } catch (e) { bankTxnId = null; /* bank module not present on this DB */ }
+    }
+
     const trx = db.transaction(() => {
         const date = data.date || todayBSDate();
 
@@ -63,6 +76,7 @@ function saveCashDeposit(db, data, userId = null) {
                     date = ?, bank_name = ?, branch = ?, account_no = ?,
                     amount = ?, cash_source = ?, deposit_mode = ?,
                     reference_no = ?, remarks = ?, deposited_by = ?,
+                    bank_txn_id = ?,
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             `).run(
@@ -76,6 +90,7 @@ function saveCashDeposit(db, data, userId = null) {
                 data.reference_no || '',
                 data.remarks || '',
                 data.deposited_by || '',
+                bankTxnId,
                 data.id
             );
             return { id: data.id, action: 'updated' };
@@ -95,8 +110,8 @@ function saveCashDeposit(db, data, userId = null) {
             const deposit_no = generateDepositNo(db, date);
             const result = db.prepare(`
                 INSERT INTO cash_deposits (date, deposit_no, bank_name, branch, account_no, amount,
-                    cash_source, deposit_mode, reference_no, remarks, deposited_by, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cash_source, deposit_mode, reference_no, remarks, deposited_by, created_by, bank_txn_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 date,
                 deposit_no,
@@ -109,7 +124,8 @@ function saveCashDeposit(db, data, userId = null) {
                 data.reference_no || '',
                 data.remarks || '',
                 data.deposited_by || '',
-                data.created_by || null
+                data.created_by || null,
+                bankTxnId
             );
             return { id: result.lastInsertRowid, action: 'created', deposit_no };
         }

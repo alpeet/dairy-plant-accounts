@@ -257,12 +257,27 @@ function detectMilkLine(productName) {
 function getMilkCostSummary(db, opts = {}) {
     const { from, to } = periodBounds(opts);
 
-    const collections = db.prepare(
-        `SELECT COUNT(*) as count,
-                COALESCE(SUM(amount), 0) as total,
-                COALESCE(SUM(CASE WHEN purchase_ref_id IS NOT NULL THEN amount ELSE 0 END), 0) as linked_total
-           FROM milk_collections WHERE ${RANGE}`
-    ).get(from, to);
+    const collectionCount = db.prepare(
+        `SELECT COUNT(*) as count FROM milk_collections WHERE ${RANGE}`
+    ).get(from, to).count;
+
+    // ── Single milk-money policy (audit: Rs 0.05) ─────────────────────
+    // Milk collections can carry sub-paisa amounts (qty × rate from imports).
+    // Every aggregate here is the sum of ROW-rounded (2 dp) values — the exact
+    // same expression the company ledger uses per displayed row — so summary,
+    // ledger rows, P&L and net profit agree to the paisa by construction.
+    const collectionAmounts = db.prepare(
+        `SELECT amount, purchase_ref_id FROM milk_collections WHERE ${RANGE}`
+    ).all(from, to);
+    let collectionsTotal = 0;
+    let linkedTotal = 0;
+    for (const r of collectionAmounts) {
+        const a = round2(r.amount);
+        collectionsTotal += a;
+        if (r.purchase_ref_id != null) linkedTotal += a;
+    }
+    collectionsTotal = round2(collectionsTotal);
+    const linkedToPurchase = round2(linkedTotal);
 
     // Milk lines still sitting on purchase bills that have no linked collection
     // (manually entered purchases, or imports where the link was not written).
@@ -275,35 +290,42 @@ function getMilkCostSummary(db, opts = {}) {
     ).all(from, to);
 
     let unlinkedMilkLines = 0;
+    const unlinkedByBill = new Map();
     for (const it of unlinkedItems) {
-        if (detectMilkLine(it.product_name)) unlinkedMilkLines += Number(it.amount) || 0;
+        if (!detectMilkLine(it.product_name)) continue;
+        const amt = round2(it.amount);
+        unlinkedMilkLines += amt;
+        unlinkedByBill.set(it.purchase_id, round2((unlinkedByBill.get(it.purchase_id) || 0) + amt));
     }
-    unlinkedMilkLines = round2(unlinkedMilkLines);
-
-    const purchasesTotal = db.prepare(
-        `SELECT COUNT(*) as count, COALESCE(SUM(grand_total), 0) as total FROM purchases WHERE ${RANGE}`
-    ).get(from, to).total;
-
-    // Every component is reduced to currency precision before the arithmetic, so
-    // the reported figures add up exactly at 2 decimals (no 831,845.4599…).
-    const collectionsTotal = round2(collections.total);
-    const linkedToPurchase = round2(collections.linked_total);
     const unlinkedLines = round2(unlinkedMilkLines);
-    const purchasesGross = round2(purchasesTotal);
 
-    // What is left of the purchase register after the milk already represented
-    // by a Milk Collection is taken out. Never negative.
-    const nonMilkPurchases = Math.max(0, round2(purchasesGross - linkedToPurchase - unlinkedLines));
+    // ── Non-milk purchases: same per-bill expression as the company ledger ──
+    const billRows = db.prepare(
+        `SELECT id, grand_total FROM purchases WHERE ${RANGE}`
+    ).all(from, to);
+    const linkedByBill = getLinkedMilkByBill(db, opts);
+    let purchasesGross = 0;
+    let nonMilkRaw = 0;
+    for (const b of billRows) {
+        purchasesGross += round2(b.grand_total);
+        const value = round2((Number(b.grand_total) || 0)
+            - (linkedByBill.get(b.id) || 0)
+            - (unlinkedByBill.get(b.id) || 0));
+        if (value > 0.005) nonMilkRaw += value;
+    }
+    const purchasesGrossR2 = round2(purchasesGross);
+    const nonMilkPurchases = round2(nonMilkRaw);
+
     const milkCost = round2(collectionsTotal + unlinkedLines);
 
     return {
         milk_collections: collectionsTotal,
-        milk_collection_count: collections.count,
+        milk_collection_count: collectionCount,
         linked_to_purchase: linkedToPurchase,
         unlinked_milk_lines: unlinkedLines,
         milk_cost: milkCost,
-        purchases_total: purchasesGross,
-        purchases_count: db.prepare(`SELECT COUNT(*) as count FROM purchases WHERE ${RANGE}`).get(from, to).count,
+        purchases_total: purchasesGrossR2,
+        purchases_count: billRows.length,
         non_milk_purchases: nonMilkPurchases,
         cogs: round2(milkCost + nonMilkPurchases)
     };
@@ -321,11 +343,11 @@ function getLinkedMilkByBill(db, opts = {}) {
     const { from, to } = periodBounds(opts);
     const map = new Map();
     for (const r of db.prepare(
-        `SELECT purchase_ref_id AS pid, SUM(amount) AS v FROM milk_collections
-          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL
-          GROUP BY purchase_ref_id`
+        `SELECT purchase_ref_id AS pid, amount FROM milk_collections
+          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL`
     ).all(from, to)) {
-        map.set(r.pid, round2(r.v));
+        // Row-rounded, matching the ledger's per-row rounding exactly.
+        map.set(r.pid, round2((map.get(r.pid) || 0) + round2(r.amount)));
     }
     return map;
 }
@@ -337,12 +359,17 @@ function getLinkedMilkByBill(db, opts = {}) {
  */
 function getLinkedMilkByMonth(db, opts = {}) {
     const { from, to } = periodBounds(opts);
-    return db.prepare(
-        `SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total
+    const map = new Map();
+    for (const r of db.prepare(
+        `SELECT substr(date, 1, 7) as ym, amount
            FROM milk_collections
-          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL
-          GROUP BY ym`
-    ).all(from, to);
+          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL`
+    ).all(from, to)) {
+        map.set(r.ym, round2((map.get(r.ym) || 0) + round2(r.amount)));
+    }
+    return [...map.entries()]
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+        .map(([ym, total]) => ({ ym, total }));
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1077,8 +1104,12 @@ function _ageBucket(age) {
  *   summary: { advance_given, adjusted, returned, total_outstanding,
  *              current, overdue, bucket_7, bucket_30, bucket_60, bucket_90 }
  */
-function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
-    let cutoff = as_of;
+function getAdvanceRecoveryRegister(db, { as_of, party_id, from_date, to_date } = {}) {
+    // `to_date` doubles as the as-of cutoff: the register is always computed
+    // complete up to that day, then (optionally) filtered to advances GIVEN
+    // inside the period. Checks always run against the FULL register so the
+    // register-vs-balance-sheet guarantee never depends on the display filter.
+    let cutoff = to_date || as_of;
     if (!cutoff) {
         const { todayBSDate } = require('../excel-import');
         cutoff = todayBSDate();
@@ -1118,8 +1149,8 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
         byParty.get(key).push(r);
     }
 
-    const lots = [];
-    const movements = [];
+    let lots = [];
+    let movements = [];
     for (const [pid, list] of byParty) {
         const open = []; // FIFO advance lots still holding money
         for (const r of list) {
@@ -1160,7 +1191,7 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
     const sum = (f) => round2(lots.reduce((s, l) => s + (Number(l[f]) || 0), 0));
     const out = (minAge, maxAge) => round2(lots.filter(l => l.age_days >= minAge && (maxAge === undefined || l.age_days < maxAge))
         .reduce((s, l) => s + (Number(l.outstanding) || 0), 0));
-    const summary = {
+    let summary = {
         advance_given: round2(movements.filter(m => m.kind === 'given').reduce((s, m) => s + m.amount, 0)),
         adjusted: round2(movements.filter(m => m.kind === 'adjusted').reduce((s, m) => s + m.amount, 0)),
         returned: round2(movements.filter(m => m.kind === 'returned').reduce((s, m) => s + m.amount, 0)),
@@ -1175,6 +1206,8 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
     };
 
     // The register must never disagree with the balance it is a register OF.
+    // Computed on the FULL (unfiltered) register — period filtering below is a
+    // display filter and must not weaken this guarantee.
     const balances = getLoanAdvanceBalances(db, { as_of: cutoff });
     const checks = [{
         name: 'Register outstanding = Advance Receivable balance',
@@ -1188,7 +1221,34 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id } = {}) {
         ok: Math.abs(round2(summary.advance_given) - round2(summary.returned + summary.adjusted + summary.total_outstanding)) <= 0.01
     }];
 
-    return { as_of: cutoff, lots, movements, summary, checks, all_checks_ok: checks.every(c => c.ok) };
+    const fullSummary = summary;
+    const from = from_date ? String(from_date) : '';
+    if (from) {
+        // Period view: only advances GIVEN on/after `from`. Each kept lot carries
+        // its full adjustment/return history up to the cutoff, so its outstanding
+        // stays correct and the per-lot identity still holds across the filtered set.
+        lots = lots.filter(l => String(l.date) >= from);
+        movements = movements.filter(m => String(m.date) >= from);
+        summary = {
+            advance_given: round2(lots.reduce((s, l) => s + (Number(l.advance) || 0), 0)),
+            adjusted: round2(lots.reduce((s, l) => s + (Number(l.adjusted) || 0), 0)),
+            returned: round2(lots.reduce((s, l) => s + (Number(l.returned) || 0), 0)),
+            total_outstanding: round2(lots.reduce((s, l) => s + (Number(l.outstanding) || 0), 0)),
+            open_advances: lots.filter(l => l.outstanding > 0.005).length,
+            current: round2(lots.filter(l => l.outstanding > 0.005 && l.age_days < 7).reduce((s, l) => s + (Number(l.outstanding) || 0), 0)),
+            overdue: round2(lots.filter(l => l.outstanding > 0.005 && l.age_days >= 7).reduce((s, l) => s + (Number(l.outstanding) || 0), 0)),
+            bucket_7: round2(lots.filter(l => l.outstanding > 0.005 && l.age_days >= 7).reduce((s, l) => s + (Number(l.outstanding) || 0), 0)),
+            bucket_30: round2(lots.filter(l => l.outstanding > 0.005 && l.age_days >= 30).reduce((s, l) => s + (Number(l.outstanding) || 0), 0)),
+            bucket_60: round2(lots.filter(l => l.outstanding > 0.005 && l.age_days >= 60).reduce((s, l) => s + (Number(l.outstanding) || 0), 0)),
+            bucket_90: round2(lots.filter(l => l.outstanding > 0.005 && l.age_days >= 90).reduce((s, l) => s + (Number(l.outstanding) || 0), 0))
+        };
+    }
+
+    return {
+        as_of: cutoff, from_date: from || null, filtered: !!from,
+        lots, movements, summary, full_summary: fullSummary,
+        checks, all_checks_ok: checks.every(c => c.ok)
+    };
 }
 
 module.exports = {

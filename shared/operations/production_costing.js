@@ -920,7 +920,24 @@ function getDailyReconciliation(db, { from_date, to_date } = {}) {
             `SELECT milk_type, ROUND(SUM(qty_remaining),2) remaining FROM milk_lots WHERE date <= ? GROUP BY milk_type`
         ).all(to)
     }));
-    return { from_date: from, to_date: to, days: days.length, finished_goods, raw_milk, window_days: inClause ? days.length : 0 };
+    // Morning/evening collection split + purchases (the daily factory view):
+    // actual shift data from the milk register, never invented.
+    const shiftRows = db.prepare(`
+        SELECT shift, COALESCE(SUM(quantity_liters),0) q, COALESCE(SUM(amount),0) a
+        FROM milk_collections WHERE date BETWEEN ? AND ? GROUP BY shift
+    `).all(from, to);
+    const milkCollections = {
+        morning: round2(shiftRows.filter(r => String(r.shift).toLowerCase() === 'morning').reduce((s, r) => s + r.q, 0)),
+        evening: round2(shiftRows.filter(r => String(r.shift).toLowerCase() === 'evening').reduce((s, r) => s + r.q, 0)),
+        total_liters: round2(shiftRows.reduce((s, r) => s + r.q, 0)),
+        total_amount: round2(shiftRows.reduce((s, r) => s + r.a, 0))
+    };
+    const purchasesRow = db.prepare(`
+        SELECT COUNT(*) n, COALESCE(SUM(grand_total),0) t FROM purchases WHERE date BETWEEN ? AND ?
+    `).get(from, to);
+    const milkPurchases = { count: purchasesRow.n, total: round2(purchasesRow.t) };
+    return { from_date: from, to_date: to, days: days.length, finished_goods, raw_milk,
+        milk_collections: milkCollections, purchases: milkPurchases, window_days: inClause ? days.length : 0 };
 }
 
 /** Batch margin / profitability for a date range. */
@@ -1053,7 +1070,7 @@ function previewBatchCosting(db, data) {
 }
 
 /** Opening stock lots at the cutover (estimated cost flagged). */
-function createOpeningStockLots(db, { date, unit_costs, userId } = {}) {
+function createOpeningStockLots(db, { date, unit_costs, userId } = {}, actorId = null) {
     const d = String(date || todayBS());
     const trx = db.transaction(() => {
         const results = [];
@@ -1073,7 +1090,7 @@ function createOpeningStockLots(db, { date, unit_costs, userId } = {}) {
         if (!getLotCutover(db)) setLotCutover(db, d);
         logAudit(db, 'stock_lots', null, 'create', null, {
             operation: 'Opening stock lots created (estimated)', date: d, lots: results
-        }, userId || null);
+        }, (userId || actorId) || null);
         return results;
     });
     return trx();

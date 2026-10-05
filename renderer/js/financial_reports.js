@@ -534,35 +534,204 @@ async function printReceivablePayable() {
 // ============================================================
 // Stock Statement
 // ============================================================
-async function showStockStatement() {
-    const container = document.getElementById('page-stock-statement');
-    document.getElementById('topActions').innerHTML = '';
+// Period + views state. The period comes from the SHARED date layer
+// (getDatePreset) — never hardcoded; 'custom' is the From/To pair.
+let _ssState = { preset: 'this_month', from: '', to: '', view: 'summary', category: '', search: '', product_id: '' };
 
-    const result = await window.api.getStockStatement({});
-    const data = result.success ? result.data : { items: [], total_value: 0, total_products: 0, total_quantity: 0, categories: [] };
+/** Local 2-dp rounding for summary figures (currency precision). */
+function round2ui(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
-    container.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <h2 style="margin:0">📋 Stock Statement</h2>
-            <div class="btn-group">
-                <button class="btn btn-info btn-sm" onclick="printStockStatementReport()">🖨 Print</button>
-                <button class="btn btn-primary btn-sm" onclick="exportStockStatementPDF()">📄 PDF</button>
-            </div>
+function _ssPresetBtns() {
+    return ['today', 'yesterday', 'this_week', 'this_month', 'last_month', 'this_year', 'all']
+        .map(p => `<button type="button" class="btn btn-sm ${_ssState.preset === p ? 'btn-primary' : 'btn-secondary'}" onclick="ssApplyPreset('${p}')">${DATE_PRESET_LABELS[p] || p}</button>`)
+        .join('');
+}
+
+function ssApplyPreset(p) {
+    const r = getDatePreset(p);
+    _ssState.preset = p;
+    _ssState.from = r.from;
+    _ssState.to = r.to;
+    showStockStatement();
+}
+
+function ssApplyCustom() {
+    _ssState.preset = 'custom';
+    _ssState.from = document.getElementById('ssFrom')?.value || '';
+    _ssState.to = document.getElementById('ssTo')?.value || '';
+    showStockStatement();
+}
+
+function ssSetView(v) { _ssState.view = v; showStockStatement(); }
+
+function _ssFilterBar(data) {
+    return `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+            <span style="font-size:12px;color:var(--text-light);font-weight:600">Period:</span>
+            ${_ssPresetBtns()}
         </div>
         <div class="filter-bar">
+            <div class="form-group">
+                <label>From</label>
+                <input type="date" class="form-control" id="ssFrom" value="${_ssState.from || ''}">
+            </div>
+            <div class="form-group">
+                <label>To</label>
+                <input type="date" class="form-control" id="ssTo" value="${_ssState.to || ''}">
+            </div>
             <div class="form-group">
                 <label>Category</label>
                 <select class="form-control" id="ssCategory" onchange="applyStockStatement()">
                     <option value="">All Categories</option>
-                    ${data.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}
+                    ${(data.categories || []).map(c => `<option value="${escapeHtml(c)}" ${_ssState.category === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
                 </select>
             </div>
             <div class="form-group">
                 <label>Search</label>
-                <input type="text" class="form-control" id="ssSearch" placeholder="Search product..." onkeyup="if(event.key==='Enter')applyStockStatement()">
+                <input type="text" class="form-control" id="ssSearch" value="${escapeHtml(_ssState.search)}" placeholder="Search product..." onkeyup="if(event.key==='Enter')applyStockStatement()">
             </div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyStockStatement()">Filter</button></div>
+            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="ssApplyCustom()">Apply Range</button></div>
         </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <span style="font-size:12px;color:var(--text-light);font-weight:600">View:</span>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'summary' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('summary')">📊 Stock Summary</button>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'detail' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('detail')">🧾 Detailed Ledger</button>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'valuation' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('valuation')">💰 Current Valuation</button>
+        </div>`;
+}
+
+function _ssMatches(p) {
+    if (_ssState.category && p.category !== _ssState.category) return false;
+    if (_ssState.search) {
+        const q = _ssState.search.toLowerCase();
+        if (!String(p.product_name || '').toLowerCase().includes(q) && !String(p.category || '').toLowerCase().includes(q)) return false;
+    }
+    return true;
+}
+
+async function showStockStatement() {
+    const container = document.getElementById('page-stock-statement');
+    document.getElementById('topActions').innerHTML = '';
+
+    if (_ssState.preset === 'this_month' && !_ssState.from && !_ssState.to) {
+        const r = getDatePreset('this_month');
+        _ssState.from = r.from;
+        _ssState.to = r.to;
+    }
+
+    const [ledgerRes, valRes] = await Promise.all([
+        window.api.getStockLedger({ from_date: _ssState.from, to_date: _ssState.to }),
+        window.api.getStockStatement({ category: _ssState.category || undefined, search: _ssState.search || undefined })
+    ]);
+    const data = valRes.success ? valRes.data : { items: [], total_value: 0, total_products: 0, total_quantity: 0, categories: [] };
+    const ledger = (ledgerRes.success && ledgerRes.data) ? ledgerRes.data : { products: [] };
+    _finLastData.stockStatement = data;
+    _finLastData.stockLedger = ledger;
+
+    const products = (ledger.products || []).filter(_ssMatches);
+    const periodLabel = `${_ssState.from ? formatDate(_ssState.from) : 'Start'} → ${_ssState.to ? formatDate(_ssState.to) : 'Today'}`;
+
+    // Period totals (mixed units — informational, same basis as the old total).
+    const tot = products.reduce((s, p) => {
+        const b = p.summary || {};
+        s.opening += b.opening || 0; s.in += b.total_in || 0; s.out += b.total_out || 0; s.closing += p.closing_qty || 0;
+        return s;
+    }, { opening: 0, in: 0, out: 0, closing: 0 });
+
+    let viewHtml = '';
+    if (_ssState.view === 'summary') {
+        viewHtml = `
+        <div class="summary-cards" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
+            <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">🌤 Opening (${escapeHtml(periodLabel)})</span><span class="value" style="font-size:20px">${formatNumber(round2ui(tot.opening))}</span></div>
+            <div class="summary-card card-success" style="margin:0;padding:12px"><span class="label">⬇ Total IN</span><span class="value" style="font-size:20px">${formatNumber(round2ui(tot.in))}</span></div>
+            <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">⬆ Total OUT</span><span class="value" style="font-size:20px">${formatNumber(round2ui(tot.out))}</span></div>
+            <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">📦 Closing</span><span class="value" style="font-size:20px">${formatNumber(round2ui(tot.closing))}</span></div>
+            <div class="summary-card card-warning" style="margin:0;padding:12px"><span class="label">💰 Stock Value (lot FIFO)</span><span class="value" style="font-size:20px">${data.lot_valuation_available ? formatCurrency(data.total_lot_value) : '—'}</span></div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th>Product</th><th>Unit</th>
+                    <th class="text-right">Opening</th>
+                    <th class="text-right">Collection/Purchase</th>
+                    <th class="text-right">Production IN</th>
+                    <th class="text-right">Production Consumption</th>
+                    <th class="text-right">Sales/Issues</th>
+                    <th class="text-right">Returns</th>
+                    <th class="text-right">Wastage</th>
+                    <th class="text-right">Adjustment/Other</th>
+                    <th class="text-right">Closing</th>
+                </tr></thead>
+                <tbody>
+                ${products.map(p => {
+                    const b = p.summary || {};
+                    const cell = (v) => `<td class="text-right">${v ? formatNumber(v) : '0'}</td>`;
+                    return `<tr>
+                        <td><strong>${escapeHtml(p.product_name)}</strong> <span style="color:var(--text-light);font-size:11px">${escapeHtml(p.category || '')}</span></td>
+                        <td>${escapeHtml(p.unit || '')}</td>
+                        ${cell(b.opening)}
+                        ${cell(round2ui((b.collection_in || 0) + (b.purchase_in || 0)))}
+                        ${cell(b.production_in)}
+                        ${cell(b.production_out)}
+                        ${cell(b.sales_out)}
+                        ${cell(round2ui((b.returns_in || 0) + (b.returns_out || 0)))}
+                        ${cell(b.wastage_out)}
+                        ${cell(round2ui((b.adjustment_in || 0) + (b.adjustment_out || 0) + (b.other_in || 0) + (b.other_out || 0)))}
+                        <td class="text-right" style="font-weight:700">${formatNumber(p.closing_qty)}</td>
+                    </tr>`;
+                }).join('') || '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No products</td></tr>'}
+                </tbody>
+            </table>
+        </div>`;
+    } else if (_ssState.view === 'detail') {
+        const allRows = [];
+        for (const p of products) {
+            if (_ssState.product_id && Number(_ssState.product_id) !== p.product_id) continue;
+            for (const r of (p.rows || [])) allRows.push({ p, r });
+        }
+        allRows.sort((a, b) => String(`${a.r.date} ${a.r.time || ''}`).localeCompare(`${b.r.date} ${b.r.time || ''}`));
+        const capped = allRows.slice(0, 1500);
+        viewHtml = `
+        <div class="filter-bar">
+            <div class="form-group">
+                <label>Product</label>
+                <select class="form-control" id="ssProduct" onchange="_ssState.product_id=this.value;showStockStatement()">
+                    <option value="">All products</option>
+                    ${products.map(p => `<option value="${p.product_id}" ${String(_ssState.product_id) === String(p.product_id) ? 'selected' : ''}>${escapeHtml(p.product_name)}</option>`).join('')}
+                </select>
+            </div>
+            <div class="form-group" style="flex:1"><label>&nbsp;</label><div style="font-size:12px;color:var(--text-light);padding-top:6px">Ordered by Date + Time + entry sequence. ${allRows.length > capped.length ? `Showing first ${capped.length} of ${allRows.length} rows — narrow the product or period.` : `${allRows.length} row(s).`}</div></div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th>Date</th><th>Time</th><th>Reference</th><th>Product</th><th>Movement</th>
+                    <th class="text-right">IN</th><th class="text-right">OUT</th><th class="text-right">Balance</th>
+                    <th class="text-right">Unit Cost</th><th class="text-right">Value</th>
+                </tr></thead>
+                <tbody>
+                ${capped.map(({ p, r }) => `<tr>
+                    <td>${formatDate(r.date)}</td>
+                    <td style="font-size:11px;color:var(--text-light)">${escapeHtml(r.time || '—')}</td>
+                    <td style="font-size:11px" title="${escapeHtml(r.notes || '')}">${
+                        (r.reference_type === 'production' && r.reference_id)
+                            ? `<a href="#" onclick="event.preventDefault();viewProductionBatch(${r.reference_id})" title="Open production batch">${escapeHtml(r.reference || 'Batch')} 🧪</a>`
+                            : escapeHtml(String(r.reference || (r.reference_type ? `${r.reference_type}#${r.reference_id}` : '')) || '—')
+                    }</td>
+                    <td>${escapeHtml(p.product_name)}</td>
+                    <td><span class="badge ${r.inward_qty > 0 ? 'badge-success' : r.outward_qty > 0 ? 'badge-danger' : 'badge-secondary'}">${escapeHtml(r.label || r.type)}</span></td>
+                    <td class="text-right">${r.inward_qty ? formatNumber(r.inward_qty) : '—'}</td>
+                    <td class="text-right">${r.outward_qty ? formatNumber(r.outward_qty) : '—'}</td>
+                    <td class="text-right" style="font-weight:600">${formatNumber(r.balance)}</td>
+                    <td class="text-right">${formatCurrency(r.unit_cost || 0)}</td>
+                    <td class="text-right">${r.value ? formatCurrency(r.value) : '—'}</td>
+                </tr>`).join('') || '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No movements in this period</td></tr>'}
+                </tbody>
+            </table>
+        </div>`;
+    } else {
+        // Valuation view — the original current-stock table (unchanged engine).
+        viewHtml = `
         <div class="summary-cards" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">📦 Products</span><span class="value" style="font-size:20px">${data.total_products}</span></div>
             <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">📏 Total Quantity</span><span class="value" style="font-size:20px">${formatNumber(data.total_quantity)}</span></div>
@@ -603,21 +772,28 @@ async function showStockStatement() {
                     <td></td>
                 </tr></tfoot>
             </table>
+        </div>`;
+    }
+
+    container.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <h2 style="margin:0">📋 Stock Statement</h2>
+            <div class="btn-group">
+                <button class="btn btn-info btn-sm" onclick="printStockStatementReport()">🖨 Print</button>
+                <button class="btn btn-primary btn-sm" onclick="exportStockStatementPDF()">📄 PDF</button>
+            </div>
         </div>
+        ${_ssFilterBar(data)}
+        ${viewHtml}
     `;
-    _finLastData.stockStatement = data;
 }
 
 async function applyStockStatement() {
-    const category = document.getElementById('ssCategory')?.value || '';
-    const search = document.getElementById('ssSearch')?.value || '';
-    const result = await window.api.getStockStatement({ category: category || undefined, search: search || undefined });
-    if (result.success) {
-        _finLastData.stockStatement = result.data;
-        showStockStatement();
-    } else {
-        showToast(result.error, 'error');
-    }
+    _ssState.category = document.getElementById('ssCategory')?.value || '';
+    _ssState.search = document.getElementById('ssSearch')?.value || '';
+    const valRes = await window.api.getStockStatement({ category: _ssState.category || undefined, search: _ssState.search || undefined });
+    if (valRes.success) _finLastData.stockStatement = valRes.data;
+    showStockStatement();
 }
 
 async function printStockStatementReport() {

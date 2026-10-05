@@ -73,6 +73,21 @@ async function renderProduction() {
             </div>
         </div>
 
+        ${!prodLotMode ? `
+        <div class="card" style="margin-bottom:16px;border-left:4px solid var(--warning, #f59e0b)">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                <div style="flex:1;min-width:280px">
+                    <strong>⚠ FIFO lot costing is not active</strong>
+                    <div style="font-size:12px;color:var(--text-light);margin-top:4px">
+                        Batches post through the legacy path, so lot COGS, Gross Margin and lot valuation are unavailable.
+                        Activating records <em>Opening Stock lots</em> at master/standard rates dated <strong>${formatDate(today())}</strong>
+                        and sets the <em>lot-tracking cutover</em>. Historical batches are never rebuilt — no invented production.
+                    </div>
+                </div>
+                <button class="btn btn-warning btn-sm" onclick="activateLotCosting()">🔓 Activate lot costing from ${formatDate(today())}</button>
+            </div>
+        </div>` : ''}
+
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px">
                 <span class="label">Total Batches</span>
@@ -152,6 +167,31 @@ function applyProdFilter() {
     prodFilter.to_date = document.getElementById('prodTo')?.value || '';
     prodFilter.search = document.getElementById('prodType')?.value || '';
     renderProduction();
+}
+
+// ── Activation of the EXISTING lot engine (cutover + opening lots) ──
+// Requirement: use the existing opening-stock/cutover mechanism; never invent
+// historical production. This only creates opening lots for stock that exists
+// NOW and flips the cutover so future batches consume real FIFO lots.
+async function activateLotCosting() {
+    try {
+        const d = today();
+        const stmt = await window.api.getStockStatement({});
+        const items = (stmt && stmt.success && stmt.data && stmt.data.items) || [];
+        const unit_costs = items
+            .filter(i => (Number(i.current_stock) || 0) > 0)
+            .map(i => ({ product_id: i.id, unit_cost: Number(i.rate) || 0 }));
+        const res = await window.api.createOpeningStockLots({ date: d, unit_costs });
+        if (res && res.success === false) {
+            showToast(res.error || 'Activation failed', 'error');
+            return;
+        }
+        prodLotMode = null; // re-read cutover on next render
+        showToast(`Lot costing activated — opening lots for ${unit_costs.length} product(s), cutover ${formatDate(d)}.`, 'success');
+        renderProduction();
+    } catch (e) {
+        showToast(String((e && e.message) || e), 'error');
+    }
 }
 
 function resetProdFilter() {
@@ -855,14 +895,49 @@ async function showBatchMarginPanel() {
     `);
 }
 
+let _drRecState = { from: '', to: '', preset: 'this_month' };
+function drRecPreset(p) {
+    const r = getDatePreset(p);
+    _drRecState.preset = p;
+    _drRecState.from = r.from;
+    _drRecState.to = r.to;
+    showDailyReconciliationPanel();
+}
+function drRecApply() {
+    _drRecState.preset = 'custom';
+    _drRecState.from = document.getElementById('drRecFrom')?.value || '';
+    _drRecState.to = document.getElementById('drRecTo')?.value || '';
+    showDailyReconciliationPanel();
+}
+
 async function showDailyReconciliationPanel() {
-    const preset = getDatePreset('this_month');
-    const r = await window.api.getDailyReconciliation({ from_date: preset.from, to_date: preset.to });
+    if (!_drRecState.from && !_drRecState.to) {
+        const p = getDatePreset(_drRecState.preset === 'custom' ? 'this_month' : _drRecState.preset);
+        _drRecState.from = p.from;
+        _drRecState.to = p.to;
+    }
+    const r = await window.api.getDailyReconciliation({ from_date: _drRecState.from, to_date: _drRecState.to });
     const d = (r && r.success !== false) ? (r.data || r) : { finished_goods: [], raw_milk: [] };
     const fg = d.finished_goods || [], rm = d.raw_milk || [];
+    const mc = d.milk_collections || { morning: 0, evening: 0, total_liters: 0, total_amount: 0 };
+    const pu = d.purchases || { count: 0, total: 0 };
     showModal(`
         <div class="modal-header"><h2>🧾 Daily Stock Reconciliation</h2><button class="close-btn" onclick="closeModal()">&times;</button></div>
         <div class="modal-body" style="max-height:75vh;overflow-y:auto">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+                <span style="font-size:12px;color:var(--text-light);font-weight:600">Period:</span>
+                ${['today', 'yesterday', 'this_week', 'this_month', 'last_month', 'this_year', 'all']
+                    .map(p => `<button type="button" class="btn btn-sm ${_drRecState.preset === p ? 'btn-primary' : 'btn-secondary'}" onclick="drRecPreset('${p}')">${DATE_PRESET_LABELS[p] || p}</button>`).join('')}
+                <input type="date" class="form-control" id="drRecFrom" value="${_drRecState.from || ''}" style="width:auto">
+                <input type="date" class="form-control" id="drRecTo" value="${_drRecState.to || ''}" style="width:auto">
+                <button type="button" class="btn btn-primary btn-sm" onclick="drRecApply()">Apply</button>
+            </div>
+            <div style="display:flex;gap:18px;flex-wrap:wrap;padding:8px 12px;background:var(--bg);border-radius:6px;font-size:13px;margin-bottom:12px">
+                <span>🌅 <strong>Morning collection:</strong> ${formatNumber(mc.morning)} L</span>
+                <span>🌙 <strong>Evening collection:</strong> ${formatNumber(mc.evening)} L</span>
+                <span>🥛 <strong>Total:</strong> ${formatNumber(mc.total_liters)} L (${formatCurrency(mc.total_amount)})</span>
+                <span>🧾 <strong>Purchases:</strong> ${pu.count} bill(s) — ${formatCurrency(pu.total)}</span>
+            </div>
             <h4 style="font-size:13px;color:var(--text-light)">Finished Goods</h4>
             ${fg.length === 0 ? '<div style="color:var(--text-light);font-size:13px">No finished-goods movement in this period</div>' : `
             <div class="table-container"><table>

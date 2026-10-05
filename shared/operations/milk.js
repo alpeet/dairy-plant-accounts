@@ -128,10 +128,13 @@ function saveMilkCollection(db, data) {
             : (chart.fixed_rate != null ? chart.fixed_rate : (Number(fixed_rate) || 0));
         const effOverrideReason = String(rate_override_reason || '').trim();
         // Amount is derived when the caller did not send one — the user never
-        // has to compute the payable by hand (spec Phase 4).
+        // has to compute the payable by hand (spec Phase 4). Either way it is
+        // stored at currency precision (2 dp): sub-paisa amounts were the root
+        // cause of the ledger-vs-summary Rs 0.05 reconciliation difference.
         const qty = Number(quantity_liters) || 0;
-        const effAmount = (amount === undefined || amount === null || amount === '')
-            ? Math.round(effRate * qty * 100) / 100 : (Number(amount) || 0);
+        const rawAmount = (amount === undefined || amount === null || amount === '')
+            ? effRate * qty : (Number(amount) || 0);
+        const effAmount = Math.round((Number(rawAmount) || 0) * 100) / 100;
 
         if (id) {
             // ── Revert old collection ──

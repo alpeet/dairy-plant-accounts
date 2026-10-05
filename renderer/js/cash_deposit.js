@@ -96,14 +96,14 @@ async function renderCashDeposit() {
             </div>
         </div>
 
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+            <span style="font-size:12px;color:var(--text-light);font-weight:600">Quick range:</span>
+            ${datePresetBar('cdFrom', 'cdTo', 'refreshCashDeposits', ['today', 'yesterday', 'last_7', 'last_30', 'last_90', 'this_month', 'last_month', 'this_year', 'all'])}
+        </div>
         <div class="filter-bar">
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="cdFrom" value="${preset.from}"></div>
             <div class="form-group"><label>To</label><input type="date" class="form-control" id="cdTo" value="${preset.to}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshCashDeposits()">Refresh</button></div>
-            <div class="form-group"><label>&nbsp;</label>
-                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('today');document.getElementById('cdFrom').value=p.from;document.getElementById('cdTo').value=p.to;refreshCashDeposits()">Today</button>
-                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('this_month');document.getElementById('cdFrom').value=p.from;document.getElementById('cdTo').value=p.to;refreshCashDeposits()">This Month</button>
-            </div>
         </div>
         ${depositPrelude}
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
@@ -142,7 +142,7 @@ async function renderCashDeposit() {
                             <td class="text-right" style="font-weight:600;color:var(--accent)">${formatCurrency(d.amount)}</td>
                             <td><span class="badge badge-info">${escapeHtml(d.cash_source || '-')}</span></td>
                             <td>${escapeHtml(d.deposit_mode || '-')}</td>
-                            <td style="font-size:11px">${escapeHtml(d.reference_no || '-')}</td>
+                            <td style="font-size:11px">${escapeHtml(d.reference_no || '-')}${d.bank_txn_id ? ` <span title="Linked to bank statement transaction #${d.bank_txn_id}">🔗</span>` : ''}</td>
                             <td>${escapeHtml(d.deposited_by || '-')}</td>
                             <td class="actions">
                                 <button class="btn btn-info btn-sm" onclick="editCashDeposit(${d.id})">✏️</button>
@@ -185,6 +185,9 @@ async function refreshCashDeposits() {
         amount: 0, cash_source: 'mixed', deposit_mode: 'cash', 
         reference_no: '', remarks: '', deposited_by: '' 
     };
+    // Persistent statement link: carried from the bank row ("➕ To Register")
+    // or from the row being edited; null for a brand-new manual deposit.
+    _depositBankTxnId = (existingData && existingData.bank_txn_id) || null;
 
     showModal(`
         <div class="modal-header">
@@ -250,6 +253,7 @@ async function refreshCashDeposits() {
 }
 
 let _depositSaving = false;
+let _depositBankTxnId = null;
 /**
  * Prefill a new register record from a bank-statement deposit row.
  */
@@ -263,7 +267,8 @@ function copyBankDepositToRegister(idx) {
         cash_source: 'mixed', deposit_mode: 'cash',
         reference_no: r.reference_no || '',
         remarks: `From bank statement: ${r.description || r.counterparty_name || ''}`.trim(),
-        deposited_by: ''
+        deposited_by: '',
+        bank_txn_id: r.id || null
     });
 }
 
@@ -286,7 +291,8 @@ async function saveCashDeposit(id) {
         deposit_mode: document.getElementById('cdMode')?.value || 'cash',
         reference_no: document.getElementById('cdRefNo')?.value || '',
         remarks: document.getElementById('cdRemarks')?.value || '',
-        deposited_by: document.getElementById('cdDepositedBy')?.value || ''
+        deposited_by: document.getElementById('cdDepositedBy')?.value || '',
+        bank_txn_id: _depositBankTxnId
     };
 
     if (!data.date) { showToast('Date is required', 'error'); return; }
