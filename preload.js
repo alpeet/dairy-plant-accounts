@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('api', {
     getProduct: (id) => ipcRenderer.invoke('db:products:get', id),
     saveProduct: (product) => ipcRenderer.invoke('db:products:save', product),
     deleteProduct: (id) => ipcRenderer.invoke('db:products:delete', id),
+    getProductRateHistory: (opts) => ipcRenderer.invoke('db:products:rate-history', opts),
 
     // Stock
     getStockCurrent: (opts) => ipcRenderer.invoke('db:stock:current', opts),
@@ -116,6 +117,8 @@ contextBridge.exposeInMainWorld('api', {
     getSalarySummary: (opts) => ipcRenderer.invoke('db:salary:summary', opts),
     listEmployees: (opts) => ipcRenderer.invoke('db:salary:employees', opts),
     saveEmployee: (data) => ipcRenderer.invoke('db:salary:employees-save', data),
+    findDuplicateEmployees: () => ipcRenderer.invoke('db:salary:employees-dupes'),
+    mergeEmployees: (params) => ipcRenderer.invoke('db:salary:employees-merge', params),
     deleteEmployee: (id) => ipcRenderer.invoke('db:salary:employees-delete', id),
 
     // Vehicle Expenses

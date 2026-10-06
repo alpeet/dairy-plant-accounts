@@ -874,6 +874,171 @@ function runMigrations(db) {
         console.log('Migration 27 (cash deposit ↔ bank link) skipped:', e27.message);
     }
 
+    // Migration 28: advance normalization (idempotent, runs every startup).
+    // Backfills transaction_type on advance payments, links each advance
+    // payment to its ledger debit row, tags leftover advance receipts and
+    // reclassifies "advance returned" receipts — so the Advance Recovery
+    // Register, P&L and cash/bank reports all agree with the Excel history.
+    // Lazy require avoids a db↔accounting circular import at load time.
+    try {
+        const { normalizeAdvances } = require('./operations/accounting');
+        const advReport = normalizeAdvances(db);
+        if (Object.values(advReport).some(v => v > 0)) {
+            console.log('Migration 28 (advance normalization):', JSON.stringify(advReport));
+        }
+    } catch (e28) {
+        console.log('Migration 28 (advance normalization) skipped:', e28.message);
+    }
+
+    // Migration 29: D13 (late finding — docs/AUDIT-NORMALIZATION-2026-10.md)
+    // Void the Collection-sheet "PETTY CASH" mirror payments.
+    // The Collection sheet logs cash handed from the collection counter to the
+    // petty box; the same money is already counted through the PETTY CASH
+    // register (petty_cash expense rows + payments type='advance'). Keeping
+    // both legs double-counted cash out by Rs 301,420 (69 payments). The
+    // pseudo-party's 71 ledger rows are all zero-value placeholders, so removing
+    // them changes no balance — verified before/after on a database copy.
+    // The importer now skips those rows (importCollections), so this runs once.
+    try {
+        const pettyIds = db.prepare(
+            "SELECT id FROM parties WHERE UPPER(TRIM(name)) = 'PETTY CASH'"
+        ).all().map(r => r.id);
+        if (pettyIds.length) {
+            const ph = pettyIds.map(() => '?').join(',');
+            const payRows = db.prepare(
+                `SELECT id, amount FROM payments WHERE type = 'payment' AND party_id IN (${ph})`
+            ).all(...pettyIds);
+            // Only zero-value placeholder rows are removed: a real ledger row
+            // (debit/credit != 0) would change a party balance and must be
+            // reviewed by hand, never silently dropped.
+            const ledRows = db.prepare(
+                `SELECT id FROM ledger_entries
+                  WHERE reference_type = 'payment_received' AND party_id IN (${ph})
+                    AND debit = 0 AND credit = 0`
+            ).all(...pettyIds);
+            if (payRows.length || ledRows.length) {
+                const paySum = payRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                db.transaction(() => {
+                    const delPay = db.prepare('DELETE FROM payments WHERE id = ?');
+                    const delLed = db.prepare('DELETE FROM ledger_entries WHERE id = ?');
+                    for (const r of payRows) delPay.run(r.id);
+                    for (const r of ledRows) delLed.run(r.id);
+                })();
+                console.log(`Migration 29 (petty mirror void): removed ${payRows.length} payments (Rs ${paySum.toFixed(2)}) + ${ledRows.length} zero-value ledger rows for party 'PETTY CASH'`);
+            }
+        }
+    } catch (e29) {
+        console.log('Migration 29 (petty mirror void) skipped:', e29.message);
+    }
+
+    // Migration 30: D8 — petty expense head mis-mapped.
+    // Imported expense vouchers carried the meaningless head 'Payment' with the
+    // real detail in description. Re-head those rows to their description so
+    // grouping/search works, and so future imports (which write head =
+    // description, fallback 'Payment') dedupe against them exactly.
+    // Rows with a blank description keep 'Payment' (the import fallback).
+    try {
+        const rehead = db.prepare(`
+            UPDATE petty_cash SET expense_head = TRIM(description)
+             WHERE expense_head = 'Payment'
+               AND COALESCE(TRIM(description), '') <> ''
+        `).run();
+        if (rehead.changes > 0) {
+            console.log(`Migration 30 (petty expense heads): ${rehead.changes} voucher(s) re-headed to their description`);
+        }
+    } catch (e30) {
+        console.log('Migration 30 (petty expense heads) skipped:', e30.message);
+    }
+
+    // Migration 31: employees.updated_at — saveEmployee's UPDATE and the merge
+    // path write it, but schema.sql/Migration 20 created the table without the
+    // column, so editing an employee threw "no such column: updated_at" (D6).
+    // ALTER cannot use a non-constant default, so new rows fall back to the
+    // column default in the CREATE and to datetime('now') in code.
+    try {
+        const empCols = db.prepare('PRAGMA table_info(employees)').all().map(c => c.name);
+        if (empCols.length && !empCols.includes('updated_at')) {
+            db.exec('ALTER TABLE employees ADD COLUMN updated_at TEXT DEFAULT NULL');
+            console.log('Migration 31 (employees.updated_at): column added');
+        }
+    } catch (e31) {
+        console.log('Migration 31 (employees.updated_at) skipped:', e31.message);
+    }
+
+    // Migration 32: product master normalization (D7/D9, req 10/11/12/33/34/45).
+    // Additive only: code, archive flag, four type flags, and the rate-history
+    // table. Existing products keep full behaviour (active=1, all flags on).
+    try {
+        const pCols = db.prepare('PRAGMA table_info(products)').all().map(c => c.name);
+        const added = [];
+        if (pCols.length) {
+            const add = (col, ddl) => { if (!pCols.includes(col)) { db.exec(`ALTER TABLE products ADD COLUMN ${ddl}`); added.push(col); } };
+            add('code', "code TEXT DEFAULT ''");
+            add('active', 'active INTEGER DEFAULT 1');
+            add('is_stocked', 'is_stocked INTEGER DEFAULT 1');
+            add('is_saleable', 'is_saleable INTEGER DEFAULT 1');
+            add('is_purchaseable', 'is_purchaseable INTEGER DEFAULT 1');
+            add('is_produced', 'is_produced INTEGER DEFAULT 1');
+        }
+        db.exec(`CREATE TABLE IF NOT EXISTS product_rate_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            old_rate REAL DEFAULT 0,
+            new_rate REAL DEFAULT 0,
+            effective_from TEXT DEFAULT '',
+            reason TEXT DEFAULT '',
+            changed_by INTEGER DEFAULT NULL,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )`);
+        if (added.length) console.log(`Migration 32 (product master): added ${added.join(', ')} + product_rate_history`);
+    } catch (e32) {
+        console.log('Migration 32 (product master) skipped:', e32.message);
+    }
+
+    // Migration 33: payment ↔ bank link (D10, req 6/7/30/31).
+    // One transaction ID across payment row ↔ bank statement row ↔ ledger entry.
+    // Additive only; existing payments keep working with NULL links.
+    try {
+        const payCols = db.prepare('PRAGMA table_info(payments)').all().map(c => c.name);
+        const added = [];
+        const addPay = (col, ddl) => { if (!payCols.includes(col)) { db.exec(`ALTER TABLE payments ADD COLUMN ${ddl}`); added.push(col); } };
+        addPay('bank_txn_id', 'bank_txn_id INTEGER DEFAULT NULL');
+        addPay('bank_account', "bank_account TEXT DEFAULT ''");
+        addPay('bank_reference', "bank_reference TEXT DEFAULT ''");
+
+        // Backfill: stamp non-cash payments whose money already sits on the bank
+        // statement (same party, direction-aware amount, ±5 days, unique match).
+        // The statement row is counted by the cash/bank position, so the payment
+        // must be linkable to it — without the link both sides counted the money.
+        let stamped = 0;
+        try {
+            const NONCASH = "('bank','upi','cheque','qr/bank','qr','online','bank transfer')";
+            const pending = db.prepare(`
+                SELECT id, party_id, date, type, amount FROM payments
+                 WHERE bank_txn_id IS NULL
+                   AND LOWER(COALESCE(mode,'cash')) IN ${NONCASH}
+            `).all();
+            for (const p of pending) {
+                const amtCol = p.type === 'receipt' ? 'credit' : 'debit';
+                const rows = db.prepare(`
+                    SELECT id FROM bank_transactions
+                     WHERE party_id = ? AND ABS(${amtCol} - ?) < 0.005
+                       AND date BETWEEN date(?, '-5 days') AND date(?, '+5 days')
+                `).all(p.party_id, p.amount, p.date, p.date);
+                if (rows.length === 1) {
+                    db.prepare('UPDATE payments SET bank_txn_id = ? WHERE id = ? AND bank_txn_id IS NULL')
+                        .run(rows[0].id, p.id);
+                    stamped++;
+                }
+            }
+        } catch (eBackfill) { console.log('Migration 33 backfill note:', eBackfill.message); }
+        if (added.length || stamped) {
+            console.log(`Migration 33 (payment↔bank link): added ${added.join(', ') || 'nothing'}; backfilled ${stamped} payment↔bank links`);
+        }
+    } catch (e33) {
+        console.log('Migration 33 (payment↔bank link) skipped:', e33.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

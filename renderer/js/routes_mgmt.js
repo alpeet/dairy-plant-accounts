@@ -192,8 +192,8 @@ async function deleteRouteEntry(id) {
 // Route Summary Report
 // ============================================================
 async function showRouteSummary() {
-    const preset = getDatePreset('this_month');
-    const result = await window.api.getRouteSummary({ from_date: preset.from, to_date: preset.to });
+    const filt = pageFilterInit('route_summary');
+    const result = await window.api.getRouteSummary({ from_date: filt.from, to_date: filt.to });
     const data = result.success ? result.data : [];
     
     showModal(`
@@ -205,11 +205,11 @@ async function showRouteSummary() {
             <div class="filter-bar">
                 <div class="form-group">
                     <label>From</label>
-                    <input type="date" class="form-control" id="rsFrom" value="${preset.from}">
+                    <input type="date" class="form-control" id="rsFrom" value="${filt.from || ''}">
                 </div>
                 <div class="form-group">
                     <label>To</label>
-                    <input type="date" class="form-control" id="rsTo" value="${preset.to}">
+                    <input type="date" class="form-control" id="rsTo" value="${filt.to || ''}">
                 </div>
                 <div class="form-group">
                     <label>&nbsp;</label>
@@ -274,11 +274,11 @@ async function showRouteSummary() {
 }
 
 async function refreshRouteSummary() {
-    const from = document.getElementById('rsFrom')?.value || '';
-    const to = document.getElementById('rsTo')?.value || '';
-    const result = await window.api.getRouteSummary({ from_date: from, to_date: to });
-    if (result.success) window._lastRouteSummary = result.data;
-    showRouteSummary();
+    pageFilterSet('route_summary', {
+        from: document.getElementById('rsFrom')?.value || '',
+        to: document.getElementById('rsTo')?.value || ''
+    });
+    await showRouteSummary();
 }
 
 async function printRouteSummary() {

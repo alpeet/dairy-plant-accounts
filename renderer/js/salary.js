@@ -8,12 +8,17 @@ async function renderSalary(monthParam) {
     const container = document.getElementById('page-salary');
     document.getElementById('topActions').innerHTML = `
         <button class="btn btn-success btn-sm" onclick="showAddSalary()">+ New Salary Record</button>
+        <button class="btn btn-info btn-sm" onclick="showEmployeesMaster()">👥 Employees</button>
     `;
 
+    // Stored filter (audit req 41): month + search survive re-renders; a
+    // refresh never silently drops the employee search or resets the month.
     const bsToday = today();
-    const defaultMonth = monthParam !== undefined ? monthParam : bsToday.substring(0, 7);
+    if (monthParam !== undefined) pageFilterSet('salary', { month: monthParam });
+    const filt = pageFilterInit('salary', { month: bsToday.substring(0, 7) });
+    const defaultMonth = filt.month;
 
-    const result = await window.api.getSalaryList({ month: defaultMonth });
+    const result = await window.api.getSalaryList({ month: defaultMonth, employee_name: filt.search || undefined });
     const records = result.success ? result.data : [];
 
     const summary = await window.api.getSalarySummary({ month: defaultMonth });
@@ -45,7 +50,7 @@ async function renderSalary(monthParam) {
             </div>
             <div class="form-group">
                 <label>Employee</label>
-                <input type="text" class="form-control" id="salSearch" placeholder="Search employee...">
+                <input type="text" class="form-control" id="salSearch" placeholder="Search employee..." value="${escapeHtml(filt.search || '')}">
             </div>
             <div class="form-group">
                 <label>&nbsp;</label>
@@ -113,12 +118,11 @@ async function renderSalary(monthParam) {
 }
 
 async function refreshSalary() {
-    const month = document.getElementById('salMonth')?.value || '';
-    const search = document.getElementById('salSearch')?.value || '';
-    const result = await window.api.getSalaryList({ month, employee_name: search || undefined });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastSalary = result.data;
-    renderSalary(month);
+    pageFilterSet('salary', {
+        month: document.getElementById('salMonth')?.value || '',
+        search: document.getElementById('salSearch')?.value || ''
+    });
+    await renderSalary();
 }
 
 function showAddSalary(existingData) {
@@ -513,6 +517,227 @@ function numberToWords(num) {
     return words;
 }
 
+// ════════════════════════════════════════════════════════════
+// EMPLOYEES MASTER (D6) — list / add / edit / deactivate / merge
+// ════════════════════════════════════════════════════════════
+
+/** The Salary screen's 👥 Employees button opens the master page. */
+function showEmployeesMaster() {
+    navigateTo('employees');
+}
+
+async function renderEmployeesMaster() {
+    const container = document.getElementById('page-employees');
+    document.getElementById('topActions').innerHTML = `
+        <button class="btn btn-success btn-sm" onclick="showEmployeeForm()">+ New Employee</button>
+        <button class="btn btn-info btn-sm" onclick="loadEmployeeDupes()">🔍 Find Duplicates</button>
+    `;
+
+    const res = await window.api.listEmployees({});
+    const employees = res.success ? res.data : [];
+    const active = employees.filter(e => e.active).length;
+    const records = employees.reduce((s, e) => s + (Number(e.record_count) || 0), 0);
+
+    container.innerHTML = `
+        <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr 1fr">
+            <div class="summary-card card-primary" style="margin:0;padding:12px">
+                <span class="label">Employees</span>
+                <span class="value" style="font-size:22px">${active}</span>
+            </div>
+            <div class="summary-card card-secondary" style="margin:0;padding:12px">
+                <span class="label">Deactivated</span>
+                <span class="value" style="font-size:22px">${employees.length - active}</span>
+            </div>
+            <div class="summary-card card-success" style="margin:0;padding:12px">
+                <span class="label">Salary Records Linked</span>
+                <span class="value" style="font-size:22px">${records}</span>
+            </div>
+            <div class="summary-card card-warning" style="margin:0;padding:12px">
+                <span class="label">Duplicate Suspects</span>
+                <span class="value" id="empDupCount" style="font-size:22px">…</span>
+            </div>
+        </div>
+        <div id="empDupes"></div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Code</th><th>Name</th><th>Position</th><th>Phone</th>
+                        <th class="text-right">Monthly Salary</th>
+                        <th class="text-right">Salary Records</th>
+                        <th>Status</th><th class="actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${employees.map(e => `
+                        <tr style="${e.active ? '' : 'opacity:0.55'}">
+                            <td>${escapeHtml(e.code || '-')}</td>
+                            <td><strong>${escapeHtml(e.name)}</strong></td>
+                            <td>${escapeHtml(e.position || '-')}</td>
+                            <td>${escapeHtml(e.phone || '-')}</td>
+                            <td class="text-right">${formatCurrency(e.monthly_salary || 0)}</td>
+                            <td class="text-right">${Number(e.record_count) || 0}</td>
+                            <td>${e.active ? '<span class="badge badge-paid">Active</span>' : '<span class="badge badge-unpaid">Inactive</span>'}</td>
+                            <td class="actions">
+                                <button class="btn btn-info btn-sm" onclick='showEmployeeForm(window._lastEmployees[${employees.indexOf(e)}])' title="Edit">✏️</button>
+                                <button class="btn ${e.active ? 'btn-warning' : 'btn-success'} btn-sm"
+                                    onclick="toggleEmployee(${e.id}, ${e.active ? 0 : 1})"
+                                    title="${e.active ? 'Deactivate' : 'Re-activate'}">${e.active ? '⏸' : '▶️'}</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                    ${employees.length === 0 ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No employees yet — add the first one.</td></tr>' : ''}
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    window._lastEmployees = employees;
+    loadEmployeeDupes();
+}
+
+/** Fetch + render duplicate suspects / unlinked salary names. */
+async function loadEmployeeDupes() {
+    const box = document.getElementById('empDupes');
+    const counter = document.getElementById('empDupCount');
+    try {
+        const res = await window.api.findDuplicateEmployees();
+        if (!res.success) { if (box) box.innerHTML = ''; return; }
+        const { pairs = [], orphans = [] } = res.data || {};
+        window._lastEmployeeDupes = pairs;
+        if (counter) counter.textContent = pairs.length + orphans.length;
+        if (!box) return;
+        if (!pairs.length && !orphans.length) {
+            box.innerHTML = `<div style="background:var(--success,#27ae60);color:#fff;border-radius:6px;padding:8px 14px;margin-bottom:12px;font-size:13px">✅ No duplicate employees and no unlinked salary names.</div>`;
+            return;
+        }
+        box.innerHTML = `
+            <div style="background:#fff3cd;border:1px solid #ffe08a;border-radius:6px;padding:10px 14px;margin-bottom:12px">
+                ${pairs.map(p => `
+                    <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+                        <span style="font-size:13px">🧬 <strong>${escapeHtml(p.a.name)}</strong> ↔ <strong>${escapeHtml(p.b.name)}</strong> — ${Math.round(p.score * 100)}% similar</span>
+                        <button class="btn btn-primary btn-sm" onclick="mergeEmployeePair(${p.a.id}, ${p.b.id})">Merge → keep ${escapeHtml(p.b.name)}</button>
+                    </div>`).join('')}
+                ${orphans.map(o => `
+                    <div style="font-size:13px;padding:3px 0">⚠️ "${escapeHtml(o.name)}" — ${o.records} salary record(s) but no matching employee. Edit the record or add the employee.</div>`).join('')}
+            </div>`;
+    } catch (e) { if (box) box.innerHTML = ''; }
+}
+
+async function mergeEmployeePair(fromId, toId) {
+    const pairs = window._lastEmployeeDupes || [];
+    const pair = pairs.find(p => p.a.id === fromId && p.b.id === toId);
+    const toName = pair ? pair.b.name : 'the canonical employee';
+    const confirmed = await confirmAction(`Merge into "${toName}"? The duplicate's salary records move to ${toName}, the duplicate row is deactivated (history is kept).`);
+    if (!confirmed) return;
+    const res = await window.api.mergeEmployees({ from_id: fromId, to_id: toId });
+    if (res.success) {
+        showToast(`Merged into ${toName} (${res.data.moved_records} record(s) moved)`, 'success');
+        renderEmployeesMaster();
+    } else {
+        showToast(res.error || 'Merge failed', 'error');
+    }
+}
+
+function showEmployeeForm(existing) {
+    const e = existing || { code: '', name: '', position: '', phone: '', monthly_salary: 0, active: 1, notes: '' };
+    showModal(`
+        <div class="modal-header">
+            <h2>${existing ? 'Edit' : 'New'} Employee</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Code</label>
+                    <input type="text" class="form-control" id="empCode" value="${escapeHtml(e.code || '')}" placeholder="EMP-00X (optional)">
+                </div>
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" class="form-control" id="empName" value="${escapeHtml(e.name || '')}" placeholder="Full name">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Position</label>
+                    <input type="text" class="form-control" id="empPosition" value="${escapeHtml(e.position || '')}">
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <input type="text" class="form-control" id="empPhone" value="${escapeHtml(e.phone || '')}">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Monthly Salary</label>
+                    <input type="number" class="form-control" id="empSalary" value="${Number(e.monthly_salary) || 0}" step="0.01" min="0">
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select class="form-control" id="empActive">
+                        <option value="1" ${e.active ? 'selected' : ''}>Active</option>
+                        <option value="0" ${e.active ? '' : 'selected'}}>Inactive</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea class="form-control" id="empNotes" rows="2">${escapeHtml(e.notes || '')}</textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="empSaveBtn" onclick='saveEmployeeForm(${existing ? existing.id : "null"})'>Save</button>
+        </div>
+    `);
+}
+
+let _empSaving = false;
+async function saveEmployeeForm(id) {
+    if (_empSaving) return;   // double-submit guard
+    const name = (document.getElementById('empName')?.value || '').trim();
+    if (!name || !/[A-Za-z\u0900-\u097F]/.test(name)) {
+        showToast('Employee name is required and cannot be just a number', 'error');
+        return;
+    }
+    const data = {
+        id: id || undefined,
+        code: document.getElementById('empCode')?.value || '',
+        name,
+        position: document.getElementById('empPosition')?.value || '',
+        phone: document.getElementById('empPhone')?.value || '',
+        monthly_salary: parseFloat(document.getElementById('empSalary')?.value || 0),
+        active: Number(document.getElementById('empActive')?.value || 1),
+        notes: document.getElementById('empNotes')?.value || ''
+    };
+    _empSaving = true;
+    try {
+        const res = await window.api.saveEmployee(data);
+        if (res.success) {
+            closeModal();
+            showToast(id ? 'Employee updated' : 'Employee added', 'success');
+            renderEmployeesMaster();
+        } else {
+            showToast(res.error || 'Failed to save employee', 'error');
+        }
+    } finally { _empSaving = false; }
+}
+
+async function toggleEmployee(id, active) {
+    const list = window._lastEmployees || [];
+    const emp = list.find(e => e.id === id);
+    if (!emp) return;
+    if (!active) {
+        const confirmed = await confirmAction(`Deactivate "${emp.name}"? They stay in history and can be re-activated.`);
+        if (!confirmed) return;
+    }
+    const res = await window.api.saveEmployee({ ...emp, active: active ? 1 : 0 });
+    if (res.success) {
+        showToast(active ? 'Re-activated' : 'Deactivated', 'success');
+        renderEmployeesMaster();
+    } else { showToast(res.error || 'Failed', 'error'); }
+}
+
 // Globals
 window.renderSalary = renderSalary;
 window.refreshSalary = refreshSalary;
@@ -524,3 +749,10 @@ window.deleteSalaryEntry = deleteSalaryEntry;
 window.printSalary = printSalary;
 window.exportSalaryPDF = exportSalaryPDF;
 window.printSalarySlip = printSalarySlip;
+window.renderEmployeesMaster = renderEmployeesMaster;
+window.showEmployeesMaster = showEmployeesMaster;
+window.showEmployeeForm = showEmployeeForm;
+window.saveEmployeeForm = saveEmployeeForm;
+window.toggleEmployee = toggleEmployee;
+window.loadEmployeeDupes = loadEmployeeDupes;
+window.mergeEmployeePair = mergeEmployeePair;

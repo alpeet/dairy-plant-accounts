@@ -133,8 +133,18 @@ function validateProduct(data) {
 
     if (data.unit && data.unit.length > 20) return 'Unit is too long (max 20 characters)';
     if (data.category && data.category.length > 50) return 'Category is too long (max 50 characters)';
+    if (data.code && data.code.length > 30) return 'Code is too long (max 30 characters)';
     if (data.hsn_code && data.hsn_code.length > 20) return 'HSN code is too long (max 20 characters)';
     if (data.notes && data.notes.length > 500) return 'Notes is too long (max 500 characters)';
+
+    // D7: an expense word is never a product — same rule as operations/products.js
+    // (lazy require: shared/validate.js stays dependency-free at load time).
+    try {
+        const { EXPENSE_LIKE_NAME } = require('./operations/products');
+        if (EXPENSE_LIKE_NAME && EXPENSE_LIKE_NAME.test(String(data.name))) {
+            return `"${String(data.name).trim()}" is an expense category, not a product — record it under Operations → Expenses`;
+        }
+    } catch (e) { /* validator must never fail on a missing module */ }
 
     // Numeric fields must be valid numbers
     if (data.opening_stock !== undefined && data.opening_stock !== null && data.opening_stock !== '') {
@@ -323,6 +333,8 @@ function validatePayment(data) {
     }
 
     if (data.notes && data.notes.length > 500) return 'Notes is too long (max 500 characters)';
+    if (data.bank_account && data.bank_account.length > 100) return 'Bank account is too long (max 100 characters)';
+    if (data.bank_reference && data.bank_reference.length > 100) return 'Bank reference is too long (max 100 characters)';
 
     return null;
 }
@@ -419,6 +431,10 @@ function validatePettyCash(data) {
 function validateSalary(data) {
     if (!data || typeof data !== 'object') return 'Salary data is required';
     if (!isString(data.employee_name, 100)) return 'Employee name is required';
+    // D6: "10000" / "10,000.00" are amounts typed into the name field.
+    if (!/[A-Za-z\u0900-\u097F]/.test(String(data.employee_name).trim())) {
+        return 'Employee name cannot be just a number';
+    }
     if (!isString(data.month, 7)) return 'Month is required (YYYY-MM format)';
     if (!isNonNegativeNumber(data.basic_salary)) return 'Basic salary must be a non-negative number';
     if (data.payment_mode && !isEnum(data.payment_mode, ['cash', 'bank', 'upi'])) {

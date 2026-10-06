@@ -24,6 +24,8 @@ async function renderStock() {
 
     const lowStock = stock.filter(p => p.current_balance <= p.reorder_level && p.reorder_level > 0);
     const stockValue = stock.reduce((s, p) => s + (p.current_balance * p.rate), 0);
+    // Today's Stock panel keeps ONE stored filter (D5 page-filter store).
+    const tsFilter = pageFilterInit('stock_todays', { preset: 'today' });
 
     container.innerHTML = `
         <!-- Summary Cards -->
@@ -48,6 +50,34 @@ async function renderStock() {
                 <span class="value">${movements.length}</span>
                 <span class="sub">All time transactions</span>
             </div>
+        </div>
+
+        <!-- ══ Today's Stock (N16/N44) — presentation over getStockLedger, no second engine ══ -->
+        <div class="card" style="margin-bottom:16px">
+            <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                <h2 style="margin:0">📦 Today's Stock</h2>
+                <button class="btn btn-info btn-sm" onclick="tsOpenStatement(null)">📋 Stock Statement detail →</button>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+                ${datePresetBar('tsFrom', 'tsTo', 'refreshTodaysStock', ['today', 'yesterday', 'last_7', 'this_month', 'all'])}
+            </div>
+            <div class="filter-bar">
+                <div class="form-group">
+                    <label>From</label>
+                    <input type="date" class="form-control" id="tsFrom" value="${tsFilter.from || ''}">
+                </div>
+                <div class="form-group">
+                    <label>To</label>
+                    <input type="date" class="form-control" id="tsTo" value="${tsFilter.to || ''}">
+                </div>
+                <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshTodaysStock()">Apply Range</button></div>
+                <div class="form-group" style="flex:1"><label>&nbsp;</label><div id="tsPeriodLabel" style="font-size:12px;color:var(--text-light);padding-top:6px"></div></div>
+            </div>
+            <div style="font-size:12.5px;color:var(--text-light);margin-bottom:8px">
+                <strong style="color:var(--text)">Opening + Collection/Purchase + Production − Sales − Consumption − Wastage ± Other = Closing</strong>
+                <span style="font-size:11px"> — click a product to open its Stock Statement detail</span>
+            </div>
+            <div id="todaysStockBody"><div class="loading" style="text-align:center;padding:20px">Loading today's stock...</div></div>
         </div>
 
         <!-- Quick Action Card: New Stock Movement -->
@@ -96,7 +126,7 @@ async function renderStock() {
                         <tbody id="stockTableBody">
                             ${stock.map(p => `
                                 <tr class="${p.current_balance <= p.reorder_level && p.reorder_level > 0 ? 'low-stock-row' : ''}">
-                                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                                    <td><strong>${escapeHtml(p.name)}</strong>${p.active === 0 ? ' <span class="badge badge-warning" title="Archived — hidden from entry screens, history kept">archived</span>' : ''}${p.code ? `<br><small style="color:var(--text-light)">${escapeHtml(p.code)}</small>` : ''}</td>
                                     <td>${escapeHtml(p.category || '-')}</td>
                                     <td class="text-right ${p.current_balance <= p.reorder_level && p.reorder_level > 0 ? 'low-stock' : ''}">
                                         <strong>${formatNumber(p.current_balance)}</strong>
@@ -167,13 +197,148 @@ async function renderStock() {
             .low-stock-row { background: #fff5f5; }
         </style>
     `;
+    // Panel loads its own single getStockLedger call — never blocks the page.
+    renderTodaysStock();
+}
+
+// ============================================================
+// "Today's Stock" daily panel (N16/N44 — presentation only)
+// ============================================================
+// One call to getStockLedger feeds the day's identity:
+//   Opening + Collection/Purchase + Production − Sales − Consumption
+//   − Wastage ± Other = Closing
+// "Other" is the honest residual (returns, adjustments, reversals,
+// opening entries inside the period) derived from the SAME summary, so
+// every row balances exactly. Click-through hands the SAME period to the
+// Stock Statement screen — same engine, no second stock calculation.
+
+async function renderTodaysStock() {
+    const body = document.getElementById('todaysStockBody');
+    if (!body) return; // panel not on this page
+    const filt = pageFilterInit('stock_todays', { preset: 'today' });
+    const fromEl = document.getElementById('tsFrom');
+    const toEl = document.getElementById('tsTo');
+    if (fromEl) fromEl.value = filt.from || '';
+    if (toEl) toEl.value = filt.to || '';
+    const label = document.getElementById('tsPeriodLabel');
+    if (label) label.textContent = `${filt.from ? formatDate(filt.from) : 'Start'} → ${filt.to ? formatDate(filt.to) : 'Today'}`;
+
+    let res;
+    try {
+        res = await window.api.getStockLedger({ from_date: filt.from || '', to_date: filt.to || '' });
+    } catch (e) {
+        res = { success: false, error: e.message };
+    }
+    if (!res || !res.success) {
+        body.innerHTML = `<div style="text-align:center;padding:20px;color:var(--danger)">${escapeHtml((res && res.error) || 'Failed to load stock ledger')}</div>`;
+        return;
+    }
+
+    const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const products = (res.data && res.data.products) || [];
+    const rows = [];
+    let hidden = 0;
+    for (const p of products) {
+        const b = p.summary || {};
+        const opening = r2(b.opening || 0);
+        const collection = r2((b.collection_in || 0) + (b.purchase_in || 0));
+        const production = r2(b.production_in || 0);
+        const sales = r2(b.sales_out || 0);
+        const consumption = r2(b.production_out || 0);
+        const wastage = r2(b.wastage_out || 0);
+        const closing = r2(b.closing !== undefined && b.closing !== null ? b.closing : p.closing_qty);
+        const other = r2((closing - opening) - (collection + production - sales - consumption - wastage));
+        const vals = [opening, collection, production, sales, consumption, wastage, other, closing];
+        if (vals.every(v => Math.abs(v) < 0.005)) { hidden++; continue; }
+        const lhs = r2(r2(r2(opening + collection + production) - r2(sales + consumption + wastage)) + other);
+        rows.push({ p, opening, collection, production, sales, consumption, wastage, other, closing, ok: Math.abs(lhs - closing) < 0.01 });
+    }
+
+    if (!rows.length) {
+        body.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-light)">No stock activity or balances in this period.${hidden ? ` (${hidden} product(s) at zero.)` : ''}</div>`;
+        return;
+    }
+
+    // Unit subtotals — mixed units are never summed together.
+    const units = new Map();
+    for (const r of rows) {
+        const u = r.p.unit || 'qty';
+        let t = units.get(u);
+        if (!t) { t = { opening: 0, collection: 0, production: 0, sales: 0, consumption: 0, wastage: 0, other: 0, closing: 0 }; units.set(u, t); }
+        for (const k of ['opening', 'collection', 'production', 'sales', 'consumption', 'wastage', 'other', 'closing']) t[k] = r2(t[k] + r[k]);
+    }
+
+    const cell = (v) => `<td class="text-right">${Math.abs(v) >= 0.005 ? formatNumber(v) : '<span style="color:var(--text-light)">—</span>'}</td>`;
+    const bad = rows.filter(r => !r.ok).length;
+    body.innerHTML = `
+        <div style="font-size:12px;margin-bottom:6px;${bad ? 'color:var(--danger);font-weight:600' : 'color:#2e7d32'}">
+            ${bad ? `⚠ ${bad} row(s) do not balance — run the Data Integrity Doctor` : '✓ Identity holds for every row'}
+        </div>
+        <div class="table-container" style="max-height:340px;overflow-y:auto">
+            <table>
+                <thead><tr>
+                    <th>Product</th><th>Unit</th>
+                    <th class="text-right">Opening</th>
+                    <th class="text-right">Collection/Purchase</th>
+                    <th class="text-right">Production</th>
+                    <th class="text-right">Sales</th>
+                    <th class="text-right">Consumption</th>
+                    <th class="text-right">Wastage</th>
+                    <th class="text-right" title="Returns, adjustments, reversals and opening entries inside the period">Other ±</th>
+                    <th class="text-right">Closing</th>
+                </tr></thead>
+                <tbody>
+                    ${rows.map(r => `
+                        <tr>
+                            <td><a href="#" onclick="event.preventDefault();tsOpenStatement(${r.p.product_id})" title="Open this product in Stock Statement (detailed ledger)"><strong>${escapeHtml(r.p.product_name)}</strong></a>${r.p.active === 0 ? ' <span class="badge badge-warning">archived</span>' : ''}</td>
+                            <td>${escapeHtml(r.p.unit || '')}</td>
+                            ${cell(r.opening)}${cell(r.collection)}${cell(r.production)}${cell(r.sales)}${cell(r.consumption)}${cell(r.wastage)}${cell(r.other)}
+                            <td class="text-right" style="font-weight:700">${formatNumber(r.closing)}</td>
+                        </tr>`).join('')}
+                    ${[...units.entries()].map(([u, t]) => `
+                        <tr style="background:rgba(0,0,0,0.04);font-weight:700">
+                            <td colspan="2">TOTAL (${escapeHtml(u)})</td>
+                            ${cell(t.opening)}${cell(t.collection)}${cell(t.production)}${cell(t.sales)}${cell(t.consumption)}${cell(t.wastage)}${cell(t.other)}
+                            <td class="text-right">${formatNumber(t.closing)}</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div style="font-size:11px;color:var(--text-light);margin-top:6px">
+            ${rows.length} product(s) shown${hidden ? ` · ${hidden} with zero balance and no activity hidden` : ''} · period ${filt.from ? formatDate(filt.from) : 'start'} → ${filt.to ? formatDate(filt.to) : 'today'}
+        </div>`;
+}
+
+/** Preset/Apply handler — persist the range FIRST, then re-render the panel. */
+function refreshTodaysStock() {
+    pageFilterSet('stock_todays', {
+        from: document.getElementById('tsFrom')?.value || '',
+        to: document.getElementById('tsTo')?.value || ''
+    });
+    renderTodaysStock();
+}
+
+/**
+ * Click-through: open the Stock Statement with the SAME period (and product
+ * when a row was clicked) — the detailed ledger behind this panel.
+ */
+function tsOpenStatement(productId) {
+    const filt = pageFilterInit('stock_todays', { preset: 'today' });
+    _ssState.preset = 'custom';
+    _ssState.from = filt.from || '';
+    _ssState.to = filt.to || '';
+    _ssState.view = productId ? 'detail' : 'summary';
+    _ssState.product_id = productId ? String(productId) : '';
+    _ssState.category = '';
+    _ssState.search = '';
+    navigateTo('stock-statement');
 }
 
 // ============================================================
 // Quick Stock Movement (inline form via modal)
 // ============================================================
 async function showQuickStockMovement() {
-    const productsResult = await window.api.getStockCurrent();
+    const productsResult = await window.api.getStockCurrent({ active_only: true });
     const products = productsResult.success ? productsResult.data : [];
     const todayStr = today();
 
@@ -307,6 +472,10 @@ async function showProductForm(productId = null) {
     }
 
     const isEdit = !!product;
+    const flag = (key, label) => `
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" name="${key}" ${!product || product[key] ? 'checked' : ''}> ${label}
+        </label>`;
 
     showModal(`
         <div class="modal-header">
@@ -321,6 +490,12 @@ async function showProductForm(productId = null) {
                         <input type="text" class="form-control" name="name" value="${escapeHtml(product ? product.name : '')}" required autofocus>
                     </div>
                     <div class="form-group">
+                        <label>Code (SKU)</label>
+                        <input type="text" class="form-control" name="code" value="${escapeHtml(product && product.code ? product.code : '')}" placeholder="e.g. MLK-1L" maxlength="30">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
                         <label>Unit</label>
                         <select class="form-control" name="unit">
                             <option value="kg" ${product && product.unit === 'kg' ? 'selected' : ''}>Kg</option>
@@ -331,16 +506,24 @@ async function showProductForm(productId = null) {
                             <option value="gram" ${product && product.unit === 'gram' ? 'selected' : ''}>Gram</option>
                         </select>
                     </div>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
                         <label>Category</label>
                         <input type="text" class="form-control" name="category" value="${escapeHtml(product ? product.category : '')}" placeholder="e.g. Milk, Curd, Ghee">
                     </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
                         <label>Rate (per unit)</label>
                         <input type="number" class="form-control" name="rate" value="${product ? product.rate : 0}" min="0" step="0.01">
                     </div>
+                    <div class="form-group">
+                        <label>Rate Effective From</label>
+                        <input type="text" class="form-control" name="rate_effective_from" placeholder="BS date e.g. 2083-07-01" value="${escapeHtml(product && product.rate_effective_from ? product.rate_effective_from : '')}">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Reason for rate change</label>
+                    <input type="text" class="form-control" name="rate_reason" placeholder="e.g. New rate chart from 1st vs old">
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -353,10 +536,27 @@ async function showProductForm(productId = null) {
                         <input type="number" class="form-control" name="reorder_level" value="${product ? product.reorder_level : 0}" min="0" step="0.01">
                     </div>
                 </div>
+                <div class="form-group" style="background:var(--bg,#f7f9fc);border-radius:8px;padding:10px 12px">
+                    <label style="font-weight:600;display:block;margin-bottom:6px">Where this product may be used</label>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px">
+                        ${flag('is_stocked', 'Stock tracked (inventory)')}
+                        ${flag('is_saleable', 'Sold (sales/invoice)')}
+                        ${flag('is_purchaseable', 'Purchased from suppliers')}
+                        ${flag('is_produced', 'Produced in plant')}
+                    </div>
+                    ${isEdit ? `
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-top:8px">
+                        <input type="checkbox" name="active" ${product.active !== 0 ? 'checked' : ''}> Active (appears in entry screens)
+                    </label>` : ''}
+                </div>
                 <div class="form-group">
                     <label>Notes</label>
                     <textarea class="form-control" name="notes">${escapeHtml(product ? product.notes : '')}</textarea>
                 </div>
+                ${isEdit ? `
+                <div style="text-align:right">
+                    <button type="button" class="btn btn-info btn-sm" onclick="viewProductRateHistory(${product.id})">📈 Rate History</button>
+                </div>` : ''}
             </form>
         </div>
         <div class="modal-footer">
@@ -369,20 +569,36 @@ async function showProductForm(productId = null) {
 async function saveProduct(productId) {
     const form = document.getElementById('productForm');
     const formData = new FormData(form);
+    const num = (k) => {
+        const v = formData.get(k);
+        return v === null || v === '' ? 0 : parseFloat(v);
+    };
 
     const data = {
         id: productId || null,
         name: formData.get('name'),
+        code: formData.get('code') || '',
         unit: formData.get('unit'),
         category: formData.get('category'),
-        rate: parseFloat(formData.get('rate') || 0),
-        opening_stock: parseFloat(formData.get('opening_stock') || 0),
-        reorder_level: parseFloat(formData.get('reorder_level') || 0),
+        rate: num('rate'),
+        rate_effective_from: formData.get('rate_effective_from') || '',
+        rate_reason: formData.get('rate_reason') || '',
+        opening_stock: num('opening_stock'),
+        reorder_level: num('reorder_level'),
+        is_stocked: formData.get('is_stocked') ? 1 : 0,
+        is_saleable: formData.get('is_saleable') ? 1 : 0,
+        is_purchaseable: formData.get('is_purchaseable') ? 1 : 0,
+        is_produced: formData.get('is_produced') ? 1 : 0,
+        active: productId ? (formData.get('active') ? 1 : 0) : 1,
         notes: formData.get('notes')
     };
 
     if (!data.name) {
         showToast('Product name is required', 'error');
+        return;
+    }
+    if (!isFinite(data.rate) || data.rate < 0) {
+        showToast('Rate must be a non-negative number', 'error');
         return;
     }
 
@@ -400,26 +616,69 @@ async function saveProduct(productId) {
 async function editProduct(id) { showProductForm(id); }
 
 // ============================================================
-// Delete Product
+// Rate History (D9 — rate changes are dated + reasoned, old invoices keep their rate)
+// ============================================================
+async function viewProductRateHistory(productId) {
+    const [productResult, histResult] = await Promise.all([
+        window.api.getProduct(productId),
+        window.api.getProductRateHistory({ product_id: productId })
+    ]);
+    const product = productResult.success ? productResult.data : null;
+    const rows = histResult.success ? (histResult.data || []) : [];
+
+    showModal(`
+        <div class="modal-header">
+            <h2>Rate History — ${escapeHtml(product ? product.name : 'Product')}</h2>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            ${rows.length === 0 ? '<p style="color:var(--text-light);text-align:center;padding:20px">No rate changes recorded yet.</p>' : `
+            <table class="compact">
+                <thead><tr><th>Date</th><th class="text-right">Old</th><th class="text-right">New</th><th>Effective From</th><th>Reason</th><th>By</th></tr></thead>
+                <tbody>
+                    ${rows.map(h => `
+                        <tr>
+                            <td>${escapeHtml(String(h.created_at || '').slice(0, 10))}</td>
+                            <td class="text-right">${formatCurrency(h.old_rate)}</td>
+                            <td class="text-right"><strong>${formatCurrency(h.new_rate)}</strong></td>
+                            <td>${escapeHtml(h.effective_from || '-')}</td>
+                            <td>${escapeHtml(h.reason || '-')}</td>
+                            <td>${escapeHtml(h.changed_by_name || '-')}</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>`}
+            <p style="font-size:12px;color:var(--text-light);margin-top:10px">Past sales and purchases keep the rate printed at their own date — a rate change never rewrites an old invoice.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+        </div>
+    `);
+}
+
+// ============================================================
+// Delete Product (archive when history exists — D7)
 // ============================================================
 async function deleteProductEntry(id) {
     // Fetch product name for confirmation
     const productResult = await window.api.getProduct(id);
     const productName = productResult.success ? productResult.data.name : 'this product';
-    
+
     const confirmed = await confirmAction(
         `Delete "${escapeHtml(productName)}"?`,
-        'This product will be permanently removed if it has no transaction history (sales, purchases, stock adjustments).',
+        'Products with any sales/purchase/stock history are ARCHIVED instead of deleted — they leave every entry screen but their history stays. Products with no history are permanently removed.',
         'Yes, Delete'
     );
     if (!confirmed) return;
-    
+
     const result = await window.api.deleteProduct(id);
-    if (result.success) {
+    if (result.success && result.data && result.data.archived) {
+        showToast(`"${productName}" archived — history preserved.`, 'success');
+        renderStock();
+    } else if (result.success) {
         showToast('Product deleted successfully!', 'success');
         renderStock();
     } else {
-        showToast('Error: ' + (result.error || 'Cannot delete this product. It may have transaction history.'), 'error');
+        showToast('Error: ' + (result.error || 'Cannot delete this product.'), 'error');
     }
 }
 
@@ -427,7 +686,7 @@ async function deleteProductEntry(id) {
 // Stock Adjustment
 // ============================================================
 async function showStockAdjustForm() {
-    const productsResult = await window.api.getStockCurrent();
+    const productsResult = await window.api.getStockCurrent({ active_only: true });
     const products = productsResult.success ? productsResult.data : [];
 
     showModal(`

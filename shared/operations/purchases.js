@@ -9,6 +9,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { round2 } = require('./accounting');
 
 /**
  * List purchases with optional filters.
@@ -48,9 +49,24 @@ function getPurchase(db, id) {
  */
 function savePurchase(db, purchaseData) {
     const trx = db.transaction(() => {
-        const { id, bill_no, date, party_id, items, subtotal, discount, tax,
-                transport_charges, extra_charges, grand_total, paid_amount,
+        const { id, bill_no, date, party_id, items: rawItems, subtotal: _subtotal, discount: _discount, tax: _tax,
+                transport_charges: _transport, extra_charges: _extra, grand_total: _grandTotal, paid_amount: _paidAmount,
                 payment_mode, status, notes } = purchaseData;
+        // D11 precision policy (req 39/40): new money writes are stored at
+        // 2 dp (headers, item amounts and rates). Historical rows stay as-is
+        // (req 47); every aggregate sums as Σ round2(row).
+        const subtotal = round2(_subtotal);
+        const discount = round2(_discount);
+        const tax = round2(_tax);
+        const transport_charges = round2(_transport);
+        const extra_charges = round2(_extra);
+        const grand_total = round2(_grandTotal);
+        const paid_amount = round2(_paidAmount);
+        const items = (rawItems || []).map(it => ({
+            ...it,
+            rate: round2(it.rate),
+            amount: round2(it.amount != null ? it.amount : (Number(it.quantity) || 0) * (Number(it.rate) || 0))
+        }));
 
         if (id) {
             // ── Revert old purchase ──

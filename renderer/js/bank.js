@@ -13,8 +13,9 @@ async function renderBank() {
         <button class="btn btn-warning btn-sm" onclick="showBankReviewQueue()">🔍 Needs Review <span id="bankReviewCount" style="margin-left:4px"></span></button>
     `;
 
-    const preset = getDatePreset('this_month');
-    const result = await window.api.getBankList({ from_date: preset.from, to_date: preset.to });
+    const filt = pageFilterInit('bank');
+    const result = await window.api.getBankList({ from_date: filt.from, to_date: filt.to, search: filt.search || undefined, match_status: filt.status || undefined });
+    if (!result.success && typeof showToast === 'function') showToast(result.error, 'error');
     const rows = result.success ? result.data : [];
 
     const review = await window.api.getBankReviewQueue();
@@ -52,23 +53,22 @@ async function renderBank() {
         <div class="filter-bar">
             <div class="form-group">
                 <label>From</label>
-                <input type="date" class="form-control" id="bkFrom" value="${preset.from}">
+                <input type="date" class="form-control" id="bkFrom" value="${filt.from || ''}">
             </div>
             <div class="form-group">
                 <label>To</label>
-                <input type="date" class="form-control" id="bkTo" value="${preset.to}">
+                <input type="date" class="form-control" id="bkTo" value="${filt.to || ''}">
             </div>
             <div class="form-group">
                 <label>Search</label>
-                <input type="text" class="form-control" id="bkSearch" placeholder="Name / description / ref...">
+                <input type="text" class="form-control" id="bkSearch" placeholder="Name / description / ref..." value="${escapeHtml(filt.search || '')}">
             </div>
             <div class="form-group">
-                <label>Status</label>
-                <select class="form-control" id="bkStatus">
-                    <option value="">All</option>
-                    <option value="auto">Auto-matched</option>
-                    <option value="review">Needs review</option>
-                    <option value="none">Unmatched</option>
+                <label>Status</label>                    <select class="form-control" id="bkStatus">
+                        <option value=""${!filt.status ? ' selected' : ''}>All</option>
+                        <option value="auto"${filt.status === 'auto' ? ' selected' : ''}>Auto-matched</option>
+                        <option value="review"${filt.status === 'review' ? ' selected' : ''}>Needs review</option>
+                        <option value="none"${filt.status === 'none' ? ' selected' : ''}>Unmatched</option>
                 </select>
             </div>
             <div class="form-group">
@@ -178,14 +178,15 @@ async function saveBankClass(id) {
 }
 
 async function refreshBank() {
-    const from = document.getElementById('bkFrom')?.value || '';
-    const to = document.getElementById('bkTo')?.value || '';
-    const search = document.getElementById('bkSearch')?.value || '';
-    const status = document.getElementById('bkStatus')?.value || '';
-    const result = await window.api.getBankList({ from_date: from, to_date: to, search: search || undefined, match_status: status || undefined });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastBankRows = result.data;
-    renderBank();
+    // Persist the filter FIRST, then re-render: renderBank() reads the stored
+    // filter, so a refresh can never reset the range back to "this month".
+    pageFilterSet('bank', {
+        from: document.getElementById('bkFrom')?.value || '',
+        to: document.getElementById('bkTo')?.value || '',
+        search: document.getElementById('bkSearch')?.value || '',
+        status: document.getElementById('bkStatus')?.value || ''
+    });
+    await renderBank();
 }
 
 async function getPartyOptions(selectedId) {

@@ -10,15 +10,19 @@ async function renderExpenses() {
         <button class="btn btn-success btn-sm" onclick="showAddExpense()">+ New Expense</button>
     `;
 
-    const preset = getDatePreset('this_month');
+    const filt = pageFilterInit('expenses');
     const [listResult, catResult, summaryResult] = await Promise.all([
-        window.api.getOtherExpenses({ from_date: preset.from, to_date: preset.to }),
+        window.api.getOtherExpenses({ from_date: filt.from, to_date: filt.to, category: filt.category || undefined }),
         window.api.getExpenseCategories(),
-        window.api.getExpensesSummary({ from_date: preset.from, to_date: preset.to })
+        window.api.getExpensesSummary({ from_date: filt.from, to_date: filt.to })
     ]);
 
     const expenses = listResult.success ? listResult.data : [];
+    // getExpenseCategories returns { category, used } — full shared vocabulary
+    // for the datalist, `used`=1 rows for filters and counters.
     const categories = catResult.success ? catResult.data : [];
+    const usedCategories = categories.filter(c => c.used);
+    window._expenseCategories = categories;
     const summary = summaryResult.success ? summaryResult.data : { count: 0, total: 0, by_category: [] };
 
     container.innerHTML = `
@@ -30,8 +34,8 @@ async function renderExpenses() {
             </div>
             <div class="summary-card card-info" style="margin:0;padding:12px">
                 <span class="label">Categories</span>
-                <span class="value" style="font-size:22px">${categories.length}</span>
-                <span class="sub">${categories.map(c => c.category).join(', ')}</span>
+                <span class="value" style="font-size:22px">${usedCategories.length}</span>
+                <span class="sub">${usedCategories.map(c => c.category).join(', ')}</span>
             </div>
             <div class="summary-card card-warning" style="margin:0;padding:12px">
                 <span class="label">Top Category</span>
@@ -47,12 +51,12 @@ async function renderExpenses() {
             </div>
         </div>
         <div class="filter-bar">
-            <div class="form-group"><label>From</label><input type="date" class="form-control" id="exFrom" value="${preset.from}"></div>
-            <div class="form-group"><label>To</label><input type="date" class="form-control" id="exTo" value="${preset.to}"></div>
+            <div class="form-group"><label>From</label><input type="date" class="form-control" id="exFrom" value="${filt.from || ''}"></div>
+            <div class="form-group"><label>To</label><input type="date" class="form-control" id="exTo" value="${filt.to || ''}"></div>
             <div class="form-group"><label>Category</label>
                 <select class="form-control" id="exCategory">
-                    <option value="">All</option>
-                    ${categories.map(c => `<option value="${escapeHtml(c.category)}">${escapeHtml(c.category)}</option>`).join('')}
+                    <option value=""${!filt.category ? ' selected' : ''}>All</option>
+                    ${usedCategories.map(c => `<option value="${escapeHtml(c.category)}"${filt.category === c.category ? ' selected' : ''}>${escapeHtml(c.category)}</option>`).join('')}
                 </select>
             </div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshExpenses()">Search</button></div>
@@ -100,13 +104,14 @@ async function renderExpenses() {
 }
 
 async function refreshExpenses() {
-    const from = document.getElementById('exFrom')?.value || '';
-    const to = document.getElementById('exTo')?.value || '';
-    const category = document.getElementById('exCategory')?.value || '';
-    const result = await window.api.getOtherExpenses({ from_date: from, to_date: to, category: category || undefined });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastExpenses = result.data;
-    renderExpenses();
+    // Store the filter, then re-render from it (render used to re-query the
+    // default month and drop the user's range + category).
+    pageFilterSet('expenses', {
+        from: document.getElementById('exFrom')?.value || '',
+        to: document.getElementById('exTo')?.value || '',
+        category: document.getElementById('exCategory')?.value || ''
+    });
+    await renderExpenses();
 }
 
 function showAddExpense(existingData) {
@@ -118,7 +123,7 @@ function showAddExpense(existingData) {
         <div class="modal-body">
             <div class="form-row">
                 <div class="form-group"><label>Date</label><input type="date" class="form-control" id="exDate" value="${d.date}"></div>
-                <div class="form-group"><label>Category *</label><input type="text" class="form-control" id="exCategoryVal" value="${escapeHtml(d.category)}" placeholder="e.g., Office, Utility, Travel"></div>
+                <div class="form-group"><label>Category *</label><input type="text" class="form-control" id="exCategoryVal" list="exCatList" value="${escapeHtml(d.category)}" placeholder="e.g., Office, Utility, Travel"></div>
             </div>
             <div class="form-row">
                 <div class="form-group"><label>Expense Head *</label><input type="text" class="form-control" id="exHead" value="${escapeHtml(d.expense_head)}" placeholder="e.g., Electricity, Rent, Insurance"></div>
@@ -141,6 +146,7 @@ function showAddExpense(existingData) {
                 <div class="form-group"><label>Remarks</label><input type="text" class="form-control" id="exRemarks" value="${escapeHtml(d.remarks || '')}"></div>
             </div>
         </div>
+        <datalist id="exCatList">${(window._expenseCategories || []).map(c => `<option value="${escapeHtml(c.category)}">`).join('')}</datalist>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             <button class="btn btn-primary" onclick="saveExpenseEntry(${existingData ? existingData.id : 'null'})">Save</button>

@@ -100,6 +100,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getProduct: (id) => apiPost('/products/get', { id }),
         saveProduct: (product) => apiPost('/products/save', product),
         deleteProduct: (id) => apiPost('/products/delete', { id }),
+        getProductRateHistory: (opts) => apiPost('/products/rate-history', opts || {}),
 
         // Stock
         getStockCurrent: (opts) => apiPost('/stock/current', opts || {}),
@@ -198,6 +199,8 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getSalarySummary: (opts) => apiPost('/salary/summary', opts || {}),
         listEmployees: (opts) => apiPost('/salary/employees', opts || {}),
         saveEmployee: (data) => apiPost('/salary/employees/save', data || {}),
+        findDuplicateEmployees: () => apiPost('/salary/employees/dupes', {}),
+        mergeEmployees: (params) => apiPost('/salary/employees/merge', params || {}),
         deleteEmployee: (id) => apiPost('/salary/employees/delete', { id }),
 
         // Vehicle Expenses

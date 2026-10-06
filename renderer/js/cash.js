@@ -38,9 +38,9 @@ async function renderCash() {
 // ============================================================
 async function showCashCollection() {
     const container = document.getElementById('cashContent');
-    const preset = getDatePreset('this_month');
+    const filt = pageFilterInit('cash_collection');
 
-    const todayResult = await window.api.getDailyCashCollection({ from_date: preset.from, to_date: preset.to });
+    const todayResult = await window.api.getDailyCashCollection({ from_date: filt.from, to_date: filt.to });
     const data = todayResult.success ? todayResult.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
 
     container.innerHTML = `
@@ -54,11 +54,11 @@ async function showCashCollection() {
         <div class="filter-bar">
             <div class="form-group">
                 <label>From</label>
-                <input type="date" class="form-control" id="ccFrom" value="${preset.from}">
+                <input type="date" class="form-control" id="ccFrom" value="${filt.from || ''}">
             </div>
             <div class="form-group">
                 <label>To</label>
-                <input type="date" class="form-control" id="ccTo" value="${preset.to}">
+                <input type="date" class="form-control" id="ccTo" value="${filt.to || ''}">
             </div>
             <div class="form-group">
                 <label>&nbsp;</label>
@@ -126,12 +126,12 @@ async function showCashCollection() {
 }
 
 async function refreshCashCollection() {
-    const from = document.getElementById('ccFrom')?.value || '';
-    const to = document.getElementById('ccTo')?.value || '';
-    const result = await window.api.getDailyCashCollection({ from_date: from, to_date: to });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastCashData = result.data;
-    showCashCollection();
+    // Store first, then re-render from the stored range (never re-preset).
+    pageFilterSet('cash_collection', {
+        from: document.getElementById('ccFrom')?.value || '',
+        to: document.getElementById('ccTo')?.value || ''
+    });
+    await showCashCollection();
 }
 
 // ============================================================
@@ -140,9 +140,9 @@ async function refreshCashCollection() {
 async function showDenominationCount() {
     const container = document.getElementById('cashContent');
     const todayStr = today();
-    const preset = getDatePreset('this_month');
+    const filt = pageFilterInit('cash_denomination');
 
-    const listResult = await window.api.getDenominations({ from_date: preset.from, to_date: preset.to });
+    const listResult = await window.api.getDenominations({ from_date: filt.from, to_date: filt.to });
     const counts = listResult.success ? listResult.data : [];
 
     // Check if today already has a count
@@ -160,11 +160,11 @@ async function showDenominationCount() {
         <div class="filter-bar">
             <div class="form-group">
                 <label>From</label>
-                <input type="date" class="form-control" id="dnFrom" value="${preset.from}">
+                <input type="date" class="form-control" id="dnFrom" value="${filt.from || ''}">
             </div>
             <div class="form-group">
                 <label>To</label>
-                <input type="date" class="form-control" id="dnTo" value="${preset.to}">
+                <input type="date" class="form-control" id="dnTo" value="${filt.to || ''}">
             </div>
             <div class="form-group">
                 <label>&nbsp;</label>
@@ -229,12 +229,11 @@ async function showDenominationCount() {
 }
 
 async function refreshDenomination() {
-    const from = document.getElementById('dnFrom')?.value || '';
-    const to = document.getElementById('dnTo')?.value || '';
-    const result = await window.api.getDenominations({ from_date: from, to_date: to });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastDenominations = result.data;
-    showDenominationCount();
+    pageFilterSet('cash_denomination', {
+        from: document.getElementById('dnFrom')?.value || '',
+        to: document.getElementById('dnTo')?.value || ''
+    });
+    await showDenominationCount();
 }
 
 async function showAddDenomination(existingData) {

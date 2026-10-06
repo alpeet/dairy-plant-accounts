@@ -388,10 +388,16 @@ if (!fs.existsSync(livePath)) {
         // same Σ round2(row) the company ledger and the P&L both display.
         sales_r2: accounting.round2(mdb.prepare('SELECT grand_total FROM sales').all()
             .reduce((s, r) => s + accounting.round2(r.grand_total), 0)),
-        receipts: mdb.prepare("SELECT COUNT(*) n, COALESCE(SUM(amount),0) t FROM payments WHERE type IN ('receipt','advance')").get()
+        // Receipts baseline = money actually received against bills
+        // (type='receipt'). type='advance' rows are advances GIVEN — cash out,
+        // advance-receivable movements (D2 normalization) — so including them
+        // here would compare "customer receipts" against receipts+outflows.
+        receipts: mdb.prepare("SELECT COUNT(*) n, COALESCE(SUM(amount),0) t FROM payments WHERE type = 'receipt'").get(),
+        advances: mdb.prepare("SELECT COUNT(*) n, COALESCE(SUM(amount),0) t FROM payments WHERE type = 'advance'").get()
     };
     console.log(`  migrated rows — sales ${raw.sales.n} (${money(raw.sales.t)}), milk ${raw.milk.n} (${money(raw.milk.t)}), ` +
-        `purchases ${raw.purchases.n} (${money(raw.purchases.t)}), receipts ${raw.receipts.n} (${money(raw.receipts.t)})`);
+        `purchases ${raw.purchases.n} (${money(raw.purchases.t)}), receipts ${raw.receipts.n} (${money(raw.receipts.t)}), ` +
+        `advances ${raw.advances.n} (${money(raw.advances.t)})`);
 
     // ── 1. Milk purchase counted once ──
     const milk = ops.getMilkCostSummary(mdb, ALL);

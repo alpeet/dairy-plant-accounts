@@ -217,7 +217,9 @@ function _expenseRows(db, from, to) {
     }
     for (const r of db.prepare(`
         SELECT id, voucher_no, date, expense_head, description, amount, paid_to, payment_mode
-          FROM petty_cash WHERE date >= ? AND date <= ?`).all(from, to)) {
+          FROM petty_cash WHERE date >= ? AND date <= ?
+           AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'`).all(from, to)) {
+        // Advance-head rows never enter operating expenses (balance sheet).
         push({
             date: r.date, amount: round2(r.amount), kind: 'operating',
             category: normalizeExpenseCategory(r), party: r.paid_to || '',

@@ -116,8 +116,21 @@ function getSale(db, id) {
  */
 function saveSale(db, saleData) {
     const trx = db.transaction(() => {
-        const { id, invoice_no, date, party_id, items, subtotal, discount,
-                discount_percent, tax, grand_total, paid_amount, payment_mode, notes } = saleData;
+        const { id, invoice_no, date, party_id, items: rawItems, subtotal: _subtotal, discount: _discount,
+                discount_percent, tax: _tax, grand_total: _grandTotal, paid_amount: _paidAmount, payment_mode, notes } = saleData;
+        // D11 precision policy (req 39/40): NEW writes are stored at 2 dp —
+        // money fields, item amounts and rates. Historical rows are never
+        // rewritten (req 47); aggregates already sum as Σ round2(row).
+        const subtotal = round2(_subtotal);
+        const discount = round2(_discount);
+        const tax = round2(_tax);
+        const grand_total = round2(_grandTotal);
+        const paid_amount = round2(_paidAmount);
+        const items = (rawItems || []).map(it => ({
+            ...it,
+            rate: round2(it.rate),
+            amount: round2(it.amount != null ? it.amount : (Number(it.quantity) || 0) * (Number(it.rate) || 0))
+        }));
         // The stored status is derived from the money received at invoice time
         // (currency-precision aware) — the dropdown value is not trusted, and
         // every read recomputes it from the actual receipts anyway.

@@ -199,7 +199,7 @@ async function renderBulkEntry() {
 
     const [partiesR, productsR, routesR, ratesR] = await Promise.all([
         window.api.getParties({}),
-        window.api.getProducts({}),
+        window.api.getProducts({ active_only: true }),
         window.api.getRoutes ? window.api.getRoutes({}) : Promise.resolve({ success: true, data: [] }),
         window.api.getEffectiveRate ? window.api.getEffectiveRate(bulk.date || today()) : Promise.resolve(null)
     ]);

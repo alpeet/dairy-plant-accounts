@@ -960,11 +960,15 @@ app.post('/api/products/get', (req, res) => {
 app.post('/api/products/save', requireRole('operator'), (req, res) => {
     const validationError = validateProduct(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
-    res.json(safeRun(() => ops.saveProduct(db, req.body)));
+    res.json(safeRun(() => ops.saveProduct(db, { ...req.body, created_by: req.user?.id || null })));
 });
 
 app.post('/api/products/delete', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.deleteProduct(db, req.body.id, req.user?.id)));
+});
+
+app.post('/api/products/rate-history', (req, res) => {
+    res.json(safeRun(() => ops.getProductRateHistory(db, req.body || {})));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -1154,7 +1158,7 @@ app.post('/api/accounting/classify-bank-row', (req, res) => {
 app.post('/api/payments/save', requireRole('operator'), (req, res) => {
     const validationError = validatePayment(req.body);
     if (validationError) return res.json({ success: false, error: validationError });
-    res.json(safeRun(() => ops.savePayment(db, req.body)));
+    res.json(safeRun(() => ops.savePayment(db, { ...req.body, created_by: req.user?.id || null })));
 });
 
 app.post('/api/payments/list', (req, res) => {
@@ -1479,6 +1483,12 @@ app.post('/api/salary/employees/save', requireRole('operator'), (req, res) => {
 });
 app.post('/api/salary/employees/delete', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.deleteEmployee(db, Number(req.body && req.body.id))));
+});
+app.post('/api/salary/employees/dupes', requireAuth, (req, res) => {
+    res.json(safeRun(() => ops.findDuplicateEmployees(db)));
+});
+app.post('/api/salary/employees/merge', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.mergeEmployees(db, { ...(req.body || {}), changed_by: req.user && req.user.id })));
 });
 
 // ──────────────────────────────────────────────────────────────

@@ -215,7 +215,7 @@ function generateBatchNo() {
 // ============================================================
 async function showProductionForm(batchId = null) {
     const [productsResult, typesResult, lotMode] = await Promise.all([
-        window.api.getProducts({}),
+        window.api.getProducts({ active_only: true }),
         window.api.getProcessTypes(),
         ensureProdLotMode()
     ]);
@@ -817,7 +817,7 @@ async function showWastagePanel() {
 }
 
 async function showRecordWastageForm() {
-    const [productsR] = await Promise.all([window.api.getProducts({})]);
+    const [productsR] = await Promise.all([window.api.getProducts({ active_only: true })]);
     const products = productsR.success ? productsR.data : [];
     showModal(`
         <div class="modal-header"><h2>Record Wastage / Loss</h2><button class="close-btn" onclick="closeModal()">&times;</button></div>

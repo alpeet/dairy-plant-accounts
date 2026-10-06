@@ -18,7 +18,7 @@ const {
 } = require('./parties');
 
 const {
-    listProducts, getProduct, saveProduct, deleteProduct
+    listProducts, getProduct, saveProduct, deleteProduct, getProductRateHistory
 } = require('./products');
 
 const {
@@ -72,7 +72,8 @@ const {
 } = require('./petty_cash');
 const {
     listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
-    listEmployees, saveEmployee, deleteEmployee
+    listEmployees, saveEmployee, deleteEmployee,
+    isValidEmployeeName, resolveEmployee, findDuplicateEmployees, mergeEmployees
 } = require('./salary');
 const {
     listVehicleExpenses, getVehicleExpense, saveVehicleExpense,
@@ -160,7 +161,8 @@ module.exports = {
     listParties, getParty, saveParty, deleteParty, getPartyLedger,
 
     // Products
-    listProducts, getProduct, saveProduct, deleteProduct,
+    // Products
+    listProducts, getProduct, saveProduct, deleteProduct, getProductRateHistory,
 
     // Stock
     getCurrentStock, getStockMovements, adjustStock,
@@ -226,6 +228,7 @@ module.exports = {
     // Salary
     listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
     listEmployees, saveEmployee, deleteEmployee,
+    isValidEmployeeName, resolveEmployee, findDuplicateEmployees, mergeEmployees,
 
     // Vehicle Expenses
     listVehicleExpenses, getVehicleExpense, saveVehicleExpense,

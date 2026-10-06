@@ -657,11 +657,15 @@ authHandle('db:products:get', async (event, id) => {
 });
 
 authHandle('db:products:save', async (event, product) => {
-    return safeRun(() => ops.saveProduct(db, product));
+    return safeRun(() => ops.saveProduct(db, { ...product, created_by: (currentUser && currentUser.id) || null }));
 });
 
 authHandle('db:products:delete', async (event, id) => {
     return safeRun(() => ops.deleteProduct(db, id, currentUser && currentUser.id));
+});
+
+authHandle('db:products:rate-history', async (event, params = {}) => {
+    return safeRun(() => ops.getProductRateHistory(db, params || {}));
 });
 
 // --- Stock ---
@@ -767,7 +771,7 @@ authHandle('db:farmer:bulk-pay', async (event, params) => {
 
 // --- Payments ---
 authHandle('db:payments:save', async (event, payment) => {
-    return safeRun(() => ops.savePayment(db, payment));
+    return safeRun(() => ops.savePayment(db, { ...payment, created_by: (currentUser && currentUser.id) || null }));
 });
 
 authHandle('db:payments:list', async (event, params = {}) => {
@@ -1050,6 +1054,12 @@ authHandle('db:salary:employees-save', async (event, data = {}) => {
 });
 authHandle('db:salary:employees-delete', async (event, id) => {
     return safeRun(() => ops.deleteEmployee(db, Number(id)));
+});
+authHandle('db:salary:employees-dupes', async (event) => {
+    return safeRun(() => ops.findDuplicateEmployees(db));
+});
+authHandle('db:salary:employees-merge', async (event, params = {}) => {
+    return safeRun(() => ops.mergeEmployees(db, { ...(params || {}), changed_by: currentUser && currentUser.id }));
 });
 
 authHandle('db:salary:delete', async (event, id) => {

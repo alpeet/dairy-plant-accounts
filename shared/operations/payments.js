@@ -26,6 +26,73 @@
 const { logAudit } = require('./audit');
 const accounting = require('./accounting');
 
+/** Payment modes that move money through the bank. */
+const BANK_MODES = ['bank', 'upi', 'cheque'];
+
+/**
+ * D10 — payment ↔ bank statement ↔ ledger share ONE transaction ID.
+ *
+ * When a payment is saved with bank details (mode bank/upi/cheque + a bank
+ * reference), create EXACTLY ONE linked `bank_transactions` row:
+ *   - `txn_uid = 'pay:<paymentId>'` → a later bank-statement import sees the
+ *     reference already used and skips it (never duplicates),
+ *   - `ledger_posted = 1, ledger_entry_id = NULL` → the payment itself already
+ *     posted the ledger entry, so the bank row never posts a second one,
+ *   - `payments.bank_txn_id` points back at it (single join key).
+ *
+ * If the statement row was imported FIRST, we just stamp the payment to the
+ * existing row instead of creating anything. Returns the bank row id or null.
+ */
+function linkPaymentToBank(db, payment) {
+    const mode = String(payment.mode || 'cash').toLowerCase();
+    if (!BANK_MODES.includes(mode)) return null;
+    const ref = String(payment.bank_reference || '').trim();
+    if (!ref) return null; // the reference IS the statement row's identity
+
+    const { ensureBankTable } = require('./bank');
+    ensureBankTable(db);
+
+    // Statement row already imported → link to it (no new row).
+    const existing = db.prepare('SELECT id FROM bank_transactions WHERE reference_no = ?').get(ref)
+        || db.prepare('SELECT id FROM bank_transactions WHERE txn_uid = ?').get(`pay:${payment.id}`);
+    if (existing) {
+        db.prepare('UPDATE payments SET bank_txn_id = ? WHERE id = ? AND bank_txn_id IS NULL')
+            .run(existing.id, payment.id);
+        return existing.id;
+    }
+
+    const isCredit = payment.type === 'receipt';
+    const amount = Number(payment.amount) || 0;
+    const debit = isCredit ? 0 : amount;
+    const credit = isCredit ? amount : 0;
+    const party = db.prepare('SELECT name FROM parties WHERE id = ?').get(payment.party_id);
+    const desc = String(payment.notes || '').trim()
+        || `Payment ${isCredit ? 'received' : 'made'} (payment #${payment.id})`;
+
+    const ins = db.prepare(`
+        INSERT INTO bank_transactions
+            (date, reference_no, counterparty_name, description, debit, credit, amount,
+             payment_mode, bank_account, txn_type, party_id, match_status,
+             accounting_class, remarks, created_by, ledger_posted, ledger_entry_id, txn_uid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'auto', ?, ?, ?, 1, NULL, ?)
+    `).run(
+        payment.date, ref, (party && party.name) || '', desc,
+        debit, credit, amount,
+        payment.mode, String(payment.bank_account || ''), payment.type,
+        payment.party_id || null,
+        // Explicit class: this row MIRRORS the payment. Never 'expense' (the
+        // payment already reaches P&L) and never 'transfer' — that would make
+        // the cash/bank position and P&L count the same rupee twice.
+        isCredit ? 'customer_receipt' : 'supplier_payment',
+        `linked to payment #${payment.id} (ledger posted by the payment)`,
+        payment.created_by || null,
+        `pay:${payment.id}`
+    );
+    const bankId = Number(ins.lastInsertRowid);
+    db.prepare('UPDATE payments SET bank_txn_id = ? WHERE id = ?').run(bankId, payment.id);
+    return bankId;
+}
+
 /**
  * Save a payment (receipt or payment made) with its transaction type,
  * posting the matching double entry to the ledger.
@@ -34,11 +101,12 @@ function savePayment(db, payment) {
     const trx = db.transaction(() => {
         const transactionType = normalizeTransactionType(payment.transaction_type);
         const result = db.prepare(
-            "INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, reference_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, reference_id, notes, bank_account, bank_reference) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).run(
             payment.party_id, payment.date, payment.type, transactionType, payment.amount,
             payment.mode, payment.reference_type || '',
-            payment.reference_id || null, payment.notes || ''
+            payment.reference_id || null, payment.notes || '',
+            payment.bank_account || '', payment.bank_reference || ''
         );
         const paymentId = result.lastInsertRowid;
 
@@ -52,8 +120,10 @@ function savePayment(db, payment) {
             mode: payment.mode
         }, payment.notes || '');
 
+        const bank_txn_id = linkPaymentToBank(db, { ...payment, id: paymentId });
+
         logAudit(db, 'payments', paymentId, 'create', null, { ...payment, transaction_type: transactionType }, payment.created_by);
-        return { id: paymentId, transaction_type: transactionType };
+        return { id: paymentId, transaction_type: transactionType, bank_txn_id: bank_txn_id || null };
     });
     return trx();
 }
@@ -174,6 +244,23 @@ function deletePayment(db, id) {
         // Delete the payment record
         db.prepare("DELETE FROM payments WHERE id = ?").run(id);
 
+        // D10: clean up the linked bank row — but ONLY when no other payment
+        // still points at it (a bulk payout shares ONE row across the batch)
+        // and the row was created by us ('pay:…'), never a statement import.
+        if (payment.bank_txn_id) {
+            try {
+                const row = db.prepare('SELECT id, txn_uid FROM bank_transactions WHERE id = ?').get(payment.bank_txn_id);
+                const ours = row && String(row.txn_uid || '').startsWith('pay:');
+                if (ours) {
+                    const others = db.prepare('SELECT COUNT(*) c FROM payments WHERE bank_txn_id = ?').get(row.id).c;
+                    if (others === 0) {
+                        db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(row.id);
+                        return { deleted: true, bank_row_deleted: true };
+                    }
+                }
+            } catch (e) { /* bank table missing — nothing to clean */ }
+        }
+
         return { deleted: true };
     });
     return trx();
@@ -230,5 +317,6 @@ module.exports = {
     deletePayment,
     updatePayment,
     postPaymentLedger,
-    normalizeTransactionType
+    normalizeTransactionType,
+    linkPaymentToBank
 };

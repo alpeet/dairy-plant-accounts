@@ -307,6 +307,17 @@ async function showBulkPaymentForm() {
                         </select>
                     </div>
                 </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Bank Account (optional)</label>
+                        <input type="text" class="form-control" name="bank_account" placeholder="e.g. Nabil Bank A/C 1234" value="">
+                    </div>
+                    <div class="form-group">
+                        <label>Bank Reference / Voucher No (optional)</label>
+                        <input type="text" class="form-control" name="bank_reference" placeholder="e.g. QR-0912 / voucher no" value="">
+                        <small style="color:var(--text-light)">With a reference, one linked bank transaction is created for this payout.</small>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label>Notes (optional)</label>
                     <input type="text" class="form-control" name="notes" placeholder="e.g. Weekly milk payment" value="Weekly milk payment settlement">
@@ -380,6 +391,8 @@ async function processBulkPayment() {
     const date = formData.get('date') || today();
     const mode = formData.get('mode') || 'cash';
     const notes = formData.get('notes') || '';
+    const bank_account = (formData.get('bank_account') || '').trim();
+    const bank_reference = (formData.get('bank_reference') || '').trim();
 
     // Validate date
     if (!date) {
@@ -435,7 +448,9 @@ async function processBulkPayment() {
         payments,
         date,
         mode,
-        notes
+        notes,
+        bank_account,
+        bank_reference
     });
 
     if (result.success) {

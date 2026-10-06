@@ -1609,6 +1609,16 @@ function showPaymentEntryForm() {
                     <input type="text" class="form-control" id="payEntryNotes" placeholder="reference, description…">
                 </div>
             </div>
+            <div class="form-row" id="payEntryBankRow">
+                <div class="form-group">
+                    <label>Bank Account</label>
+                    <input type="text" class="form-control" id="payEntryBankAccount" placeholder="e.g. Nabil Bank A/C 1234">
+                </div>
+                <div class="form-group">
+                    <label>Bank Reference / Voucher No</label>
+                    <input type="text" class="form-control" id="payEntryBankRef" placeholder="e.g. QR-0912 — creates one linked bank transaction">
+                </div>
+            </div>
             <div id="payEntryTreatment" style="margin-top:8px;padding:10px 14px;background:var(--bg);border-radius:6px;font-size:13px"></div>
         </div>
         <div class="modal-footer">
@@ -1661,6 +1671,8 @@ async function submitPaymentEntry() {
         party_id: party.id, date, type,
         transaction_type: typeName,
         amount, mode: document.getElementById('payEntryMode')?.value || 'cash',
+        bank_account: document.getElementById('payEntryBankAccount')?.value?.trim() || '',
+        bank_reference: document.getElementById('payEntryBankRef')?.value?.trim() || '',
         notes: document.getElementById('payEntryNotes')?.value || ''
     });
     if (result.success) {

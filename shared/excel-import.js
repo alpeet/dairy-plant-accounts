@@ -216,6 +216,37 @@ function normalize(str) {
     return String(str).trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/**
+ * Detect the actual header row index by scanning the first 50 rows for a row
+ * with expected column headers. This handles workbooks with preamble rows
+ * (title, subtitle, etc.) before the actual data header.
+ *
+ * @param {Array} sheetData - Raw sheet data from XLSX
+ * @param {Array<string>} expectedHeaders - Lowercase column header names to match
+ * @returns {number} Index of the header row (default 1 if not found)
+ */
+function findHeaderRowIndex(sheetData, expectedHeaders) {
+    if (!sheetData || sheetData.length < 2) return 1;
+
+    for (let i = 0; i < Math.min(50, sheetData.length); i++) {
+        const row = sheetData[i];
+        if (!row || row.length === 0) continue;
+
+        // A row whose cells are all blank must never match: ''.includes(h) /
+        // h.includes('') is true for every header, so an empty preamble row
+        // would otherwise be detected as the header row and shift every column
+        // (and turn the real header row into a phantom transaction).
+        const rowHeaders = row.slice(0, 10).map(c => normalize(toStr(c))).filter(Boolean);
+        if (rowHeaders.length === 0) continue;
+        const matches = expectedHeaders.filter(h => rowHeaders.some(rh => rh.includes(h) || h.includes(rh)));
+
+        if (matches.length >= expectedHeaders.length * 0.6) {
+            return i;
+        }
+    }
+    return 1;
+}
+
 // ══════════════════════════════════════════════════════════════
 // ADD / UPDATE / UNCHANGED comparison helpers
 // ══════════════════════════════════════════════════════════════
@@ -257,6 +288,76 @@ function baseName(str) {
         .trim()
         .replace(/\s+/g, ' ');
 }
+
+/**
+ * Extract sheet data and column indexes for import functions.
+ * Handles both old format (raw array) and new format (object with header detection).
+ *
+ * @param {Array|Object} sheetData - Either raw sheet array or object with data + header detection
+ * @param {Array<string>} headerPatterns - Array of lowercase column names to find
+ * @returns {Object} { data, SHEET_DATA_START_ROW, columnIndexes }
+ */
+function extractSheetColumns(sheetData, headerPatterns) {
+    // Handle new format (object with header detection)
+    if (sheetData && typeof sheetData === 'object' && !Array.isArray(sheetData)) {
+        const { data: rawSheetData, SHEET_DATA_START_ROW } = sheetData;
+        const headerCells = (rawSheetData[SHEET_DATA_START_ROW - 1] || []).map((c) => toStr(c).trim().toLowerCase());
+
+        const columnIndexes = {};
+        for (const [pattern, fallback] of headerPatterns) {
+            const idx = headerCells.findIndex(cell => cell.includes(pattern) || pattern.includes(cell));
+            columnIndexes[pattern] = idx >= 0 ? idx : fallback;
+        }
+
+        return {
+            data: rawSheetData,
+            SHEET_DATA_START_ROW,
+            columnIndexes
+        };
+    }
+    // Handle old format (raw array)
+    else {
+        const data = sheetData || [];
+        const headerCells = (data[1] || []).map((c) => toStr(c).trim().toLowerCase());
+
+        const columnIndexes = {};
+        for (const [pattern, fallback] of headerPatterns) {
+            const idx = headerCells.findIndex(cell => cell.includes(pattern) || pattern.includes(cell));
+            columnIndexes[pattern] = idx >= 0 ? idx : fallback;
+        }
+
+        return {
+            data,
+            SHEET_DATA_START_ROW: 2,
+            columnIndexes
+        };
+    }
+}
+
+/**
+ * Extract sheet data and SHEET_DATA_START_ROW from either old format (raw array)
+ * or new format (object with header detection). Returns standardized format.
+ *
+ * @param {Array|Object} sheetData - Raw array or {data, headerRowIndex, SHEET_DATA_START_ROW}
+ * @returns {Object} {data, SHEET_DATA_START_ROW}
+ */
+function normalizeSheetFormat(sheetData) {
+    if (!sheetData) return { data: [], SHEET_DATA_START_ROW: 2 };
+
+    // New format: already has the structure we need
+    if (sheetData.data && typeof sheetData.SHEET_DATA_START_ROW === 'number') {
+        return { data: sheetData.data, SHEET_DATA_START_ROW: sheetData.SHEET_DATA_START_ROW };
+    }
+
+    // Old format: raw array
+    if (Array.isArray(sheetData)) {
+        return { data: sheetData, SHEET_DATA_START_ROW: 2 };
+    }
+
+    return { data: [], SHEET_DATA_START_ROW: 2 };
+}
+
+// ════════════════════════════════════════════════════════════════
 
 function mapPartyType(type) {
     const t = normalize(type);
@@ -490,9 +591,12 @@ function importParties(db, sheetData, opts) {
     // Column resolution is header-driven when the sheet carries the exporter's
     // header row (Party Name/Type/Phone/Email/Address/Opening Balance), falling
     // back to the legacy fixed layout (0=Name, 1=Type, 2=Phone, 3=Address,
-    // 4=Opening Balance) for older workbooks without those headers. Getting
-    // this wrong made every re-import report "updated" (the 1,718 symptom).
-    const headerCells = (sheetData[1] || []).map((c) => toStr(c).trim().toLowerCase());
+    // 4=Opening Balance) for older workbooks without those headers.
+    // Use the dynamically detected header row (normalizeSheetFormat also
+    // accepts a legacy raw array, so external callers keep working).
+    const { data: rawSheetData, SHEET_DATA_START_ROW } = normalizeSheetFormat(sheetData);
+    const headerCells = (rawSheetData[SHEET_DATA_START_ROW - 1] || []).map((c) => toStr(c).trim().toLowerCase());
+
     const findCol = (names, fallback) => {
         for (const n of names) {
             const i = headerCells.indexOf(n);
@@ -507,14 +611,12 @@ function importParties(db, sheetData, opts) {
     const addrIdx = findCol(['address', 'party address'], emailIdx >= 0 ? 4 : 3);
     const balIdx = findCol(['opening balance', 'opening_bal', 'balance'], emailIdx >= 0 ? 5 : 4);
 
-    const headerRow = sheetData[SHEET_DATA_START_ROW - 1] || [];
-
     let inserted = 0, updated = 0, unchanged = 0, openingLedger = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
-        for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
-            const row = sheetData[i];
+        for (let i = SHEET_DATA_START_ROW; i < rawSheetData.length; i++) {
+            const row = rawSheetData[i];
             if (!row || !row[nameIdx]) continue;
             const name = toStr(row[nameIdx]);
             if (!name || normalize(name) === 'party name') continue;
@@ -649,6 +751,9 @@ function importProducts(db, sheetData, opts) {
     const log = opts.log;
     log('\n  📋 Importing Products...');
 
+    // Normalize sheet format (handles both old and new formats)
+    const { data: rawSheetData, SHEET_DATA_START_ROW } = normalizeSheetFormat(sheetData);
+
     const insertProduct = db.prepare(`
         INSERT INTO products (name, unit, category, opening_stock, reorder_level, rate, notes, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -665,15 +770,28 @@ function importProducts(db, sheetData, opts) {
     `);
     const findProduct = db.prepare('SELECT id FROM products WHERE name = ?');
 
-    // Col 0: Product Name, 1: Unit, 2: Opening Stock, 6: Reorder Level, 7: Rate
-    const nameIdx = 0, unitIdx = 1, openingIdx = 2, reorderIdx = 6, rateIdx = 7;
+    // Detect headers for column mapping
+    const headerCells = (rawSheetData[SHEET_DATA_START_ROW - 1] || []).map((c) => toStr(c).trim().toLowerCase());
+
+    const findCol = (names, fallback) => {
+        for (const n of names) {
+            const i = headerCells.indexOf(n);
+            if (i >= 0) return i;
+        }
+        return fallback;
+    };
+    const nameIdx = findCol(['product name', 'item name', 'name'], 0);
+    const unitIdx = findCol(['unit', 'unit type'], 1);
+    const openingIdx = findCol(['opening stock', 'opening', 'stock'], 2);
+    const reorderIdx = findCol(['reorder level', 'reorder', 'min stock'], 6);
+    const rateIdx = findCol(['rate', 'price', 'unit rate'], 7);
 
     let inserted = 0, updated = 0, unchanged = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
-        for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
-            const row = sheetData[i];
+        for (let i = SHEET_DATA_START_ROW; i < rawSheetData.length; i++) {
+            const row = rawSheetData[i];
             if (!row || !row[nameIdx]) continue;
             const name = toStr(row[nameIdx]);
             if (!name || normalize(name) === 'product name' || normalize(name).includes('total')) continue;
@@ -743,6 +861,9 @@ function importSales(db, sheetData, opts) {
         VALUES (?, ?, 'sale', ?, ?, ?, 0, ?, ?)
     `) : null;
 
+    // Extract data and handle both old format (array) and new format (object with header detection)
+    const { data: rawSheetData, SHEET_DATA_START_ROW } = sheetData.data ? sheetData : { data: sheetData, SHEET_DATA_START_ROW: 2 };
+
     // Col: 0=Date(BS serial/text), 1=AD Date, 2=InvoiceNo, 3=PartyName, 4=Product, 5=Qty,
     // 6=Rate, 7=Amount, 8=Disc%, 9=NetAmount, 10=PaymentMode, 11=Status, 12=Remarks
     const dateIdx = 0, adDateIdx = 1, invIdx = 2, partyIdx = 3, prodIdx = 4,
@@ -750,8 +871,8 @@ function importSales(db, sheetData, opts) {
           netIdx = 9, modeIdx = 10, statusIdx = 11, remarkIdx = 12;
 
     const invoiceGroups = {};
-    for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
-        const row = sheetData[i];
+    for (let i = SHEET_DATA_START_ROW; i < rawSheetData.length; i++) {
+        const row = rawSheetData[i];
         if (!row || !row[invIdx]) continue;
         const invNo = toStr(row[invIdx]);
         if (!invNo) continue;
@@ -765,8 +886,8 @@ function importSales(db, sheetData, opts) {
     // cream, so each date+party gets a deterministic internal document number.
     let internalSeq = 0;
     const orphanGroups = {};
-    for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
-        const row = sheetData[i];
+    for (let i = SHEET_DATA_START_ROW; i < rawSheetData.length; i++) {
+        const row = rawSheetData[i];
         if (!row) continue;
         if (toStr(row[invIdx])) continue;
         const party = toStr(row[partyIdx]);
@@ -927,6 +1048,9 @@ function importPurchases(db, sheetData, opts) {
         VALUES (?, ?, 'purchase', ?, ?, 0, ?, ?, ?)
     `) : null;
 
+    // Extract data and handle both old format (array) and new format (object with header detection)
+    const { data: rawSheetData, SHEET_DATA_START_ROW } = sheetData.data ? sheetData : { data: sheetData, SHEET_DATA_START_ROW: 2 };
+
     // Col: 0=Date, 1=AD Date, 2=BillNo, 3=Supplier, 4=Shift, 5=Product, 6=FAT%,
     // 7=SNF%, 8=Extra/Unit, 9=RateType, 10=FixedRate, 11=Rate/Unit, 12=Qty, 13=Amount,
     // 14=Transport, 15=NetAmount, 16=PaymentMode, 17=Status, 18=Remarks
@@ -936,8 +1060,8 @@ function importPurchases(db, sheetData, opts) {
           transportIdx = 14, netIdx = 15, modeIdx = 16, statusIdx = 17, remarkIdx = 18;
 
     const billGroups = {};
-    for (let i = SHEET_DATA_START_ROW; i < sheetData.length; i++) {
-        const row = sheetData[i];
+    for (let i = SHEET_DATA_START_ROW; i < rawSheetData.length; i++) {
+        const row = rawSheetData[i];
         if (!row || !row[billIdx]) continue;
         const billNo = toStr(row[billIdx]);
         if (!billNo) continue;
@@ -1096,7 +1220,7 @@ function importCollections(db, sheetData, opts) {
     const dateIdx = 0, adDateIdx = 1, recIdx = 2, custIdx = 3, billIdx = 4, typeIdx = 5,
           collectedIdx = 7, paidIdx = 8, modeIdx = 9, transTypeIdx = 11, remarkIdx = 11;
 
-    let inserted = 0, unchanged = 0, skipped = 0;
+    let inserted = 0, unchanged = 0, skipped = 0, skippedPetty = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -1107,6 +1231,17 @@ function importCollections(db, sheetData, opts) {
             const rowType = normalize(toStr(row[typeIdx]));
             if (rowType === '0' || rowType === 'total' || normalize(customerName).includes('total')) continue;
 
+            // D13 (late finding): the Collection sheet's "PETTY CASH" rows are the
+            // collection counter's own petty box — day rollups of the PETTY CASH
+            // register (imported separately as petty_cash expenses + advances) or
+            // cash handed to that box. Both legs are the SAME rupee, so importing
+            // them as payments double-counts cash out (Migration 29 voided the
+            // legacy rows; this keeps them from coming back on re-import).
+            if (rowType.includes('petty') || normalize(customerName) === 'petty cash') {
+                skippedPetty++;
+                continue;
+            }
+
             const partyId = resolveParty(customerName, db, autoCreate, 'customer');
             if (!partyId) { skipped++; continue; }
 
@@ -1114,7 +1249,13 @@ function importCollections(db, sheetData, opts) {
 
             let payType = 'receipt';
             let amount = toNum(row[collectedIdx]);
-            if (rowType === 'payment' || rowType === 'advance' || rowType.includes('petty')) {
+            // Col 5 can itself carry "ADVANCE RETURNED" — type it before the
+            // generic 'advance' branch so the return is never a plain receipt.
+            const typeCellTT = rowType.replace(/[\s-]+/g, '_');
+            if (typeCellTT === 'advance_returned') {
+                payType = 'receipt';
+                amount = toNum(row[collectedIdx]) || toNum(row[paidIdx]);
+            } else if (rowType === 'payment' || rowType === 'advance') {
                 payType = 'payment';
                 amount = toNum(row[paidIdx]);
             }
@@ -1131,7 +1272,8 @@ function importCollections(db, sheetData, opts) {
             // (advance / loan_given / loan_received / loan_repayment / …).
             const rawTransType = toStr(row[transTypeIdx]).trim().toLowerCase().replace(/[\s-]+/g, '_');                    const KNOWN_TT = new Set(['actual_expense', 'advance', 'advance_returned', 'loan_given', 'loan_received',
                         'loan_repayment', 'advance_adjustment', 'settlement', 'other']);
-            const transactionType = KNOWN_TT.has(rawTransType) ? rawTransType : null;
+            const transactionType = (typeCellTT === 'advance_returned') ? 'advance_returned'
+                : (KNOWN_TT.has(rawTransType) ? rawTransType : null);
             const remarksSource = KNOWN_TT.has(rawTransType) ? toStr(row[remarkIdx + 1]) : toStr(row[remarkIdx]);
             const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${remarksSource}`;
 
@@ -1149,8 +1291,8 @@ function importCollections(db, sheetData, opts) {
     });
     trx();
 
-    log(`  ✅ Collections: ${inserted} added, ${unchanged} unchanged${skipped ? `, ${skipped} no party` : ''}`);
-    return { added: inserted, unchanged, skipped };
+    log(`  ✅ Collections: ${inserted} added, ${unchanged} unchanged${skipped ? `, ${skipped} no party` : ''}${skippedPetty ? `, ${skippedPetty} petty-cash mirror rows skipped (D13)` : ''}`);
+    return { added: inserted, unchanged, skipped, skipped_petty: skippedPetty };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1720,7 +1862,9 @@ function rebuildStockLedger(db, log) {
  * PETTY CASH register sheet → petty_cash (+ advance postings to ledger).
  * Cols: 0 Date, [1 AD], 2 Receipt No, 3 Customer, 4 Against Bill, 5 Description,
  *       6 Type, 7 Opening Due, 8 Collected, 9 Paid, 10 Mode, 11 Closing, 12 Remarks
- * - "Payment" rows → petty_cash expense entries.
+ * - "Payment" / "OFFICE EXPENSES" rows → petty_cash expense entries (D14: the
+ *   office rows were previously dropped — a fresh import understated expenses
+ *   by Rs 223,288. Head = Excel description, fallback 'Payment').
  * - "Advance" rows → petty_cash entry + 'advance' payment + ledger debit for the
  *   matched party (deduped against advances already in the ledger — the
  *   Salary Advance sheet and Party_Ledger record some of the same advances).
@@ -1728,7 +1872,7 @@ function rebuildStockLedger(db, log) {
  *   already produced payments/ledger entries.
  */
 function importPettyCashSheet(db, data, { log, mode }) {
-    const report = { payment: 0, advance: 0, advance_ledger: 0, collection_skipped: 0, unmatched: [], skipped_dup: 0 };
+    const report = { payment: 0, office: 0, advance: 0, advance_ledger: 0, collection_skipped: 0, unmatched: [], skipped_dup: 0 };
     // Fresh mode: the workbook's Party_Ledger sheet is the party-balance source
     // of truth and already carries every advance (entered at recap dates, e.g.
     // "ADVANCE BY LILA SIR" on 2083-05-24). The PETTY CASH register's daily
@@ -1742,8 +1886,8 @@ function importPettyCashSheet(db, data, { log, mode }) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
     `);
     const insertPay = db.prepare(`
-        INSERT INTO payments (party_id, date, type, amount, mode, reference_type, notes, created_by)
-        VALUES (?, ?, 'advance', ?, ?, ?, ?, NULL)
+        INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, notes, created_by)
+        VALUES (?, ?, 'advance', 'advance', ?, ?, ?, ?, NULL)
     `);
     const insertLedger = db.prepare(`
         INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance)
@@ -1775,13 +1919,21 @@ function importPettyCashSheet(db, data, { log, mode }) {
 
         if (type === 'Collection') { report.collection_skipped++; continue; }
 
-        if (type === 'Payment' && paid > 0) {
-            const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|payment|${desc.toLowerCase()}`;
+        // Expense vouchers: "Payment" AND "OFFICE EXPENSES" (D14 — the 72 office
+        // rows were silently dropped because only Payment/Advance were handled,
+        // so a fresh import understated expenses by Rs 223,288). Head = the Excel
+        // description (the real detail: DISEL, ELECTRICITY ASHADH-2083, …), with
+        // 'Payment' as fallback for blank descriptions so rows still dedupe
+        // against legacy head='Payment' rows after Migration 30 (D8).
+        if ((type === 'Payment' || type === 'OFFICE EXPENSES') && paid > 0) {
+            const head = desc || 'Payment';
+            const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|${head.toLowerCase()}|${desc.toLowerCase()}`;
             if (existingPC.has(key)) { report.skipped_dup++; continue; }
             seq++;
-            insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, 'Payment', desc, paid, customer, payMode, '');
+            insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, head, desc, paid, customer, payMode, '');
             existingPC.add(key);
             report.payment++;
+            if (type === 'OFFICE EXPENSES') report.office = (report.office || 0) + 1;
         } else if (type === 'Advance' && paid > 0) {
             const pid = resolveParty(customer, db, false);
             const pcKey = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|advance|${(desc || 'advance paid').toLowerCase()}`;
@@ -1803,7 +1955,7 @@ function importPettyCashSheet(db, data, { log, mode }) {
         }
     }
 
-    log(`  💰 Petty cash: ${report.payment} payments, ${report.advance} advances registered` +
+    log(`  💰 Petty cash: ${report.payment} payments${report.office ? ` (${report.office} office expenses, D14)` : ''}, ${report.advance} advances registered` +
         (report.advance_ledger ? `, ${report.advance_ledger} advance postings to ledgers` : '') +
         (report.collection_skipped ? `, ${report.collection_skipped} collection rows skipped (duplicates)` : '') +
         (report.unmatched.length ? `, ⚠️ ${report.unmatched.length} advances without a party match` : ''));
@@ -2397,7 +2549,8 @@ function ensureEmployeesTable(db) {
         monthly_salary REAL DEFAULT 0.0,
         active INTEGER DEFAULT 1,
         notes TEXT DEFAULT '',
-        created_at TEXT DEFAULT (datetime('now','localtime'))
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT DEFAULT (datetime('now','localtime'))
     )`);
 }
 
@@ -2421,6 +2574,37 @@ function ensureEmployeesTable(db) {
 //     SALARY PAYMENT | Balance | Mode | Approved | Remarks
 //     → kept for old files; dedupes on a NON-EMPTY voucher only.
 // ---------------------------------------------------------------
+
+// BS month names as written in payroll remarks ("2083 SHRAWAN SALARY").
+const _BS_MONTH_NAMES = {
+    baisakh: 1, jestha: 2, jeth: 2, asar: 3, asadhar: 3, ashadh: 3,
+    shrawan: 4, sravan: 4, savan: 4,
+    bhadra: 5, bhadaw: 5,
+    ashoj: 6, aswin: 6, ashwin: 6,
+    kartik: 7, mangsir: 8, mansir: 8,
+    push: 9, poush: 9, poush: 9,
+    magh: 10, falgun: 11, phalgun: 11,
+    chaitra: 12, chait: 12
+};
+
+/**
+ * Payroll month from a remarks cell like "2083 SHRAWAN SALARY 15-32".
+ * The sheet's Month column is stale on re-entered rows (rows for SHRAWAN and
+ * BHADRA still carried 2083-03), which collapsed 9 employee-months into 4 and
+ * silently dropped Rs 66,000 of salary payments — the remarks state the real
+ * month explicitly, so they win whenever present.
+ * @returns {string|null} 'YYYY-MM' or null
+ */
+function bsMonthFromRemarks(text) {
+    const t = String(text || '').toLowerCase();
+    if (!t) return null;
+    const ym = t.match(/\b(?:19|20)\d{2}\b/);
+    if (!ym) return null;
+    const mm = t.match(/\b(baisakh|jestha|jeth|asar|asadhar|ashadh|shrawan|sravan|savan|bhadra|bhadaw|ashoj|ashwin|aswin|kartik|mangsir|mansir|push|poush|poush|magh|falgun|phalgun|chaitra|chait)\b/);
+    if (!mm) return null;
+    return `${ym[0]}-${String(_BS_MONTH_NAMES[mm[1]]).padStart(2, '0')}`;
+}
+
 function importSalaryAdvanceSheet(db, data, { log }) {
     ensureEmployeesTable(db);
     const hr = (data || []).findIndex((row, idx) => {
@@ -2462,14 +2646,18 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
         return { ...res, note: 'No header row found' };
     }
 
+    const { resolveEmployee } = require('./operations/salary');
     const findEmp = (rawName, empCode, dept) => {
         const name = String(rawName || '').replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
-        const hit = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get(name);
-        if (hit) return hit.id;
+        // D6: resolve against the master (case/space/spelling-insensitive) so
+        // "SARASWATI RAYMAJHI" lands on "Sawaswati Rayamajhi" instead of
+        // creating a second employee on every import.
+        const hit = resolveEmployee(db, name);
+        if (hit) return { id: hit.id, name: hit.name, position: hit.position || '' };
         const code = String(empCode || '').trim() || ('EMP-' + String(Date.now()).slice(-6));
         const ins = db.prepare(`INSERT INTO employees (code, name, position, notes) VALUES (?, ?, ?, 'Imported from Salary Advance sheet')`);
         ins.run(code, name, String(dept || '').trim());
-        return Number(db.prepare('SELECT last_insert_rowid() AS id').get().id);
+        return { id: Number(db.prepare('SELECT last_insert_rowid() AS id').get().id), name, position: String(dept || '').trim() };
     };
     const findExisting = db.prepare(
         'SELECT * FROM salary_records WHERE month=? AND LOWER(employee_name)=LOWER(?) ORDER BY id DESC LIMIT 1'
@@ -2486,9 +2674,17 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
     for (let i = hr + 1; i < data.length; i++) {
         const row = data[i];
         if (!row) continue;
-        const name = toStr(row[cName]);
-        const month = toStr(row[cMonth]);
-        if (!name || !month) { if (row.some(x => toStr(x) !== '')) res.skipped++; continue; }
+        const rawName = toStr(row[cName]);
+        const sheetMonth = toStr(row[cMonth]);
+        if (!rawName || !sheetMonth) { if (row.some(x => toStr(x) !== '')) res.skipped++; continue; }
+        const pos = cPos >= 0 ? toStr(row[cPos]) : '';
+        const remarks = cRemarks >= 0 ? toStr(row[cRemarks]) : '';
+        // Remarks state the real payroll month ("2083 BHADRA SALARY") — the
+        // Month column is stale on re-entered rows; trusting it collapsed 9
+        // employee-months into 4. See bsMonthFromRemarks.
+        const month = bsMonthFromRemarks(remarks) || sheetMonth;
+        const emp = findEmp(rawName, cId >= 0 ? row[cId] : '', pos);
+        const name = emp.name;                       // canonical master name
         const key = month + '|' + normalize(name);
         if (seen.has(key)) { res.skipped++; continue; }   // duplicate row inside the sheet
         seen.add(key);
@@ -2500,8 +2696,7 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
             const net = toNum(row[cNet]) || (basic + allowance - advance - deduction);
             const payDate = cPayDate >= 0 ? toBSDate(row[cPayDate]) : null;
             const mode = mapPaymentMode(row[cMode]) || 'cash';
-            const pos = cPos >= 0 ? toStr(row[cPos]) : '';
-            const employeeId = findEmp(name, cId >= 0 ? row[cId] : '', pos);
+            const employeeId = emp.id;
             const cand = {
                 employee_id: employeeId,
                 employee_name: name,
@@ -2514,7 +2709,7 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
                 net_salary: net,
                 payment_date: payDate,
                 payment_mode: mode,
-                remarks: cRemarks >= 0 ? toStr(row[cRemarks]) : ''
+                remarks
             };
             const existing = findExisting.get(month, name);
             if (!existing) {
@@ -2546,8 +2741,9 @@ function importSalaryLegacySheet(db, data, { log }) {
     //       7 Advance, 8 SALARY PAYMENT, 9 Balance, 10 Mode, 11 Approved, 12 Remarks
     const findEmp = (rawName, empId, dept) => {
         let name = String(rawName || '').replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
-        const emp = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get(name);
-        if (emp) return emp.id;
+        const { resolveEmployee } = require('./operations/salary');
+        const hit = resolveEmployee(db, name);
+        if (hit) return hit.id;
         const ins = db.prepare(`INSERT INTO employees (code, name, position, notes) VALUES (?, ?, ?, 'Imported from Salary Advance sheet')`);
         const code = String(empId || '').trim() || ('EMP-' + String(Date.now()).slice(-6));
         ins.run(code, name || ('Employee ' + code), String(dept || '').trim());
@@ -2634,27 +2830,38 @@ function runExcelImport(db, excelPath, opts = {}) {
     autoCreatedParties = 0;
 
     const results = { mode };
-    const sheet = (name) => {
+
+    // Sheet loader that returns data + detected header row index
+    const sheet = (name, expectedHeaders) => {
         if (!workbook.SheetNames.includes(name)) return null;
         const data = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '' });
-        return data.length > 1 ? data : null;
+        if (data.length < 2) return null;
+
+        // Detect header row dynamically (handles preamble rows)
+        const headerRowIndex = expectedHeaders ? findHeaderRowIndex(data, expectedHeaders) : 1;
+
+        return {
+            data,
+            headerRowIndex,
+            SHEET_DATA_START_ROW: headerRowIndex + 1
+        };
     };
 
     // 1. Parties
-    const partySheet = sheet('Party_Master');
+    const partySheet = sheet('Party_Master', ['party name', 'name']);
     if (partySheet) {
         results.parties = importParties(db, partySheet, { mode, log });
         buildPartyIndex(db);
     }
 
     // 1.5 Party emails
-    const emailSheet = sheet('Party Email');
+    const emailSheet = sheet('Party Email', ['party', 'email']);
     if (emailSheet) {
-        results.partyEmails = importPartyEmails(db, emailSheet, { mode, log });
+        results.partyEmails = importPartyEmails(db, emailSheet.data, { mode, log });
     }
 
     // 2. Products
-    const productSheet = sheet('Stock_Master');
+    const productSheet = sheet('Stock_Master', ['product', 'item name']);
     if (productSheet) {
         results.products = importProducts(db, productSheet, { mode, log });
         buildProductIndex(db);
@@ -2666,14 +2873,14 @@ function runExcelImport(db, excelPath, opts = {}) {
     const genLedger = mode === 'upsert';
 
     // 3. Sales
-    const salesSheet = sheet('Sales_Entry');
-    if (salesSheet && salesSheet.length > 2) {
+    const salesSheet = sheet('Sales_Entry', ['date', 'invoice', 'bill']);
+    if (salesSheet && salesSheet.data.length > 2) {
         results.sales = importSales(db, salesSheet, { mode, log, genLedger });
     }
 
     // 4. Purchases
-    const purchaseSheet = sheet('Purchase_Entry');
-    if (purchaseSheet && purchaseSheet.length > 2) {
+    const purchaseSheet = sheet('Purchase_Entry', ['date', 'bill', 'billno']);
+    if (purchaseSheet && purchaseSheet.data.length > 2) {
         results.purchases = importPurchases(db, purchaseSheet, { mode, log, genLedger });
     }
 
@@ -2690,9 +2897,9 @@ function runExcelImport(db, excelPath, opts = {}) {
     // 5b. Milk_Collections → milk_collections (ADD/UPDATE/UNCHANGED)
     const milkSheetName = workbook.SheetNames.includes('Milk_Collections') ? 'Milk_Collections' : null;
     if (milkSheetName) {
-        const data = XLSX.utils.sheet_to_json(workbook.Sheets[milkSheetName], { header: 1, defval: '' });
-        if (data.length > 1) {
-            results.milkCollections = importMilkCollectionsSheet(db, data, { mode, log });
+        const milkData = XLSX.utils.sheet_to_json(workbook.Sheets[milkSheetName], { header: 1, defval: '' });
+        if (milkData.length > 1) {
+            results.milkCollections = importMilkCollectionsSheet(db, milkData, { mode, log });
         } else {
             results.milkCollections = absentSheetResult();
         }
@@ -2703,9 +2910,9 @@ function runExcelImport(db, excelPath, opts = {}) {
     // 6. Party ledger (fresh mode only — line-level sheet is incompatible with the
     //    per-invoice ledger entries the app maintains)
     if (mode === 'fresh') {
-        const ledgerSheet = sheet('Party_Ledger');
-        if (ledgerSheet && ledgerSheet.length > 2) {
-            results.ledger = importPartyLedger(db, ledgerSheet, { mode, log });
+        const ledgerSheet = sheet('Party_Ledger', ['date', 'party', 'description']);
+        if (ledgerSheet && ledgerSheet.data.length > 2) {
+            results.ledger = importPartyLedger(db, ledgerSheet.data, { mode, log });
         }
     }
 
@@ -2762,7 +2969,7 @@ function runExcelImport(db, excelPath, opts = {}) {
     // ---- sheets are reported explicitly, never silently ignored) ----
     results.routes = absentSheetResult();
     const routesSheet = sheet('Routes');
-    if (routesSheet) results.routes = importRoutesSheet(db, routesSheet, { mode, log });
+    if (routesSheet) results.routes = importRoutesSheet(db, routesSheet.data, { mode, log });
 
     results.rateChart = absentSheetResult();
     const rateSheetNames = ['Milk_Rate_Chart', 'Milk_Rate', 'Rate_Chart'];
@@ -2818,6 +3025,22 @@ function runExcelImport(db, excelPath, opts = {}) {
     if (pbName) {
         const data = XLSX.utils.sheet_to_json(workbook.Sheets[pbName], { header: 1, defval: '' });
         if (data.length > 1) results.productionBatches = importProductionBatchesSheet(db, data, { mode, log });
+    }
+
+    // Re-run advance normalization AFTER the import: migrations ran at database
+    // init (before fresh-mode data existed), and the Excel's own Party_Ledger
+    // sheet carries the advances as untagged rows — without this pass the
+    // Advance Recovery Register reads empty right after a fresh import (D1).
+    // Idempotent: it only tags/links rows that are still untagged.
+    try {
+        const { normalizeAdvances } = require('./operations/accounting');
+        const advReport = normalizeAdvances(db);
+        if (Object.values(advReport).some(v => v > 0)) {
+            results.advanceNormalization = advReport;
+            log(`  ♻️  Advance normalization: ${JSON.stringify(advReport)}`);
+        }
+    } catch (eAdv) {
+        log(`  ⚠️  Advance normalization skipped: ${eAdv.message}`);
     }
 
     // Summary
@@ -2880,6 +3103,9 @@ function todayBSDate() {
 module.exports = {
     runExcelImport,
     importExcelFile,
+    importCollections,
+    importPettyCashSheet,
+    buildPartyIndex,
     rebuildStockLedger,
     deriveShortfallBatches,
     importRoutesSheet,
@@ -2895,6 +3121,7 @@ module.exports = {
     backfillMilkCollectionsFromPurchases,
     deriveProductionBatches,
     importSalaryAdvanceSheet,
+    bsMonthFromRemarks,
     adToBS,
     todayBSDate,
     bsToAD,

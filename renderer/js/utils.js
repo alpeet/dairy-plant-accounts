@@ -527,3 +527,42 @@ function applyDatePreset(preset, fromId, toId, refreshFnName) {
     if (t) t.value = p.to;
     if (refreshFnName && typeof window[refreshFnName] === 'function') window[refreshFnName]();
 }
+
+// ============================================================
+// Page filter store (audit req 41 — THE central date-filter fix)
+// ============================================================
+// Screens used to call getDatePreset('this_month') on EVERY render, so a
+// refresh that re-rendered the page silently threw away the user's From/To
+// range and re-queried the current month (the "Ashoj 1 → Ashoj 19" bug).
+// Every screen now keeps ONE stored filter per page id: renders read it,
+// refresh handlers write it. No screen computes dates on its own.
+const _pageFilters = {};
+
+/**
+ * Get (initialising on first use) the stored filter for a page.
+ * The returned object is live — mutate via pageFilterSet.
+ */
+function pageFilterInit(pageId, defaults = {}) {
+    if (!_pageFilters[pageId]) {
+        const { preset, ...rest } = defaults;
+        const p = getDatePreset(preset || 'this_month');
+        _pageFilters[pageId] = { from: p.from, to: p.to, search: '', status: '', ...rest };
+    }
+    return _pageFilters[pageId];
+}
+
+/** Merge a patch into the stored filter and return it. */
+function pageFilterSet(pageId, patch, defaults = {}) {
+    const cur = pageFilterInit(pageId, defaults);
+    Object.assign(cur, patch);
+    return cur;
+}
+
+/** Reset a stored filter (back to the default preset) — used by Clear buttons. */
+function pageFilterReset(pageId, defaults = {}) {
+    delete _pageFilters[pageId];
+    return pageFilterInit(pageId, defaults);
+}
+
+// Test hook (sandboxed unit tests) — never used by the app UI.
+if (typeof window !== 'undefined') window._pageFilters = _pageFilters;

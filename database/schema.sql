@@ -107,8 +107,27 @@ CREATE TABLE IF NOT EXISTS products (
     hsn_code TEXT DEFAULT '',
     expiry_days INTEGER DEFAULT 0,
     notes TEXT DEFAULT '',
+    code TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    is_stocked INTEGER DEFAULT 1,
+    is_saleable INTEGER DEFAULT 1,
+    is_purchaseable INTEGER DEFAULT 1,
+    is_produced INTEGER DEFAULT 1,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+-- Product rate history (D9): every rate change records prev → new with
+-- effective date, reason, user and timestamp. Sales keep their own line rate.
+CREATE TABLE IF NOT EXISTS product_rate_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    old_rate REAL DEFAULT 0,
+    new_rate REAL DEFAULT 0,
+    effective_from TEXT DEFAULT '',
+    reason TEXT DEFAULT '',
+    changed_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 -- ============================================================
@@ -302,6 +321,10 @@ CREATE TABLE IF NOT EXISTS payments (
     notes TEXT DEFAULT '',
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    -- D10: one transaction ID across payment ↔ bank statement row ↔ ledger.
+    bank_txn_id INTEGER DEFAULT NULL,
+    bank_account TEXT DEFAULT '',
+    bank_reference TEXT DEFAULT '',
     FOREIGN KEY (party_id) REFERENCES parties(id),
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
@@ -739,7 +762,8 @@ CREATE TABLE IF NOT EXISTS employees (
     monthly_salary REAL DEFAULT 0.0,
     active INTEGER DEFAULT 1,
     notes TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now','localtime'))
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS salary_records (

@@ -48,7 +48,7 @@ async function renderInvoiceGenerator() {
     // Prefill from a just-saved invoice (keeps the form after "Save & New")
     const st = invoiceBuilderState;
     const [productsResult, partiesResult, settings] = await Promise.all([
-        window.api.getProducts(),
+        window.api.getProducts({ active_only: true }),
         window.api.getParties({ type: 'customer' }),
         getSettingsCached()
     ]);

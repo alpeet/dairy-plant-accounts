@@ -217,7 +217,11 @@ function getCompanyLedger(db, opts = {}) {
     }
     for (const r of db.prepare(`
         SELECT id, voucher_no, date, expense_head, description, amount
-          FROM petty_cash WHERE date >= ? AND date <= ? ORDER BY date, id`).all(from, to)) {
+          FROM petty_cash WHERE date >= ? AND date <= ?
+           AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
+         ORDER BY date, id`).all(from, to)) {
+        // Advance-head rows are excluded: they are balance-sheet movements,
+        // already carried by their payments row (section 6) — never expense.
         push({
             date: r.date, reference: r.voucher_no || '', type: 'Petty cash',
             particular: r.description || r.expense_head || 'Petty cash',

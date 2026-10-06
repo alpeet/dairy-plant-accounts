@@ -22,7 +22,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const { initDatabase } = require(path.join(ROOT, 'shared', 'db.js'));
-const { adToBS } = require(path.join(ROOT, 'shared', 'excel-import.js'));
+const { adToBS, todayBSDate } = require(path.join(ROOT, 'shared', 'excel-import.js'));
 const rates = require(path.join(ROOT, 'shared', 'operations', 'rates.js'));
 const milkOps = require(path.join(ROOT, 'shared', 'operations', 'milk.js'));
 const costing = require(path.join(ROOT, 'shared', 'operations', 'production_costing.js'));
@@ -237,8 +237,11 @@ check('10e. payout recorded in the audit trail', payAudit >= 1, payAudit);
 
 // ════════════════════════════════════════════════════════════
 console.log('\n═══ 11. Dashboard reads the same sources (today) ═══');
+// "Today" must be derived exactly like the dashboard derives it (LOCAL date,
+// not UTC — toISOString() shifts to the previous day east of UTC) or check 11b
+// compares two different calendar days.
 let todayBS = null;
-try { todayBS = adToBS(new Date().toISOString().split('T')[0]); } catch (e) { todayBS = null; }
+try { todayBS = todayBSDate() || adToBS(new Date().toISOString().split('T')[0]); } catch (e) { todayBS = null; }
 if (todayBS) {
     const cT = seed({ party_id: E, date: todayBS, milk_type: 'mixed', quantity_liters: 10, fat_percent: 4.2, snf_percent: 8.3 });
     const pnlToday = ops.getProfitLoss(db, { from_date: todayBS, to_date: todayBS });

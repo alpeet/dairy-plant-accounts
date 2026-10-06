@@ -120,7 +120,7 @@ function resetPurchaseFilter() {
 // ============================================================
 async function showPurchaseForm(purchaseId = null) {
     const [productsResult, partiesResult, settings] = await Promise.all([
-        window.api.getProducts(),
+        window.api.getProducts({ active_only: true }),
         window.api.getParties({ type: 'supplier' }),
         getSettingsCached()
     ]);

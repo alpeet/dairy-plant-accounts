@@ -39,7 +39,8 @@ function getFarmerOutstanding(db) {
  * Process bulk payments to farmers.
  * Creates payment records, ledger entries, and updates collection statuses.
  */
-function bulkPayFarmers(db, { payments, date, mode, notes }, userId = null) {
+function bulkPayFarmers(db, { payments, date, mode, notes, bank_account, bank_reference }, userId = null) {
+    const createdIds = [];
     const trx = db.transaction(() => {
         const results = [];
         for (const payment of payments) {
@@ -48,8 +49,10 @@ function bulkPayFarmers(db, { payments, date, mode, notes }, userId = null) {
 
             // Create payment record ('payment' type = money going out)
             const payResult = db.prepare(
-                "INSERT INTO payments (party_id, date, type, amount, mode, reference_type, notes) VALUES (?, ?, 'payment', ?, ?, 'milk_collection', ?)"
-            ).run(party_id, date, amount, mode, notes || '');
+                "INSERT INTO payments (party_id, date, type, amount, mode, reference_type, notes, bank_account, bank_reference) VALUES (?, ?, 'payment', ?, ?, 'milk_collection', ?, ?, ?)"
+            ).run(party_id, date, amount, mode, notes || '', bank_account || '', bank_reference || '');
+            const paymentId = Number(payResult.lastInsertRowid);
+            createdIds.push(paymentId);
 
             // Add ledger entry for payment made (debit reduces what we owe)
             db.prepare(
@@ -70,11 +73,42 @@ function bulkPayFarmers(db, { payments, date, mode, notes }, userId = null) {
             }
 
             results.push({
-                payment_id: payResult.lastInsertRowid,
+                payment_id: paymentId,
                 party_id,
                 amount,
                 collections_cleared: collection_ids ? collection_ids.length : 0
             });
+        }
+        // D10: a batch payout made by one bank transfer is ONE bank transaction.
+        // Create it for the batch total with txn_uid 'pay:<firstPaymentId>' and
+        // point EVERY payment of the batch at it, so the cash/bank position
+        // counts the transfer once (never once per farmer).
+        const ref = String(bank_reference || '').trim();
+        if (ref && ['bank', 'upi', 'cheque'].includes(String(mode || 'cash').toLowerCase()) && createdIds.length) {
+            const { ensureBankTable } = require('./bank');
+            ensureBankTable(db);
+            const existing = db.prepare('SELECT id FROM bank_transactions WHERE reference_no = ?').get(ref)
+                || db.prepare('SELECT id FROM bank_transactions WHERE txn_uid = ?').get(`pay:${createdIds[0]}`);
+            let bankId = existing ? existing.id : null;
+            if (!bankId) {
+                const total = db.prepare(
+                    `SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE id IN (${createdIds.map(() => '?').join(',')})`
+                ).get(...createdIds).s;
+                const ins = db.prepare(`
+                    INSERT INTO bank_transactions
+                        (date, reference_no, counterparty_name, description, debit, credit, amount,
+                         payment_mode, bank_account, txn_type, match_status, accounting_class,
+                         remarks, created_by, ledger_posted, ledger_entry_id, txn_uid)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 'payment', 'auto', 'supplier_payment', ?, ?, 1, NULL, ?)
+                `).run(date, ref, '', `Bulk farmer payout (${createdIds.length} payments)`,
+                    total, total, mode, bank_account || '',
+                    `linked to ${createdIds.length} milk-collection payments (ledger posted by the payments)`,
+                    userId, `pay:${createdIds[0]}`);
+                bankId = Number(ins.lastInsertRowid);
+            }
+            db.prepare(
+                `UPDATE payments SET bank_txn_id = ? WHERE id IN (${createdIds.map(() => '?').join(',')})`
+            ).run(bankId, ...createdIds);
         }
         return results;
     });

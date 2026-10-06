@@ -485,10 +485,12 @@ function getSaleSettlements(db, opts = {}) {
     const sales = db.prepare(saleSql).all(...saleParams);
 
     // Receipts (money received from customers) grouped by party.
+    // type='advance' rows are advances GIVEN (money out) — they must never
+    // settle a customer's invoices (audit req 25).
     let receiptSql = `
         SELECT id, party_id, date, amount, type, mode, reference_type, reference_id
           FROM payments
-         WHERE type IN ('receipt', 'advance') AND party_id IS NOT NULL`;
+         WHERE type = 'receipt' AND party_id IS NOT NULL`;
     if (partyFilter) receiptSql += ` AND party_id IN (${partyFilter.map(() => '?').join(',')})`;
     receiptSql += ' ORDER BY party_id, date, id';
     const receipts = db.prepare(receiptSql).all(...(partyFilter || []));
@@ -622,14 +624,16 @@ function getCashBankPosition(db, opts = {}) {
     const cashReceipts = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
            FROM payments
-          WHERE ${RANGE} AND type IN ('receipt', 'advance') AND LOWER(COALESCE(mode,'cash')) = 'cash'`
+          WHERE ${RANGE} AND type = 'receipt' AND LOWER(COALESCE(mode,'cash')) = 'cash'`
     ).get(...p);
 
     // ── Cash: money out ──
+    // type='advance' rows are advances GIVEN (money out); UI-created advances
+    // are type='payment' and already land here. Never an inflow.
     const cashPayments = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
            FROM payments
-          WHERE ${RANGE} AND type = 'payment' AND LOWER(COALESCE(mode,'cash')) = 'cash'`
+          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) = 'cash'`
     ).get(...p);
 
     const cashExpenses = db.prepare(
@@ -638,7 +642,10 @@ function getCashBankPosition(db, opts = {}) {
     ).get(...p);
 
     const pettyCash = db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash WHERE ${RANGE}`
+        // Advance-head rows are counted once via payments (type='advance')
+        // above — including them here would double-count the same cash out.
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
+          WHERE ${RANGE} AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'`
     ).get(...p);
 
     // ── Cash deposited into the bank (internal transfer, never income) ──
@@ -670,27 +677,33 @@ function getCashBankPosition(db, opts = {}) {
     const bankReceiptsDoc = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
            FROM payments
-          WHERE ${RANGE} AND type IN ('receipt', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
+          WHERE ${RANGE} AND type = 'receipt' AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
     ).get(...p);
     const bankPaymentsDoc = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
            FROM payments
-          WHERE ${RANGE} AND type = 'payment' AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
+          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
     ).get(...p);
 
     // Payments already reflected by an imported bank row (same reference, or the
     // same party-less date+amount) are not counted twice.
     const bankRefs = new Set(bankRows.map(r => String(r.reference_no || '').trim()).filter(Boolean));
+    // D10: a payment carrying bank_txn_id IS that bank row — count the row
+    // (already summed above from the statement) and drop the payment document,
+    // so the same rupee is never added from both sides.
+    const bankRowIds = new Set(bankRows.map(r => r.id));
     const docReceipts = db.prepare(
-        `SELECT id, date, amount, mode, reference_type, reference_id FROM payments
-          WHERE ${RANGE} AND type IN ('receipt','advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
+        `SELECT id, date, amount, mode, reference_type, reference_id, bank_txn_id FROM payments
+          WHERE ${RANGE} AND type = 'receipt' AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
     ).all(...p);
     const docPayments = db.prepare(
-        `SELECT id, date, amount, mode, reference_type, reference_id FROM payments
-          WHERE ${RANGE} AND type = 'payment' AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
+        `SELECT id, date, amount, mode, reference_type, reference_id, bank_txn_id FROM payments
+          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
     ).all(...p);
-    const dupReceipts = docReceipts.filter(r => bankRefs.has(String(r.reference_type || '').trim()));
-    const dupPayments = docPayments.filter(r => bankRefs.has(String(r.reference_type || '').trim()));
+    const dupReceipts = docReceipts.filter(r =>
+        (r.bank_txn_id && bankRowIds.has(r.bank_txn_id)) || bankRefs.has(String(r.reference_type || '').trim()));
+    const dupPayments = docPayments.filter(r =>
+        (r.bank_txn_id && bankRowIds.has(r.bank_txn_id)) || bankRefs.has(String(r.reference_type || '').trim()));
 
     // Money into the bank: customer receipts on the statement + every recorded
     // cash deposit (both the cash_deposits register and the statement rows that
@@ -785,7 +798,14 @@ function getExpenseSummary(db, opts = {}) {
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM other_expenses WHERE ${RANGE}`
     ).get(...p);
     const petty = db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash WHERE ${RANGE}`
+        // Advances are NOT expenses (audit req 25): rows with head 'Advance'
+        // are balance-sheet money-out, already carried by their payments row.
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
+          WHERE ${RANGE} AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'`
+    ).get(...p);
+    const pettyAdvances = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
+          WHERE ${RANGE} AND UPPER(TRIM(COALESCE(expense_head, ''))) = 'ADVANCE'`
     ).get(...p);
     const salary = db.prepare(
         `SELECT COALESCE(SUM(net_salary), 0) as total, COUNT(*) as count FROM salary_records WHERE payment_date >= ? AND payment_date <= ?`
@@ -838,6 +858,7 @@ function getExpenseSummary(db, opts = {}) {
         other_expenses: round2(otherExpenses.total - otherIncome.total),
         other_income: round2(otherIncome.total),
         petty_cash: round2(petty.total),
+        petty_advances: round2(pettyAdvances.total),
         salary: round2(salary.total),
         vehicle_expenses: round2(vehicle.total),
         bank_expenses: bankExpenseTotal,
@@ -879,7 +900,7 @@ function getReconciliation(db, opts = {}) {
 
     const receiptsTotal = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM payments
-          WHERE ${RANGE} AND type IN ('receipt','advance')`
+          WHERE ${RANGE} AND type = 'receipt'`
     ).get(from, to);
 
     // Ledger-based party balances (the app's own convention, unchanged).
@@ -1124,15 +1145,19 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id, from_date, to_date } 
     sql += ' ORDER BY date, id';
     const rows = db.prepare(sql).all(...params);
 
-    // Batch-resolve the source payments so each credit row can be classified.
+    // Batch-resolve the source payments so debit rows can be dated by their
+    // true payment date (the Party_Ledger sheet records advances at recap
+    // dates) and each credit row can be classified.
     const paymentIds = [...new Set(rows
-        .filter(r => r.credit > 0 && r.reference_id != null)
-        .map(r => r.reference_id))];
+        .filter(r => r.reference_id != null && String(r.reference_id).trim() !== '' && /^\d+$/.test(String(r.reference_id)))
+        .map(r => Number(r.reference_id)))];
     const ttById = new Map();
+    const dateById = new Map();
     if (paymentIds.length) {
         const ph = paymentIds.map(() => '?').join(',');
-        for (const p of db.prepare(`SELECT id, transaction_type FROM payments WHERE id IN (${ph})`).all(...paymentIds)) {
+        for (const p of db.prepare(`SELECT id, transaction_type, date FROM payments WHERE id IN (${ph})`).all(...paymentIds)) {
             ttById.set(p.id, String(p.transaction_type || ''));
+            if (p.date) dateById.set(p.id, p.date);
         }
     }
     const partyIds = [...new Set(rows.map(r => r.party_id).filter(v => v != null))];
@@ -1153,20 +1178,25 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id, from_date, to_date } 
     let movements = [];
     for (const [pid, list] of byParty) {
         const open = []; // FIFO advance lots still holding money
+        // Pass 1 — every advance GIVEN first. A return recorded before the
+        // recap-dated give row must still reduce that lot (identity guard).
         for (const r of list) {
-            const name = names.get(pid) || (pid ? `Party #${pid}` : '(unassigned)');
-            if (Number(r.debit) > 0) {
-                const amt = round2(r.debit);
-                open.push({ ledger_id: r.id, party_id: pid, party_name: name, date: r.date, advance: amt, adjusted: 0, returned: 0, outstanding: amt });
-                movements.push({ ledger_id: r.id, party_id: pid, party_name: name, date: r.date, kind: 'given', amount: amt, particular: r.description });
-                continue;
-            }
+            if (!(Number(r.debit) > 0)) continue;
+            const amt = round2(r.debit);
+            const givenDate = dateById.get(Number(r.reference_id)) || r.date;
+            open.push({ ledger_id: r.id, party_id: pid, party_name: names.get(pid) || (pid ? `Party #${pid}` : '(unassigned)'), date: givenDate, advance: amt, adjusted: 0, returned: 0, outstanding: amt });
+            movements.push({ ledger_id: r.id, party_id: pid, party_name: names.get(pid) || (pid ? `Party #${pid}` : '(unassigned)'), date: givenDate, kind: 'given', amount: amt, particular: r.description });
+        }
+        // Pass 2 — returns and adjustments reduce the open lots FIFO.
+        for (const r of list) {
+            if (Number(r.debit) > 0) continue;
             const credit = round2(r.credit);
             if (!(credit > 0)) continue;
+            const name = names.get(pid) || (pid ? `Party #${pid}` : '(unassigned)');
             // The receivable leg of an adjustment posts with reference_type
             // 'advance' (the expense leg carries 'adjustment'), so the source
             // payment's transaction_type is what decides the classification.
-            const isAdjustment = ttById.get(r.reference_id) === TRANSACTION_TYPES.ADVANCE_ADJUSTMENT;
+            const isAdjustment = ttById.get(Number(r.reference_id)) === TRANSACTION_TYPES.ADVANCE_ADJUSTMENT;
             const kind = isAdjustment ? 'adjusted' : 'returned';
             let left = credit;
             for (const lot of open) {
@@ -1251,6 +1281,191 @@ function getAdvanceRecoveryRegister(db, { as_of, party_id, from_date, to_date } 
     };
 }
 
+// ──────────────────────────────────────────────────────
+// Advance normalization (audit req 24/25/47)
+// ──────────────────────────────────────────────────────
+
+const ADVANCE_TAG = `[${ACCOUNT.ADVANCE_RECEIVABLE}]`;
+const _ADV_TAG_LIKE = `%[${ACCOUNT.ADVANCE_RECEIVABLE}]%`;
+
+/**
+ * Make every legacy advance visible to the Advance register WITHOUT changing
+ * any balance (data-mapping plan, req 47):
+ *
+ *   1. Excel-imported advance rows carry type='advance' but no
+ *      transaction_type — backfill it.
+ *   2. Link each advance payment to the ledger row that already records the
+ *      same money (same party + amount; scored by description/date/notes),
+ *      tagging it '[Advance Receivable]'. When no counterpart exists, post
+ *      the standard double entry once. Pseudo-parties (OFFICE EXPENSES /
+ *      PETTY CASH) are never tagged — their rows are expense registers.
+ *   3. Tag leftover ledger rows whose description explicitly says advance
+ *      (e.g. bank QR "ONLINE ADVANCE PAID TO BODESH") so they appear too.
+ *   4. Reclassify the "advance returned" receipt (notes say advance, one
+ *      exact untagged credit row) → transaction_type='advance_returned' and
+ *      tag that credit row, so returns reduce the receivable.
+ *
+ * Idempotent — safe on every startup and after every import.
+ * Returns a small report for logs/tests.
+ */
+function normalizeAdvances(db) {
+    const report = { typed: 0, linked: 0, posted: 0, tagged_leftover: 0, returned: 0, skipped_pseudo: 0 };
+    const hasTable = (t) => !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t);
+    if (!hasTable('payments') || !hasTable('ledger_entries') || !hasTable('parties')) return report;
+
+    const run = db.transaction(() => {
+        // 1) Type backfill — an advance is an advance regardless of import era.
+        report.typed = db.prepare(
+            "UPDATE payments SET transaction_type = 'advance' WHERE type = 'advance' AND transaction_type IS NULL"
+        ).run().changes;
+
+        const pseudo = new Set(db.prepare(
+            "SELECT id FROM parties WHERE UPPER(TRIM(name)) IN ('OFFICE EXPENSES','PETTY CASH')"
+        ).all().map(r => r.id));
+
+        const usedRows = new Set(db.prepare(
+            'SELECT id FROM ledger_entries WHERE description LIKE ?'
+        ).all(_ADV_TAG_LIKE).map(r => r.id));
+
+        const taggedDesc = (d) => {
+            const s = String(d || '');
+            return s.includes(ADVANCE_TAG) ? s : `${s}${s ? ' ' : ''}${ADVANCE_TAG}`.trim();
+        };
+        const noteBody = (notes) => String(notes || '').replace(/^\s*Advance:\s*/i, '').trim().toLowerCase();
+
+        // 2) Link each advance payment to its ledger row (or post one).
+        const payments = db.prepare(
+            "SELECT * FROM payments WHERE type = 'advance' AND transaction_type = 'advance' ORDER BY id"
+        ).all();
+        for (const p of payments) {
+            if (p.party_id == null) continue;
+            // Already linked + tagged?
+            const done = db.prepare(
+                'SELECT id FROM ledger_entries WHERE party_id = ? AND reference_id = ? AND debit > 0 AND description LIKE ? LIMIT 1'
+            ).get(p.party_id, p.id, _ADV_TAG_LIKE);
+            if (done) continue;
+            if (pseudo.has(p.party_id)) {
+                // An "advance" to OFFICE EXPENSES/PETTY CASH is an expense row
+                // in the source book, not money receivable — never tag it.
+                report.skipped_pseudo++;
+                continue;
+            }
+
+            // Row already referencing this payment (upsert-mode imports link
+            // reference_id but never wrote the account tag).
+            let target = db.prepare(
+                'SELECT id, description FROM ledger_entries WHERE party_id = ? AND reference_id = ? AND debit > 0 ORDER BY id LIMIT 1'
+            ).get(p.party_id, p.id);
+
+            if (!target) {
+                const body = noteBody(p.notes);
+                const cands = db.prepare(
+                    `SELECT id, date, description, reference_type FROM ledger_entries
+                      WHERE party_id = ? AND debit > 0 AND ABS(debit - ?) < 0.005
+                        AND description NOT LIKE ?
+                        AND (reference_id IS NULL OR reference_id = '' OR reference_id = 0 OR reference_id = ?)
+                      ORDER BY id`
+                ).all(p.party_id, p.amount, _ADV_TAG_LIKE, p.id);
+                let best = null, bestScore = 0;
+                for (const c of cands) {
+                    if (usedRows.has(c.id)) continue;
+                    const desc = String(c.description || '');
+                    const descL = desc.toLowerCase().trim();
+                    if (descL.includes('advance_adjustment') || descL.includes('advance adjustment')) continue;
+                    let score = 0;
+                    if (body && descL === body) score += 512;      // same wording as the petty sheet
+                    if (descL.includes('advance')) score += 256;    // explicitly an advance row
+                    if (String(c.date) === String(p.date)) score += 128;
+                    if (String(c.reference_type) === 'advance') score += 64;
+                    if (score === 0) continue;
+                    if (score > bestScore) { best = c; bestScore = score; }
+                }
+                target = best;
+            }
+
+            if (target) {
+                db.prepare('UPDATE ledger_entries SET description = ?, reference_id = ? WHERE id = ?')
+                    .run(taggedDesc(target.description), p.id, target.id);
+                usedRows.add(target.id);
+                report.linked++;
+            } else {
+                db.prepare(
+                    `INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance)
+                     VALUES (?, ?, 'payment_made', ?, ?, ?, 0, 0)`
+                ).run(p.party_id, p.date, p.id,
+                    taggedDesc(`Advance${p.notes ? ' — ' + p.notes : ''}`), round2(p.amount));
+                report.posted++;
+            }
+        }
+
+        // 3) Leftover rows whose wording says advance (bank QR advances, sheet
+        //    advances with no payment row). Never adjustment legs, never docs.
+        const leftovers = db.prepare(
+            `SELECT id, party_id, description, reference_type FROM ledger_entries
+              WHERE debit > 0 AND LOWER(description) LIKE '%advance%'
+                AND description NOT LIKE ?`
+        ).all(_ADV_TAG_LIKE);
+        for (const r of leftovers) {
+            if (usedRows.has(r.id)) continue;
+            const descL = String(r.description || '').toLowerCase();
+            if (descL.includes('advance_adjustment') || descL.includes('advance adjustment')) continue;
+            if (['sale', 'purchase', 'milk_collection', 'opening'].includes(String(r.reference_type || ''))) continue;
+            if (pseudo.has(r.party_id)) continue;
+            db.prepare('UPDATE ledger_entries SET description = ? WHERE id = ?').run(taggedDesc(r.description), r.id);
+            usedRows.add(r.id);
+            report.tagged_leftover++;
+        }
+
+        // 4) The "advance returned" receipt. Two eras: legacy rows (untyped,
+        //    notes say "advance") and rows the importer now types at source
+        //    (transaction_type='advance_returned', D1). Either way the LEDGER
+        //    credit row still needs its tag — otherwise the register never sees
+        //    the return (fresh import showed returned 0 instead of 34,725).
+        const receipts = db.prepare(
+            `SELECT * FROM payments
+              WHERE type = 'receipt'
+                AND ((transaction_type IS NULL AND LOWER(COALESCE(notes,'')) LIKE '%advance%')
+                      OR transaction_type = 'advance_returned')
+              ORDER BY id`
+        ).all();
+        for (const r of receipts) {
+            if (r.party_id == null) continue;
+            // Already tagged + linked to this payment? Nothing to do.
+            const doneR = db.prepare(
+                'SELECT 1 FROM ledger_entries WHERE party_id = ? AND reference_id = ? AND credit > 0 AND description LIKE ? LIMIT 1'
+            ).get(r.party_id, r.id, _ADV_TAG_LIKE);
+            if (doneR) continue;
+            const hasGiven = db.prepare(
+                'SELECT 1 FROM ledger_entries WHERE party_id = ? AND debit > 0 AND description LIKE ? LIMIT 1'
+            ).get(r.party_id, _ADV_TAG_LIKE);
+            if (!hasGiven) continue;
+            const cands = db.prepare(
+                `SELECT id, description FROM ledger_entries
+                  WHERE party_id = ? AND credit > 0 AND ABS(credit - ?) < 0.005 AND date = ?
+                    AND description NOT LIKE ?`
+            ).all(r.party_id, r.amount, r.date, _ADV_TAG_LIKE);
+            if (cands.length !== 1) continue;
+            const twin = db.prepare(
+                `SELECT COUNT(*) c FROM payments
+                  WHERE party_id = ? AND ABS(amount - ?) < 0.005 AND id != ?
+                    AND type = 'receipt'
+                    AND ((transaction_type IS NULL AND LOWER(COALESCE(notes,'')) LIKE '%advance%')
+                          OR transaction_type = 'advance_returned')`
+            ).get(r.party_id, r.amount, r.id);
+            if (twin.c > 0) continue;
+            if (!r.transaction_type) {
+                db.prepare("UPDATE payments SET transaction_type = 'advance_returned' WHERE id = ?").run(r.id);
+            }
+            db.prepare('UPDATE ledger_entries SET description = ?, reference_id = ? WHERE id = ?')
+                .run(taggedDesc(cands[0].description), r.id, cands[0].id);
+            usedRows.add(cands[0].id);
+            report.returned++;
+        }
+    });
+    run();
+    return report;
+}
+
 module.exports = {
     // money
     round2, moneyEq, moneyGte, CURRENCY_TOLERANCE, paymentStatus,
@@ -1266,7 +1481,7 @@ module.exports = {
     // cash / bank / expenses
     getCashBankPosition, getExpenseSummary,
     // advances / loans
-    getAdvanceRecoveryRegister,
+    getAdvanceRecoveryRegister, normalizeAdvances,
     // reconciliation
     getReconciliation
 };

@@ -234,10 +234,10 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
     // Every transaction table grouped by BS month prefix (YYYY-MM). Stored dates
     // are zero-padded BS strings; substr gives the month key. strftime() is not
     // usable here (BS dates like 2083-03-32 are not valid AD dates).
-    const groupSum = (table, dateCol, expr) => db.prepare(`
+    const groupSum = (table, dateCol, expr, extraWhere = '') => db.prepare(`
         SELECT substr(${dateCol}, 1, 7) as ym, COALESCE(SUM(${expr}), 0) as total, COUNT(*) as count
         FROM ${table}
-        WHERE ${dateCol} >= ? AND ${dateCol} <= ? AND ${dateCol} IS NOT NULL AND ${dateCol} != ''
+        WHERE ${dateCol} >= ? AND ${dateCol} <= ? AND ${dateCol} IS NOT NULL AND ${dateCol} != '' ${extraWhere}
         GROUP BY ym
     `);
 
@@ -254,7 +254,8 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         WHERE p.date >= ? AND p.date <= ?
           AND NOT EXISTS (SELECT 1 FROM milk_collections mc WHERE mc.purchase_ref_id = p.id)
     `).all(from, to);
-    const petty = groupSum('petty_cash', 'date', 'amount').all(from, to);
+    // Advance-head petty rows are balance-sheet money-out, never P&L (req 25).
+    const petty = groupSum('petty_cash', 'date', 'amount', "AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'").all(from, to);
     const salary = groupSum('salary_records', 'payment_date', 'net_salary').all(from, to);
     const vehicle = groupSum('vehicle_expenses', 'date', 'total_amount').all(from, to);
     const receipts = db.prepare(`

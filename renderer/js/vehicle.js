@@ -10,11 +10,11 @@ async function renderVehicle() {
         <button class="btn btn-success btn-sm" onclick="showAddVehicle()">+ New Expense</button>
     `;
 
-    const preset = getDatePreset('this_month');
-    const result = await window.api.getVehicleExpenses({ from_date: preset.from, to_date: preset.to });
+    const filt = pageFilterInit('vehicle');
+    const result = await window.api.getVehicleExpenses({ from_date: filt.from, to_date: filt.to, vehicle_name: filt.search || undefined });
     const expenses = result.success ? result.data : [];
 
-    const summary = await window.api.getVehicleExpensesSummary({ from_date: preset.from, to_date: preset.to });
+    const summary = await window.api.getVehicleExpensesSummary({ from_date: filt.from, to_date: filt.to });
     const s = summary.success ? summary.data : { count: 0, total: 0, total_fuel: 0, total_repair: 0, total_maintenance: 0, total_toll: 0, total_other: 0 };
 
     container.innerHTML = `
@@ -27,9 +27,9 @@ async function renderVehicle() {
             <div class="summary-card card-primary" style="margin:0;padding:8px"><span class="label">Total</span><span class="value" style="font-size:16px">${formatCurrency(s.total)}</span></div>
         </div>
         <div class="filter-bar">
-            <div class="form-group"><label>From</label><input type="date" class="form-control" id="veFrom" value="${preset.from}"></div>
-            <div class="form-group"><label>To</label><input type="date" class="form-control" id="veTo" value="${preset.to}"></div>
-            <div class="form-group"><label>Vehicle</label><input type="text" class="form-control" id="veSearch" placeholder="Vehicle name..."></div>
+            <div class="form-group"><label>From</label><input type="date" class="form-control" id="veFrom" value="${filt.from || ''}"></div>
+            <div class="form-group"><label>To</label><input type="date" class="form-control" id="veTo" value="${filt.to || ''}"></div>
+            <div class="form-group"><label>Vehicle</label><input type="text" class="form-control" id="veSearch" placeholder="Vehicle name..." value="${escapeHtml(filt.search || '')}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshVehicle()">Search</button></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-info btn-sm" onclick="printVehicle()">🖨 Print</button></div>
         </div>
@@ -75,13 +75,12 @@ async function renderVehicle() {
 }
 
 async function refreshVehicle() {
-    const from = document.getElementById('veFrom')?.value || '';
-    const to = document.getElementById('veTo')?.value || '';
-    const vehicle = document.getElementById('veSearch')?.value || '';
-    const result = await window.api.getVehicleExpenses({ from_date: from, to_date: to, vehicle_name: vehicle || undefined });
-    if (!result.success) { showToast(result.error, 'error'); return; }
-    window._lastVehicle = result.data;
-    renderVehicle();
+    pageFilterSet('vehicle', {
+        from: document.getElementById('veFrom')?.value || '',
+        to: document.getElementById('veTo')?.value || '',
+        search: document.getElementById('veSearch')?.value || ''
+    });
+    await renderVehicle();
 }
 
 function showAddVehicle(existingData) {

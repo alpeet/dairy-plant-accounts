@@ -2,7 +2,9 @@
  * Import the PETTY CASH register sheet into petty_cash, and post
  * "Advance" rows to party ledgers as advance payments (Task 8 + 9).
  * =====================================================
- * - Type "Payment" rows → petty_cash expense entries.
+ * - Type "Payment" / "OFFICE EXPENSES" rows → petty_cash expense entries
+ *   (head = description, fallback 'Payment' — matches Migration 30 / the app
+ *   importer, so re-runs dedupe cleanly).
  * - Type "Advance" rows → petty_cash entry + 'advance' payment + ledger entry
  *   against the party matched by exact name (unmatched reported).
  * - Type "Collection" rows → skipped: they duplicate the Collection sheet
@@ -90,12 +92,13 @@ for (let i = 2; i < sheet.length; i++) {
     const payMode = mode.toLowerCase().includes('bank') ? 'bank' : mode.toLowerCase().includes('upi') ? 'upi' : 'cash';
 
     if (type === 'Collection') { report.collection_skipped++; continue; }
-    if (type === 'Payment' && paid > 0) {
-        const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|payment`;
+    if ((type === 'Payment' || type === 'OFFICE EXPENSES') && paid > 0) {
+        const head = desc || 'Payment';
+        const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|${head.toLowerCase()}`;
         if (existingPC.has(key)) { report.dup_skipped++; continue; }
         seq++;
         const voucher = receiptNo || `PC-${String(seq).padStart(4, '0')}`;
-        insertPC.run(voucher, date, 'Payment', desc, paid, customer, payMode, '', '');
+        insertPC.run(voucher, date, head, desc, paid, customer, payMode, '', '');
         existingPC.add(key);
         report.payment++;
     } else if (type === 'Advance' && paid > 0) {

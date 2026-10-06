@@ -13,6 +13,9 @@
  */
 
 const { logAudit } = require('./audit');
+// One expense vocabulary for the whole app (Phase 3). The Expenses screen
+// offers it as datalist suggestions so free-text categories converge on it.
+const { EXPENSE_CATEGORIES } = require('./management_reports');
 
 /**
  * List other expenses with optional filters.
@@ -39,7 +42,8 @@ function listOtherExpenses(db, { from_date, to_date, category, expense_head } = 
                pc.created_at as created_at, pc.updated_at as updated_at,
                u2.username as created_by_name, pc.id as petty_cash_id
         FROM petty_cash pc LEFT JOIN users u2 ON pc.created_by = u2.id
-        WHERE 1=1`;
+        WHERE UPPER(TRIM(COALESCE(pc.expense_head, ''))) != 'ADVANCE'`;
+    // Advances are balance-sheet money-out (Advance tab), never expenses.
     if (from_date) { query += " AND pc.date >= ?"; params.push(from_date); }
     if (to_date) { query += " AND pc.date <= ?"; params.push(to_date); }
     if (category) { query += " AND 'Petty Cash' = ?"; params.push(category); }
@@ -112,15 +116,29 @@ function deleteOtherExpense(db, id, changedBy = null) {
 }
 
 /**
- * Get expense categories list (distinct).
- * Includes the virtual 'Petty Cash' category when petty cash rows exist.
+ * Get expense categories list.
+ * Rows: { category, used } — `used`=1 when the register actually has rows in
+ * that category. The shared EXPENSE_CATEGORIES vocabulary is always present
+ * (so the New Expense datalist suggests it), plus any legacy category the data
+ * still uses. Includes the virtual 'Petty Cash' category when petty rows exist.
  */
 function getExpenseCategories(db) {
-    const rows = db.prepare(`
-        SELECT category FROM (SELECT DISTINCT category FROM other_expenses WHERE category != ''
-        UNION SELECT 'Petty Cash' WHERE EXISTS (SELECT 1 FROM petty_cash))
-        ORDER BY category
+    const usedRows = db.prepare(`
+        SELECT DISTINCT category FROM (SELECT DISTINCT category FROM other_expenses WHERE category != ''
+        UNION SELECT 'Petty Cash' WHERE EXISTS (SELECT 1 FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'))
     `).all();
+    const used = new Set(usedRows.map(r => String(r.category).trim()));
+    const rows = [];
+    const seen = new Set();
+    const push = (cat, isUsed) => {
+        const key = String(cat).trim();
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        rows.push({ category: key, used: isUsed ? 1 : 0 });
+    };
+    for (const c of used) push(c, true);
+    for (const c of EXPENSE_CATEGORIES) push(c, used.has(c));
+    rows.sort((a, b) => (b.used - a.used) || a.category.localeCompare(b.category));
     return rows;
 }
 
@@ -135,7 +153,7 @@ function getExpensesSummary(db, { from_date, to_date } = {}) {
     const params = [];
     if (from_date) { query += " AND date >= ?"; params.push(from_date); }
     if (to_date) { query += " AND date <= ?"; params.push(to_date); }
-    query += " UNION ALL SELECT amount, date FROM petty_cash WHERE 1=1";
+    query += " UNION ALL SELECT amount, date FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'";
     if (from_date) { query += " AND date >= ?"; params.push(from_date); }
     if (to_date) { query += " AND date <= ?"; params.push(to_date); }
     query += `)
@@ -147,7 +165,7 @@ function getExpensesSummary(db, { from_date, to_date } = {}) {
     const catParams = [];
     if (from_date) { catQuery += " AND date >= ?"; catParams.push(from_date); }
     if (to_date) { catQuery += " AND date <= ?"; catParams.push(to_date); }
-    catQuery += " UNION ALL SELECT 'Petty Cash' as category, amount, date FROM petty_cash WHERE 1=1";
+    catQuery += " UNION ALL SELECT 'Petty Cash' as category, amount, date FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'";
     if (from_date) { catQuery += " AND date >= ?"; catParams.push(from_date); }
     if (to_date) { catQuery += " AND date <= ?"; catParams.push(to_date); }
     catQuery += " ) GROUP BY category ORDER BY total DESC";

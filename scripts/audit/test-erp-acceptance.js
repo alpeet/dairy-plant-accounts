@@ -12,6 +12,9 @@
  *      authoritative stock engine (req 2/6/7)
  *  T7  Reconciliation: sub-paisa milk rows reconcile EXACTLY (req 21–26)
  *  T8  Gross Margin/L: correct formula + honest COGS-availability flag (req 27–30)
+ *  T9  Petty normalization: Collection-sheet petty-box mirror rows skipped,
+ *      OFFICE EXPENSES vouchers imported with head=description, Migration 29
+ *      voids only zero-value placeholders (D13/D14/D8, req 45/47)
  *
  * Exit code 0 = all passed, 1 = at least one failure.
  */
@@ -378,6 +381,63 @@ console.log('\nTEST 8 — Gross Margin/L: correct formula + honest basis flag');
     const cvr = dairy.getDailyMilkCostVsSales(db2, { from_date: '2083-06-11', to_date: '2083-06-11' });
     ok(cvr.lot_costing_active === false, 'period report carries the same honest basis flag', cvr.lot_costing_active);
     db2.close();
+}
+
+// ════════════════════════════════════════════════════════════
+console.log('\nTEST 9 — Petty normalization: no double-counted cash, office rows imported (D13/D14/D8)');
+// ════════════════════════════════════════════════════════════
+{
+    const db = freshDb();
+    const xl = require(path.join(ROOT, 'shared', 'excel-import'));
+    xl.buildPartyIndex(db); // resolveParty refuses to work without the in-memory index
+
+    // Collection sheet: two petty-box mirror rows + one real customer receipt.
+    const coll = [
+        ['Title', '', ''],
+        ['Date', 'AD Date', 'Receipt No', 'Customer Name', 'Against Bill', 'Type', 'Opening Due', 'Collected', 'Paid', 'Payment Mode', 'Closing Due', 'REMARKS'],
+        ['2083/04/01', '', '', 'PETTY CASH', '', 'Petty Cash', '', '', '5000', 'Cash', '', ''],
+        ['2083/04/02', '', '', 'PETTY CASH', '', 'Advance', '', '', '700', 'Cash', 'BY LILA SIR', ''],
+        ['2083/04/03', '', '', 'SOME SHOP', '', 'Collection', '', '1200', '', 'Cash', '', '']
+    ];
+    const rc = xl.importCollections(db, coll, { log: () => {}, genLedger: true, mode: 'upsert' });
+    ok(rc.skipped_petty === 2, 'D13: Collection-sheet petty-box mirror rows are skipped', rc);
+    ok(db.prepare("SELECT COUNT(*) c FROM payments WHERE type='payment'").get().c === 0,
+        'D13: no phantom "payment to PETTY CASH" double-counting the same cash');
+    ok(db.prepare("SELECT COUNT(*) c FROM payments WHERE type='receipt'").get().c === 1,
+        'the real customer receipt still imports');
+
+    // PETTY CASH register: office expense with/without description + an advance.
+    const pc = [
+        ['', '', '', '', '', '', '', '', '', '', '', '', ''],
+        ['Date', 'AD Date', 'Receipt No', 'Customer Name', 'Against Bill', 'Description', 'Type', 'Opening Due', 'Collected', 'Paid', 'Payment Mode', 'Closing Due', 'REMARKS'],
+        ['2083/04/05', '', '', 'OFFICE EXPENSES', '', 'DISEL', 'OFFICE EXPENSES', '', '', '5000', 'Cash', '', ''],
+        ['2083/04/06', '', '', 'OFFICE EXPENSES', '', '', 'OFFICE EXPENSES', '', '', '300', 'Cash', '', ''],
+        ['2083/04/07', '', '', 'NAR BAHADUR RANA', '', 'ADVANCE BY LILA SIR', 'Advance', '', '', '1000', 'Cash', '', '']
+    ];
+    const rp = xl.importPettyCashSheet(db, pc, { log: () => {}, mode: 'upsert' });
+    ok(rp.office === 2, 'D14: OFFICE EXPENSES rows are imported (previously dropped)', rp.office);
+    ok(rp.advance === 1, 'register advances still import');
+    const disel = db.prepare("SELECT * FROM petty_cash WHERE expense_head='DISEL'").get();
+    ok(!!disel && disel.amount === 5000 && disel.paid_to === 'OFFICE EXPENSES',
+        'D8: office voucher head = the Excel description (real detail), paid_to preserved', disel);
+    const blankHead = db.prepare("SELECT expense_head FROM petty_cash WHERE date='2083-04-06'").get();
+    ok(blankHead && blankHead.expense_head === 'Payment',
+        'blank description falls back to head "Payment" (legacy dedupe key)', blankHead);
+
+    // Migration 29: mirror payments + zero-value ledger placeholders are voided;
+    // real (non-zero) ledger rows are never touched.
+    const pcParty = Number(db.prepare("INSERT INTO parties (name, type) VALUES ('PETTY CASH', 'customer')").run().lastInsertRowid);
+    db.prepare("INSERT INTO payments (party_id, date, type, amount, mode) VALUES (?, '2083-04-01', 'payment', 5000, 'cash')").run(pcParty);
+    db.prepare("INSERT INTO ledger_entries (party_id, date, reference_type, description, debit, credit, balance) VALUES (?, '2083-04-01', 'payment_received', 'Ledger entry', 0, 0, 0)").run(pcParty);
+    db.prepare("INSERT INTO ledger_entries (party_id, date, reference_type, description, debit, credit, balance) VALUES (?, '2083-04-02', 'adjustment', 'Real row', 100, 0, 0)").run(pcParty);
+    runMigrations(db);
+    ok(db.prepare("SELECT COUNT(*) c FROM payments WHERE party_id = ? AND type='payment'").get(pcParty).c === 0,
+        'Migration 29 voids the petty-mirror payment');
+    const ledLeft = db.prepare("SELECT COUNT(*) c FROM ledger_entries WHERE party_id = ?").get(pcParty).c;
+    ok(ledLeft === 1, 'Migration 29 removes only zero-value placeholder ledger rows', ledLeft);
+    ok(db.prepare("SELECT COUNT(*) c FROM ledger_entries WHERE party_id = ? AND debit = 100").get(pcParty).c === 1,
+        'a real non-zero ledger row is preserved for manual review');
+    db.close();
 }
 
 // ════════════════════════════════════════════════════════════

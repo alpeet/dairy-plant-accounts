@@ -230,7 +230,7 @@ function findExistingLedgerEntry(db, { party_id, date, debit, credit, reference_
     // first, then accept a ±5-day same-amount lookalike so the party ledger is
     // never double-counted by the bank import.
     const rows = db.prepare(
-        `SELECT id, reference_type, description, date FROM ledger_entries
+        `SELECT id, reference_type, reference_id, description, date FROM ledger_entries
          WHERE party_id = ? AND debit = ? AND credit = ?
            AND date BETWEEN date(?, '-5 days') AND date(?, '+5 days')
          ORDER BY CASE WHEN date = ? THEN 0 ELSE 1 END, id`
@@ -284,7 +284,27 @@ function postBankToLedger(db, id) {
              remarks = CASE WHEN remarks = '' THEN 'already reflected in ledger (no new posting)' ELSE remarks || '; already reflected in ledger' END,
              updated_at = datetime('now', 'localtime') WHERE id = ?`
         ).run(id);
-        return { success: true, posted: false, reason: 'already_in_ledger', ledger_entry_id: null };
+        // D10: the matched ledger row belongs to a recorded payment → stamp the
+        // link back so payment ↔ bank row ↔ ledger share ONE transaction ID and
+        // the cash/bank position counts the money from exactly one side.
+        // Guard: ledger rows created BY a bank posting carry the bank txn id in
+        // reference_id (not a payment id), so require the candidate payment to
+        // agree on party AND amount before claiming the link.
+        let linked_payment = null;
+        if (['payment_received', 'payment_made', 'adjustment'].includes(existing.reference_type) && existing.reference_id) {
+            const cand = db.prepare('SELECT id, party_id, amount, mode FROM payments WHERE id = ?').get(existing.reference_id);
+            // Only non-cash payments: a cash-mode payment counted on the cash side
+            // of getCashBankPosition — stamping it would leave the cash side AND
+            // the bank side counting the same rupee in different pockets.
+            const nonCash = cand && ['bank', 'upi', 'cheque'].includes(String(cand.mode || 'cash').toLowerCase());
+            if (cand && nonCash && cand.party_id === txn.party_id && Math.abs(Number(cand.amount) - Number(txn.amount || 0)) < 0.005) {
+                const res = db.prepare(
+                    'UPDATE payments SET bank_txn_id = ? WHERE id = ? AND bank_txn_id IS NULL'
+                ).run(id, cand.id);
+                if (res.changes > 0) linked_payment = cand.id;
+            }
+        }
+        return { success: true, posted: false, reason: 'already_in_ledger', ledger_entry_id: null, linked_payment };
     }
     const refType = isCredit ? 'payment_received' : 'payment_made';
     const desc = `${txn.counterparty_name || ''} ${txn.description || ''} [${txn.reference_no || 'BANK'}]`.trim();

@@ -7,11 +7,14 @@
 
 const { logAudit } = require('./audit');
 const { todayBSDate } = require('../excel-import');
+const { round2 } = require('./accounting');
 
 /**
  * Get current stock levels for all products with optional search.
+ * `active_only` — quick stock in/out pickers pass this so archived products
+ * (D7) leave the entry dropdowns while the master list still shows them.
  */
-function getCurrentStock(db, { search } = {}) {
+function getCurrentStock(db, { search, active_only } = {}) {
     // Both fields are the closing balance replayed from the movements, not the last
     // row's own delta or a stored balance_after. "inward - outward of the latest
     // movement" is only that one movement's quantity — it made the dashboard low-stock
@@ -24,6 +27,7 @@ function getCurrentStock(db, { search } = {}) {
         FROM products p WHERE 1=1
     `;
     const params = [];
+    if (active_only) query += ' AND p.active = 1';
     if (search) {
         query += " AND (p.name LIKE ? OR p.category LIKE ?)";
         params.push(`%${search}%`, `%${search}%`);
@@ -51,6 +55,8 @@ function getStockMovements(db, { product_id, from_date, to_date } = {}) {
  */
 function adjustStock(db, { product_id, date, quantity, rate, notes }, userId) {
     const qty = parseFloat(quantity) || 0;
+    // D11: adjustment rates are money — stored at 2 dp like every new write.
+    const moveRate = round2(rate || 0);
     const movementDate = date || todayBSDate();
     const trx = db.transaction(() => {
         // Current balance must be computed EXACTLY like getCurrentStock replays it
@@ -74,11 +80,11 @@ function adjustStock(db, { product_id, date, quantity, rate, notes }, userId) {
             qty > 0 ? qty : 0,
             qty < 0 ? Math.abs(qty) : 0,
             newBalance,
-            rate || 0,
+            moveRate,
             notes || 'Stock Adjustment'
         );
         logAudit(db, 'stock_movements', result.lastInsertRowid, 'create', null, {
-            product_id, date: movementDate, quantity: qty, rate: rate || 0,
+            product_id, date: movementDate, quantity: qty, rate: moveRate,
             notes: notes || 'Stock Adjustment', balance_after: newBalance
         }, userId || null);
         return { success: true, id: result.lastInsertRowid, balance_after: newBalance };

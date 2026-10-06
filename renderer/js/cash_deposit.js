@@ -8,11 +8,11 @@
 async function renderCashDeposit() {
     const container = document.getElementById('page-cash-deposit');
     document.getElementById('topActions').innerHTML = '';
-    const preset = getDatePreset('this_month');
+    const filt = pageFilterInit('cash_deposit');
 
     const [listResult, summaryResult] = await Promise.all([
-        window.api.getCashDeposits({ from_date: preset.from, to_date: preset.to }),
-        window.api.getCashDepositSummary({ from_date: preset.from, to_date: preset.to })
+        window.api.getCashDeposits({ from_date: filt.from, to_date: filt.to }),
+        window.api.getCashDepositSummary({ from_date: filt.from, to_date: filt.to })
     ]);
 
     const deposits = listResult.success ? listResult.data : [];
@@ -101,8 +101,8 @@ async function renderCashDeposit() {
             ${datePresetBar('cdFrom', 'cdTo', 'refreshCashDeposits', ['today', 'yesterday', 'last_7', 'last_30', 'last_90', 'this_month', 'last_month', 'this_year', 'all'])}
         </div>
         <div class="filter-bar">
-            <div class="form-group"><label>From</label><input type="date" class="form-control" id="cdFrom" value="${preset.from}"></div>
-            <div class="form-group"><label>To</label><input type="date" class="form-control" id="cdTo" value="${preset.to}"></div>
+            <div class="form-group"><label>From</label><input type="date" class="form-control" id="cdFrom" value="${filt.from || ''}"></div>
+            <div class="form-group"><label>To</label><input type="date" class="form-control" id="cdTo" value="${filt.to || ''}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshCashDeposits()">Refresh</button></div>
         </div>
         ${depositPrelude}
@@ -166,18 +166,13 @@ async function renderCashDeposit() {
 }
 
 async function refreshCashDeposits() {
-    const from = document.getElementById('cdFrom')?.value || '';
-    const to = document.getElementById('cdTo')?.value || '';
-    const [listResult, summaryResult] = await Promise.all([
-        window.api.getCashDeposits({ from_date: from, to_date: to }),
-        window.api.getCashDepositSummary({ from_date: from, to_date: to })
-    ]);
-    if (listResult.success) {
-        window._lastCashDeposits = listResult.data;
-        renderCashDeposit();
-    } else {
-        showToast(listResult.error, 'error');
-    }
+    // Persist the filter, then re-render from it — the stored range survives
+    // the re-render (old code re-queried this_month and lost the user's range).
+    pageFilterSet('cash_deposit', {
+        from: document.getElementById('cdFrom')?.value || '',
+        to: document.getElementById('cdTo')?.value || ''
+    });
+    await renderCashDeposit();
 }async function showAddCashDeposit(existingData) {
     const todayStr = today();
     const d = existingData || { 

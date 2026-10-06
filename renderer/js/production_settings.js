@@ -35,7 +35,7 @@ async function renderProductionSetup() {
         window.api.getProductionOverheads({}),
         window.api.getYieldStandards({}),
         window.api.getProcessTypes ? window.api.getProcessTypes() : Promise.resolve({ data: [] }),
-        window.api.getProducts ? window.api.getProducts({}) : Promise.resolve({ data: [] })
+        window.api.getProducts ? window.api.getProducts({ active_only: true }) : Promise.resolve({ data: [] })
     ]);
     prodSetupCache.overheads = unwrap(ohR, []);
     prodSetupCache.yields = unwrap(ylR, []);
