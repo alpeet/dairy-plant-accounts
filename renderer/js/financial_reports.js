@@ -536,13 +536,16 @@ async function printReceivablePayable() {
 // ============================================================
 // Period + views state. The period comes from the SHARED date layer
 // (getDatePreset) — never hardcoded; 'custom' is the From/To pair.
-let _ssState = { preset: 'this_month', from: '', to: '', view: 'summary', category: '', search: '', product_id: '' };
+let _ssState = { preset: 'today', from: '', to: '', view: 'flow', category: '', search: '', product_id: '' };
 
 /** Local 2-dp rounding for summary figures (currency precision). */
 function round2ui(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
+// Every period the spec asks for (req 15) — the shared date layer owns the maths.
+const SS_PRESETS = ['today', 'yesterday', 'last_7', 'last_30', 'last_90', 'this_month', 'last_month', 'this_year', 'all'];
+
 function _ssPresetBtns() {
-    return ['today', 'yesterday', 'this_week', 'this_month', 'last_month', 'this_year', 'all']
+    return SS_PRESETS
         .map(p => `<button type="button" class="btn btn-sm ${_ssState.preset === p ? 'btn-primary' : 'btn-secondary'}" onclick="ssApplyPreset('${p}')">${DATE_PRESET_LABELS[p] || p}</button>`)
         .join('');
 }
@@ -594,10 +597,131 @@ function _ssFilterBar(data) {
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
             <span style="font-size:12px;color:var(--text-light);font-weight:600">View:</span>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'flow' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('flow')">📋 Daily Stock Statement</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'summary' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('summary')">📊 Stock Summary</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'detail' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('detail')">🧾 Detailed Ledger</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'valuation' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('valuation')">💰 Current Valuation</button>
         </div>`;
+}
+
+// ── Daily Stock Statement (Excel-style, reqs 2–12) ──
+// Labels follow the operator's language: yesterday's closing, today's sales,
+// what remained, what came in, what was consumed, today's closing.  For a
+// multi-day period the same columns read as period movements with the period's
+// own opening/closing (req 15).
+function ssFlowLabels(singleDay) {
+    return singleDay ? {
+        opening: 'Yesterday Closing', sales: "Today's Sales/Issues",
+        remaining: "Remaining After Today's Sales", collection: "Today's Collection/Purchase",
+        production: "Today's Production", closing: "Today's Closing"
+    } : {
+        opening: 'Opening (before period)', sales: 'Sales / Issues',
+        remaining: 'Remaining', collection: 'Collection / Purchase',
+        production: 'Production', closing: 'Closing'
+    };
+}
+
+/** Quantity cell: OUT red, IN green, plain for balances; zero as an em dash. */
+function ssQtyCell(v, dir) {
+    const n = round2ui(v || 0);
+    if (n === 0) return `<td class="text-right" style="color:var(--text-light)">—</td>`;
+    const color = dir === 'out' ? 'var(--danger)' : dir === 'in' ? 'var(--success)' : 'inherit';
+    const sign = dir === 'out' ? '- ' : dir === 'in' ? '+ ' : (n > 0 ? '' : '');
+    return `<td class="text-right" style="color:${color}">${sign}${formatNumber(Math.abs(n))}</td>`;
+}
+
+/** Click a product in the daily statement → its movement ledger. */
+function ssDrillProduct(productId) {
+    _ssState.product_id = String(productId);
+    _ssState.view = 'detail';
+    showStockStatement();
+}
+
+/**
+ * Open the document a stock movement came from (req 1: clicking the reference
+ * opens the original transaction).  Internal movements have no document.
+ */
+function ssOpenSource(referenceType, referenceId) {
+    if (referenceId == null) return;
+    if (referenceType === 'sale' && typeof viewSaleDetail === 'function') return viewSaleDetail(referenceId);
+    if (referenceType === 'purchase' && typeof viewPurchaseDetail === 'function') return viewPurchaseDetail(referenceId);
+    if (referenceType === 'milk_collection' && typeof viewMilkCollection === 'function') return viewMilkCollection(referenceId);
+    if (referenceType === 'production' && typeof viewProductionBatch === 'function') return viewProductionBatch(referenceId);
+    if (typeof showToast === 'function') showToast('No linked document for this movement', 'info');
+}
+
+function _ssFlowView(products, periodLabel, singleDay) {
+    const L = ssFlowLabels(singleDay);
+    const shown = products.filter(p => {
+        const f = p.flow || {};
+        if ((p.rows || []).length) return true;
+        return round2ui(f.opening || 0) !== 0 || round2ui(f.closing || 0) !== 0;
+    });
+    const allOk = shown.every(p => (p.flow || {}).identity_ok !== false);
+
+    // Unit subtotals — never mix litres with kilograms in one figure.
+    const byUnit = new Map();
+    for (const p of shown) {
+        const u = p.unit || '—';
+        if (!byUnit.has(u)) byUnit.set(u, { opening: 0, sales: 0, remaining: 0, collection: 0, production: 0, consumption: 0, other: 0, closing: 0 });
+        const t = byUnit.get(u), f = p.flow || {};
+        t.opening += f.opening || 0; t.sales += f.sales_issues || 0; t.remaining += f.remaining || 0;
+        t.collection += f.collection_purchase || 0; t.production += f.production || 0;
+        t.consumption += f.production_consumption || 0; t.other += f.other || 0; t.closing += f.closing || 0;
+    }
+
+    const rowsHtml = shown.map(p => {
+        const f = p.flow || {};
+        return `<tr>
+            <td><a href="#" onclick="event.preventDefault();ssDrillProduct(${p.product_id})" title="Show this product's movement ledger"><strong>${escapeHtml(p.product_name)}</strong></a>
+                <div style="font-size:11px;color:var(--text-light)">${escapeHtml(p.category || p.inventory_category || '')} · ${escapeHtml(p.unit || '')}</div></td>
+            <td class="text-right">${formatNumber(round2ui(f.opening || 0))}</td>
+            ${ssQtyCell(f.sales_issues, 'out')}
+            <td class="text-right" style="font-weight:600">${formatNumber(round2ui(f.remaining || 0))}</td>
+            ${ssQtyCell(f.collection_purchase, 'in')}
+            ${ssQtyCell(f.production, 'in')}
+            ${ssQtyCell(f.production_consumption, 'out')}
+            ${ssQtyCell(f.other, 'plain')}
+            <td class="text-right" style="font-weight:700">${formatNumber(round2ui(f.closing || 0))}</td>
+        </tr>`;
+    }).join('') || `<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-light)">No stock movement in this period</td></tr>`;
+
+    const unitFoot = [...byUnit.entries()].map(([u, t]) => `<tr style="background:var(--bg-light,#f7f7f7);font-weight:600">
+        <td>Subtotal · ${escapeHtml(u)}</td>
+        <td class="text-right">${formatNumber(round2ui(t.opening))}</td>
+        <td class="text-right" style="color:var(--danger)">${t.sales ? '- ' + formatNumber(round2ui(t.sales)) : '—'}</td>
+        <td class="text-right">${formatNumber(round2ui(t.remaining))}</td>
+        <td class="text-right" style="color:var(--success)">${t.collection ? '+ ' + formatNumber(round2ui(t.collection)) : '—'}</td>
+        <td class="text-right" style="color:var(--success)">${t.production ? '+ ' + formatNumber(round2ui(t.production)) : '—'}</td>
+        <td class="text-right" style="color:var(--danger)">${t.consumption ? '- ' + formatNumber(round2ui(t.consumption)) : '—'}</td>
+        <td class="text-right">${t.other ? formatNumber(round2ui(t.other)) : '—'}</td>
+        <td class="text-right">${formatNumber(round2ui(t.closing))}</td>
+    </tr>`).join('');
+
+    return `
+    <div style="font-size:13px;color:var(--text-light);margin-bottom:8px">
+        ${escapeHtml(periodLabel)} — read down each row: <strong>${escapeHtml(L.opening)}</strong> → <strong>${escapeHtml(L.sales)}</strong> → <strong>${escapeHtml(L.remaining)}</strong> → <strong>${escapeHtml(L.collection)}</strong> → <strong>${escapeHtml(L.production)}</strong> → <strong>Production Consumption</strong> → <strong>${escapeHtml(L.closing)}</strong>. Each closing carries into the next day automatically.
+    </div>
+    <div class="table-container">
+        <table>
+            <thead><tr>
+                <th>Product</th>
+                <th class="text-right">${escapeHtml(L.opening)}</th>
+                <th class="text-right">${escapeHtml(L.sales)}</th>
+                <th class="text-right">${escapeHtml(L.remaining)}</th>
+                <th class="text-right">${escapeHtml(L.collection)}</th>
+                <th class="text-right">${escapeHtml(L.production)}</th>
+                <th class="text-right">Production Consumption</th>
+                <th class="text-right">Other IN/OUT</th>
+                <th class="text-right">${escapeHtml(L.closing)}</th>
+            </tr></thead>
+            <tbody>${rowsHtml}</tbody>
+            ${unitFoot ? `<tfoot>${unitFoot}</tfoot>` : ''}
+        </table>
+    </div>
+    <div style="margin-top:10px;font-size:13px;padding:8px 12px;border-radius:6px;background:${allOk ? 'var(--success-light,#e8f6ee)' : 'var(--warning-light,#fff6e5)'};color:${allOk ? 'var(--success)' : 'var(--warning)'}">
+        ${allOk ? '✓ Every product reconciles: Opening − Sales + Collection/Purchase + Production − Production Consumption + Other = Closing.' : '⚠ At least one product does not reconcile — check the Detailed Ledger for that product.'}
+    </div>`;
 }
 
 function _ssMatches(p) {
@@ -613,8 +737,10 @@ async function showStockStatement() {
     const container = document.getElementById('page-stock-statement');
     document.getElementById('topActions').innerHTML = '';
 
-    if (_ssState.preset === 'this_month' && !_ssState.from && !_ssState.to) {
-        const r = getDatePreset('this_month');
+    // 'all' legitimately has blank bounds (no restriction); every other preset
+    // resolves through the shared date layer on first render.
+    if (_ssState.preset !== 'all' && !_ssState.from && !_ssState.to) {
+        const r = getDatePreset(_ssState.preset || 'today');
         _ssState.from = r.from;
         _ssState.to = r.to;
     }
@@ -638,8 +764,12 @@ async function showStockStatement() {
         return s;
     }, { opening: 0, in: 0, out: 0, closing: 0 });
 
+    const singleDay = !!(_ssState.from && _ssState.to && String(_ssState.from) === String(_ssState.to));
+
     let viewHtml = '';
-    if (_ssState.view === 'summary') {
+    if (_ssState.view === 'flow') {
+        viewHtml = _ssFlowView(products, periodLabel, singleDay);
+    } else if (_ssState.view === 'summary') {
         viewHtml = `
         <div class="summary-cards" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
             <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">🌤 Opening (${escapeHtml(periodLabel)})</span><span class="value" style="font-size:20px">${formatNumber(round2ui(tot.opening))}</span></div>
@@ -705,27 +835,34 @@ async function showStockStatement() {
         <div class="table-container">
             <table>
                 <thead><tr>
-                    <th>Date</th><th>Time</th><th>Reference</th><th>Product</th><th>Movement</th>
-                    <th class="text-right">IN</th><th class="text-right">OUT</th><th class="text-right">Balance</th>
+                    <th>Date</th><th>Time</th><th>Reference No.</th><th>Party</th><th>Product</th><th>Transaction Type</th>
+                    <th class="text-right">Opening</th><th class="text-right">IN</th><th class="text-right">OUT</th><th class="text-right">Closing</th>
                     <th class="text-right">Unit Cost</th><th class="text-right">Value</th>
                 </tr></thead>
                 <tbody>
-                ${capped.map(({ p, r }) => `<tr>
+                ${capped.map(({ p, r }) => {
+                    const openQty = round2ui((r.balance || 0) - (r.inward_qty || 0) + (r.outward_qty || 0));
+                    const refText = String(r.reference_no || r.reference || '').trim();
+                    const linked = r.reference_id != null && ['sale', 'purchase', 'milk_collection', 'production'].includes(r.reference_type);
+                    const refCell = refText
+                        ? (linked
+                            ? `<a href="#" onclick="event.preventDefault();ssOpenSource('${escapeHtml(r.reference_type)}',${r.reference_id})" title="Open the original transaction">${escapeHtml(refText)} 🔗</a>`
+                            : escapeHtml(refText))
+                        : '—';
+                    return `<tr>
                     <td>${formatDate(r.date)}</td>
                     <td style="font-size:11px;color:var(--text-light)">${escapeHtml(r.time || '—')}</td>
-                    <td style="font-size:11px" title="${escapeHtml(r.notes || '')}">${
-                        (r.reference_type === 'production' && r.reference_id)
-                            ? `<a href="#" onclick="event.preventDefault();viewProductionBatch(${r.reference_id})" title="Open production batch">${escapeHtml(r.reference || 'Batch')} 🧪</a>`
-                            : escapeHtml(String(r.reference || (r.reference_type ? `${r.reference_type}#${r.reference_id}` : '')) || '—')
-                    }</td>
+                    <td style="font-size:11px" title="${escapeHtml(r.notes || '')}">${refCell}</td>
+                    <td style="font-size:12px">${escapeHtml(r.party || '—')}</td>
                     <td>${escapeHtml(p.product_name)}</td>
                     <td><span class="badge ${r.inward_qty > 0 ? 'badge-success' : r.outward_qty > 0 ? 'badge-danger' : 'badge-secondary'}">${escapeHtml(r.label || r.type)}</span></td>
+                    <td class="text-right">${formatNumber(openQty)}</td>
                     <td class="text-right">${r.inward_qty ? formatNumber(r.inward_qty) : '—'}</td>
                     <td class="text-right">${r.outward_qty ? formatNumber(r.outward_qty) : '—'}</td>
                     <td class="text-right" style="font-weight:600">${formatNumber(r.balance)}</td>
                     <td class="text-right">${formatCurrency(r.unit_cost || 0)}</td>
                     <td class="text-right">${r.value ? formatCurrency(r.value) : '—'}</td>
-                </tr>`).join('') || '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No movements in this period</td></tr>'}
+                </tr>`; }).join('') || '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">No movements in this period</td></tr>'}
                 </tbody>
             </table>
         </div>`;
@@ -779,6 +916,7 @@ async function showStockStatement() {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
             <h2 style="margin:0">📋 Stock Statement</h2>
             <div class="btn-group">
+                <button class="btn btn-success btn-sm" onclick="ssExportExcel()">📥 Excel</button>
                 <button class="btn btn-info btn-sm" onclick="printStockStatementReport()">🖨 Print</button>
                 <button class="btn btn-primary btn-sm" onclick="exportStockStatementPDF()">📄 PDF</button>
             </div>
@@ -819,6 +957,51 @@ async function exportStockStatementPDF() {
     const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Stock Statement</h2><p>Total Value: ${formatCurrency(data.total_value)}</p></div>
         <div class="footer"><div>Generated: ${new Date().toLocaleDateString('en-IN')}</div></div>`;
     await window.api.printToPDF({ html });
+}
+
+/**
+ * Excel export of the Excel-style stock statement (req 17).
+ * Electron: the main process writes the workbook to the app data folder.
+ * Web: POST the same period and download the generated file.
+ * The workbook is built by the SAME costing engine, so it reconciles with what
+ * the operator sees on screen (the result reports `reconciled`).
+ */
+async function ssExportExcel() {
+    const payload = {
+        from_date: _ssState.from, to_date: _ssState.to,
+        category: _ssState.category || '', search: _ssState.search || ''
+    };
+    try {
+        if (window.api && typeof window.api.exportStockStatement === 'function') {
+            const result = await window.api.exportStockStatement(payload);
+            if (result && result.success) {
+                showToast(`✅ Stock statement exported${result.reconciled ? ' (reconciled)' : ' — check mismatches'}: ${result.filePath || ''}`, result.reconciled ? 'success' : 'warning');
+            } else if (result && !result.cancelled) {
+                showToast('⚠️ Export failed: ' + ((result && result.error) || 'unknown error'), 'error');
+            }
+            return;
+        }
+        const headers = { 'Content-Type': 'application/json' };
+        try {
+            const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+        } catch (e) { /* storage unavailable */ }
+        const res = await fetch('/api/export/stock-statement', { method: 'POST', headers, body: JSON.stringify(payload), credentials: 'include' });
+        if (!res.ok) { showToast('⚠️ Export failed (HTTP ' + res.status + ')', 'error'); return; }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Stock_Statement_Export.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast('✅ Stock statement exported', 'success');
+    } catch (err) {
+        console.error('Stock statement export failed:', err);
+        showToast('⚠️ Export failed: ' + err.message, 'error');
+    }
 }
 
 // ============================================================
@@ -1699,6 +1882,9 @@ window.printReceivablePayable = printReceivablePayable;
 window.showStockStatement = showStockStatement;
 window.applyStockStatement = applyStockStatement;
 window.printStockStatementReport = printStockStatementReport;
+window.ssExportExcel = ssExportExcel;
+window.ssDrillProduct = ssDrillProduct;
+window.ssOpenSource = ssOpenSource;
 window.exportStockStatementPDF = exportStockStatementPDF;
 window.showDaybookPage = showDaybookPage;
 window.applyDaybookPage = applyDaybookPage;

@@ -92,11 +92,14 @@ function dairyApplyFilterVisibility() {
 }
 
 function dairyReadFilter() {
-    const g = (id) => document.getElementById(id)?.value || '';
-    if (g('dairyDate')) dairyState.date = g('dairyDate');
-    if (g('dairyFrom')) dairyState.from = g('dairyFrom');
-    if (g('dairyTo')) dairyState.to = g('dairyTo');
-    if (g('dairyGroupBy')) dairyState.groupBy = g('dairyGroupBy');
+    // An EMPTY From/To is meaningful here: it is the "All" preset (no period
+    // restriction). So test for the element, not for its truthiness — otherwise
+    // All could never clear the range.
+    const g = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+    const dv = g('dairyDate'); if (dv !== null) dairyState.date = dv;
+    const fv = g('dairyFrom'); if (fv !== null) dairyState.from = fv;
+    const tv = g('dairyTo'); if (tv !== null) dairyState.to = tv;
+    const gv = g('dairyGroupBy'); if (gv !== null) dairyState.groupBy = gv || dairyState.groupBy;
 }
 
 async function dairySetTab(tab) {
@@ -320,18 +323,39 @@ async function dairyTabStockLedger() {
     const v = (vr && vr.success !== false) ? (vr.data || vr) : null;
     if (!d) return '<div class="card"><p>No data.</p></div>';
     const groups = v ? dairyKpiRow(Object.entries(v.groups || {}).map(([k, val]) => dairyKpi(k, dairyMoney(val)))) : '';
-    const prodBlocks = (d.products || []).filter(p => (p.rows || []).length).map(p => `
-        <h4 style="margin-top:16px">${escapeHtml(p.product_name)} <span style="font-weight:400;color:var(--text-light)">— ${escapeHtml(p.inventory_category)} · ${dairyMoney(p.lot_value)} on hand</span></h4>
-        <table class="data-table"><thead><tr><th>Date</th><th>Reference</th><th class="text-right">IN</th>
-            <th class="text-right">OUT</th><th class="text-right">Balance</th><th class="text-right">Unit Cost</th><th class="text-right">Value</th></tr></thead>
-        <tbody>${(p.rows || []).map(r0 => `<tr><td>${escapeHtml(r0.date)}</td><td>${escapeHtml(r0.type)}${r0.notes ? ' · ' + escapeHtml(r0.notes) : ''}</td>
+    const periodLabel = `${d.from_date ? formatDate(d.from_date) : 'Start'} → ${d.to_date ? formatDate(d.to_date) : 'Today'}`;
+    // Period presets (req 15) — the shared date layer owns the maths; the tab's
+    // From/To inputs are the same ones the rest of Dairy Costing uses.
+    const presets = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--text-light);font-weight:600">Period:</span>
+        ${datePresetBar('dairyFrom', 'dairyTo', 'dairyRefresh', ['today', 'yesterday', 'last_7', 'last_30', 'last_90', 'this_month', 'last_month', 'this_year', 'all'])}
+    </div>`;
+    const prodBlocks = (d.products || []).filter(p => (p.rows || []).length).map(p => {
+        const rows = (p.rows || []).map(r0 => {
+            const openQty = Math.round(((Number(r0.balance) || 0) - (Number(r0.inward_qty) || 0) + (Number(r0.outward_qty) || 0)) * 100) / 100;
+            const refText = String(r0.reference_no || r0.reference || '').trim();
+            const linked = r0.reference_id != null && ['sale', 'purchase', 'milk_collection', 'production'].includes(r0.reference_type);
+            const refCell = refText
+                ? (linked
+                    ? `<a href="#" onclick="event.preventDefault();ssOpenSource('${escapeHtml(r0.reference_type)}',${r0.reference_id})" title="Open the original transaction">${escapeHtml(refText)} 🔗</a>`
+                    : escapeHtml(refText))
+                : '—';
+            return `<tr><td>${escapeHtml(r0.date)}</td><td>${refCell}</td><td>${escapeHtml(r0.party || '—')}</td>
+            <td><span class="badge ${r0.inward_qty > 0 ? 'badge-success' : r0.outward_qty > 0 ? 'badge-danger' : 'badge-secondary'}">${escapeHtml(r0.label || r0.type)}</span></td>
+            <td class="text-right">${dairyNum(openQty)}</td>
             <td class="text-right">${r0.inward_qty ? dairyNum(r0.inward_qty) : ''}</td>
             <td class="text-right">${r0.outward_qty ? dairyNum(r0.outward_qty) : ''}</td>
             <td class="text-right">${dairyNum(r0.balance)}</td><td class="text-right">${dairyMoney(r0.unit_cost)}</td>
-            <td class="text-right">${dairyMoney(r0.value)}</td></tr>`).join('')}</tbody></table>`).join('')
-        || '<p style="color:var(--text-light)">No movements in range.</p>';
+            <td class="text-right">${r0.value ? dairyMoney(r0.value) : ''}</td></tr>`;
+        }).join('');
+        return `<h4 style="margin-top:16px">${escapeHtml(p.product_name)} <span style="font-weight:400;color:var(--text-light)">— ${escapeHtml(p.inventory_category)} · ${dairyMoney(p.lot_value)} on hand · ${escapeHtml(p.unit || '')}</span></h4>
+        <table class="data-table"><thead><tr><th>Date</th><th>Reference No.</th><th>Party</th><th>Transaction Type</th>
+            <th class="text-right">Opening</th><th class="text-right">IN</th><th class="text-right">OUT</th><th class="text-right">Closing</th>
+            <th class="text-right">Unit Cost</th><th class="text-right">Value</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+    }).join('') || '<p style="color:var(--text-light)">No movements in range.</p>';
     return dairyCard('Inventory Valuation (Raw Materials / WIP / Finished Goods)', groups)
-        + dairyCard('Stock Ledger', prodBlocks);
+        + dairyCard(`Stock Ledger — ${escapeHtml(periodLabel)}`, presets + prodBlocks);
 }
 
 // ── Daily closing ──

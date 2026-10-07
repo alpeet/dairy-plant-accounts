@@ -555,15 +555,26 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
         ? db.prepare('SELECT * FROM products WHERE id = ?').all(product_id)
         : db.prepare('SELECT * FROM products ORDER BY name').all();
 
-    // Reference labels, batch-loaded once (no per-row lookups).
+    // Reference labels + party names, batch-loaded once (no per-row lookups).
+    // Party comes from the source document so every movement is traceable
+    // (req 1 / 14) — internal movements are labelled, never left blank.
     const refLabel = new Map();
+    const refParty = new Map();
     const loadRefs = (sql, prefix) => {
-        try { for (const r of db.prepare(sql).all()) refLabel.set(`${prefix}:${r.id}`, r.label); } catch (e) { /* table absent */ }
+        try {
+            for (const r of db.prepare(sql).all()) {
+                refLabel.set(`${prefix}:${r.id}`, r.label);
+                if (r.party_name) refParty.set(`${prefix}:${r.id}`, r.party_name);
+            }
+        } catch (e) { /* table absent */ }
     };
-    loadRefs('SELECT id, batch_no AS label FROM production_batches', 'production');
-    loadRefs('SELECT id, invoice_no AS label FROM sales', 'sale');
-    loadRefs('SELECT id, bill_no AS label FROM purchases', 'purchase');
-    loadRefs('SELECT id, collection_no AS label FROM milk_collections', 'milk_collection');
+    loadRefs(`SELECT id, batch_no AS label, '' AS party_name FROM production_batches`, 'production');
+    loadRefs(`SELECT s.id, s.invoice_no AS label, COALESCE(p.name,'') AS party_name
+              FROM sales s LEFT JOIN parties p ON p.id = s.party_id`, 'sale');
+    loadRefs(`SELECT pu.id, pu.bill_no AS label, COALESCE(p.name,'') AS party_name
+              FROM purchases pu LEFT JOIN parties p ON p.id = pu.party_id`, 'purchase');
+    loadRefs(`SELECT mc.id, mc.collection_no AS label, COALESCE(p.name,'') AS party_name
+              FROM milk_collections mc LEFT JOIN parties p ON p.id = mc.party_id`, 'milk_collection');
 
     const ledger = [];
     for (const p of products) {
@@ -589,6 +600,10 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
         };
         let balance = openingQty;
         let totalIn = 0, totalOut = 0;
+        // Net effect per Excel-style column (a row may carry BOTH an inward and
+        // an outward side — e.g. a sales return posted as type 'sale', or a
+        // production reversal), so identity holds for every row (req 18).
+        const netFlow = { sales_issues: 0, collection_purchase: 0, production: 0, production_consumption: 0, other: 0 };
         for (const m of movements) {
             const inQty = round2(m.inward_qty), outQty = round2(m.outward_qty);
             balance = round2(balance + inQty - outQty);
@@ -614,22 +629,31 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
                     if (m.reference_type === 'wastage') buckets.wastage_out += outQty;
                     else if (inQty > 0) buckets.adjustment_in += inQty;
                     else buckets.adjustment_out += outQty;
-                    break;
-                default:
+                    break;                    default:
                     if (inQty > 0) buckets.other_in += inQty;
                     else if (outQty > 0) buckets.other_out += outQty;
             }
+            // Same movements, mapped to their daily-flow column by THE shared
+            // mapping below — the live statement and the Excel export can never
+            // drift apart (reqs 16 / 17).
+            const fd = flowDelta(m);
+            netFlow[fd.column] += fd.qty;
             const createdAt = m.created_at || '';
             // Stored timestamp as-is (space = local datetime(), T = ISO) — never invented.
             const timeRaw = createdAt.includes('T')
                 ? (createdAt.split('T')[1] || '')
                 : (createdAt.includes(' ') ? createdAt.split(' ')[1] : '');
+            const refKey = `${m.reference_type}:${m.reference_id}`;
+            const refNo = (m.reference_id != null && refLabel.get(refKey)) || '';
+            const party = (m.reference_id != null && refParty.get(refKey)) || internalParty(m);
             rows.push({
                 date: m.date,
                 time: timeRaw.slice(0, 8),
                 created_at: createdAt,
                 reference_type: m.reference_type, reference_id: m.reference_id,
-                reference: (m.reference_id != null && refLabel.get(`${m.reference_type}:${m.reference_id}`)) || m.notes || '',
+                reference: refNo || m.notes || '',
+                reference_no: refNo || m.notes || '',
+                party,
                 type: m.type, label, notes: m.notes,
                 inward_qty: inQty, outward_qty: outQty, balance,
                 unit_cost: unitCost,
@@ -655,16 +679,95 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
             total_out: round2(totalOut),
             closing: balance
         };
+        // Excel-style daily-flow row (reqs 2–9). Derived from the SAME movement
+        // replay above — no second stock calculation engine (req 16).
+        const flow = stockFlowRow({
+            opening: openingQty,
+            sales_issues: netFlow.sales_issues,
+            collection_purchase: netFlow.collection_purchase,
+            production: netFlow.production,
+            production_consumption: netFlow.production_consumption,
+            other: netFlow.other,
+            closing: balance
+        });
         ledger.push({
             product_id: p.id, product_name: p.name, unit: p.unit, category: p.category,
             inventory_category: classifyInventoryCategory(p),
             opening_qty: openingQty, closing_qty: balance,
             lot_value: lotValueNow,
             summary,
+            flow,
             rows
         });
     }
     return { from_date: from, to_date: to, products: ledger };
+}
+
+/**
+ * Excel-style daily-flow row for one product, built ONLY from the summary
+ * buckets of the quantity ledger.  Opening is the balance immediately before
+ * the period; closing is the balance after the last movement in the period.
+ *
+ *   Remaining  = Opening − Sales/Issues          (never called "opening")
+ *   Closing    = Remaining + Collection/Purchase + Production
+ *                − Production Consumption + Other
+ *
+ * The identity is asserted by `identity_ok`, not assumed (req 18).
+ */
+/**
+ * THE movement → daily-flow mapping. Returns the column a movement belongs to
+ * and its signed quantity in that column's own direction (so the statement
+ * reads opening − sales + collection + production − consumption + other =
+ * closing for every product and every period).  One mapping, used by the live
+ * statement, the Stock Ledger and the Excel export.
+ */
+function flowDelta(row = {}) {
+    const inQty = num(row.inward_qty), outQty = num(row.outward_qty);
+    const delta = round2(inQty - outQty);
+    switch (row.type) {
+        case 'sale': return { column: 'sales_issues', qty: round2(-delta) };
+        case 'milk_collection':
+        case 'purchase': return { column: 'collection_purchase', qty: delta };
+        case 'production_output': return { column: 'production', qty: delta };
+        case 'production_input': return { column: 'production_consumption', qty: round2(-delta) };
+        default: return { column: 'other', qty: delta };
+    }
+}
+
+function stockFlowRow(input = {}) {
+    const opening = round2(input.opening || 0);
+    const salesIssues = round2(input.sales_issues || 0);
+    const remaining = round2(opening - salesIssues);
+    const collectionPurchase = round2(input.collection_purchase || 0);
+    const production = round2(input.production || 0);
+    const consumption = round2(input.production_consumption || 0);
+    const other = round2(input.other || 0);
+    const computed = round2(opening - salesIssues + collectionPurchase + production - consumption + other);
+    // Authoritative closing comes from the engine's replay; the identity is
+    // asserted against it, never assumed.
+    const closing = (input.closing === undefined || input.closing === null) ? computed : round2(input.closing);
+    return {
+        opening,
+        sales_issues: salesIssues,
+        remaining,
+        collection_purchase: collectionPurchase,
+        production,
+        production_consumption: consumption,
+        other,
+        closing,
+        identity_ok: Math.abs(computed - closing) < 0.02
+    };
+}
+
+/** Party label for internal movements — never blank while a source exists (req 14). */
+function internalParty(m) {
+    switch (m.type) {
+        case 'production_input':
+        case 'production_output': return 'Production / Internal';
+        case 'opening': return 'Opening Balance';
+        case 'adjustment': return m.reference_type === 'wastage' ? 'Wastage / Internal' : 'Stock Adjustment';
+        default: return m.notes || 'Internal / Unspecified';
+    }
 }
 
 /** Human movement name for the detailed stock ledger (req: labeled movements). */
@@ -952,7 +1055,7 @@ module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
-    getProductCostReport, getStockLedger, getInventoryValuation, productLotValue,
+    getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,
     getManagementDashboard, getDailyClosing,
     getSaleTraceability, getBatchTraceability, traceBatchChain
 };

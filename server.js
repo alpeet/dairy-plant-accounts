@@ -2052,6 +2052,7 @@ app.post('/api/db-path', requireRole('staff'), (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // Export to Daily Account Pro Excel
 const { exportToDailyAccountExcel } = require('./shared/export-daily-account');
+const { exportStockStatementExcel } = require('./shared/export-stock-statement');
 
 app.post('/api/export/daily-account', requireAuth, (req, res) => {
     try {
@@ -2062,6 +2063,30 @@ app.post('/api/export/daily-account', requireAuth, (req, res) => {
             res.download(result.filePath, 'Daily_Account_Professional_Export.xlsx', (err) => {
                 if (err) {
                     console.error('Export download error:', err.message);
+                    if (!res.headersSent) {
+                        res.json({ success: false, error: 'Download failed: ' + err.message });
+                    }
+                }
+            });
+        } else {
+            res.json(result);
+        }
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/export/stock-statement — Excel-style stock statement (req 17).
+// Same period args as /api/dairy/stock-ledger; figures come from the same
+// costing engine, so the workbook reconciles with the screen.
+app.post('/api/export/stock-statement', requireAuth, (req, res) => {
+    try {
+        const outputPath = path.join(dbDir, 'Stock_Statement_Export.xlsx');
+        const result = exportStockStatementExcel(db, outputPath, req.body || {});
+        if (result.success) {
+            res.download(result.filePath, 'Stock_Statement_Export.xlsx', (err) => {
+                if (err) {
+                    console.error('Stock statement export download error:', err.message);
                     if (!res.headersSent) {
                         res.json({ success: false, error: 'Download failed: ' + err.message });
                     }

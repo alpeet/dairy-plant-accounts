@@ -283,6 +283,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Export to Daily Account Pro Excel
     exportDailyAccount: (opts) => ipcRenderer.invoke('export:daily-account', opts),
+    exportStockStatement: (opts) => ipcRenderer.invoke('export:stock-statement', opts),
 
     // Import from Dairy Account Pro Excel (filePath optional — shows a picker when omitted)
     importExcelFromFile: (opts) => ipcRenderer.invoke('excel:import-file', opts),

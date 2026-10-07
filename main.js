@@ -604,12 +604,20 @@ ipcMain.handle('auth:users:change-password', async (event, { currentPassword, ne
 // IPC Handlers — Export to Daily Account Pro Excel
 // ============================================================
 const { exportToDailyAccountExcel } = require('./shared/export-daily-account');
+const { exportStockStatementExcel } = require('./shared/export-stock-statement');
 
 authHandle('export:daily-account', async (event, { outputPath } = {}) => {
     if (!db) return { success: false, error: 'Database not ready' };
     const defaultPath = path.join(getDbDir(), 'Daily_Account_Professional_Export.xlsx');
     const savePath = outputPath || defaultPath;
     return exportToDailyAccountExcel(db, savePath);
+});
+
+// Excel-style stock statement (req 17) — same engine as the on-screen report.
+authHandle('export:stock-statement', async (event, opts = {}) => {
+    if (!db) return { success: false, error: 'Database not ready' };
+    const savePath = (opts && opts.outputPath) || path.join(getDbDir(), 'Stock_Statement_Export.xlsx');
+    return exportStockStatementExcel(db, savePath, opts || {});
 });
 
 // ============================================================

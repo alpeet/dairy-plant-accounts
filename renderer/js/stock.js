@@ -59,7 +59,7 @@ async function renderStock() {
                 <button class="btn btn-info btn-sm" onclick="tsOpenStatement(null)">📋 Stock Statement detail →</button>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
-                ${datePresetBar('tsFrom', 'tsTo', 'refreshTodaysStock', ['today', 'yesterday', 'last_7', 'this_month', 'all'])}
+                ${datePresetBar('tsFrom', 'tsTo', 'refreshTodaysStock', ['today', 'yesterday', 'last_7', 'last_30', 'this_month', 'all'])}
             </div>
             <div class="filter-bar">
                 <div class="form-group">
@@ -327,7 +327,9 @@ function tsOpenStatement(productId) {
     _ssState.preset = 'custom';
     _ssState.from = filt.from || '';
     _ssState.to = filt.to || '';
-    _ssState.view = productId ? 'detail' : 'summary';
+    // The button opens the Excel-style daily statement; a product link opens
+    // that product's movement ledger (traceability).
+    _ssState.view = productId ? 'detail' : 'flow';
     _ssState.product_id = productId ? String(productId) : '';
     _ssState.category = '';
     _ssState.search = '';

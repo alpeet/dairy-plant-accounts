@@ -193,3 +193,63 @@ Companion to `docs/AUDIT-FACTORY-STOCK-RECON.md` (v1.4.22 round).
 5. **`bsMonthFromRemarks`** — payroll month from remarks (fallback: sheet column); import now yields **9/9 employee-months** (3 employees × ASHADH/SHRAWAN/BHADRA), 3 employees only (no spelling duplicate), idempotent re-import (0 added / 9 unchanged).
 
 **Verified:** `scripts/audit/test-employees.js` **30/30**; UI exercised live in the web preview (page renders 3 employees, edit persists ₹15,000 through the previously-throwing UPDATE, Find Duplicates returns clean, Salary 👥 button navigates instead of throwing).
+
+---
+
+## G. STOCK LEDGER + STOCK STATEMENT (v1.4.24, 2026-10-07)
+
+**Requirement set:** Dairy Costing → Stock Ledger with Party + Reference No. and click-through; the
+Stock Statement presented as the operator's Excel-style daily flow; mandatory traceability; one
+authoritative engine; Excel export that reconciles.
+
+**Audit first (req 16).** The single stock engine is `getStockLedger()` in
+`shared/operations/dairy_costing.js`: it replays `stock_movements` for the period, computes one
+`summary` of buckets per product plus the running balance, and its closing is the replayed balance —
+both the Today's Stock panel and every Stock Statement view already read it. Nothing was rewritten:
+the deliverable is a presentation + export layer over that engine.
+
+**One real defect found and fixed (not suppressed).** The Excel-style formula
+`Opening − Sales + Collection/Purchase + Production − Production Consumption + Other = Closing` did
+**not** hold for products with mixed-direction rows: a sales return is stored as `type='sale'` with an
+`inward_qty`, and a deleted document writes the opposite direction under the original type, while the
+bucket pass counted only `outward_qty` for `type='sale'`. PANEER failed by the inward side
+(`opening 0, sales 70.5, collection 9 → closing −61.5` vs engine `−59.5`); 8 of 11 products failed
+over the all-time range. **Fix:** the new `flowDelta()` maps each movement to its statement column by
+its **net** direction, and it is the ONE mapping used by the live statement, the Stock Ledger and the
+Excel export — so they cannot drift. 0 identity failures across all-time, single-day, multi-day and
+month ranges of the live database.
+
+**What was extended**
+1. `getStockLedger` rows now carry `party`, `reference_no` and the existing `reference_type`/
+   `reference_id` (party comes from the source document: `milk_collections.party_id`,
+   `sales.party_id`, `purchases.party_id`; internal movements are labelled
+   `Production / Internal`, `Wastage / Internal`, `Stock Adjustment`). A movement whose source was
+   deleted still names its source from its notes — nothing is left unexplained (req 1/14).
+2. A `flow` object is derived per product inside the engine (`stockFlowRow`), so the daily statement
+   is engine output, not UI arithmetic.
+3. New `shared/export-stock-statement.js` (`exportStockStatementExcel`) writes
+   **Stock_Statement** (daily flow, one row per product per day with automatic carry-forward) and
+   **Stock_Ledger** (movement-level, the req-1 column set) with the exact requested headers, and
+   reports `mismatches: []` when the workbook reconciles with the engine.
+4. Stock Statement default view is now the daily statement (presets Today · Yesterday · Last 7 ·
+   Last 30 · Last 90 · This Month · Prev Month · This Year · Custom · All), with per-unit subtotals,
+   drill-down to the movement ledger, click-through to the source document and an **Excel** button.
+   Dairy Costing → Stock Ledger gained the same presets and the req-1 column set.
+5. `dairyReadFilter` no longer ignores an empty From/To — an empty range is the **All** preset, which
+   previously could never clear the period on the Dairy Costing tabs.
+
+**Per-product formulas are not forced into one shape** (req 8): the column a movement lands in
+follows its type, so raw milk shows collection IN / production consumption OUT / sales OUT, finished
+goods show production IN / sales OUT, cream used for Nauni or Ghee shows as production consumption,
+and any product can show any combination without special-casing.
+
+**Verified:** `scripts/audit/test-stock-statement.js` **68/68** — the req-18 acceptance example end to
+end (750 → −350 = 400 → +500 → −600 → −5 → **295**, tomorrow 295 − 100 = **195**, then a mixed-direction
+sales-return day), carry-forward with no manual opening entry, range semantics, party/reference,
+no-duplicate stock, the Excel column sets and per-row reconciliation, and the empty-product filter.
+Full battery: 23 suites (22 test files + verify-modules) exit 0. UI exercised live in the preview:
+flow view with the exact operator labels for a single day ("Yesterday Closing / Today's Sales/Issues /
+Remaining After Today's Sales / Today's Collection/Purchase / Today's Production / Production
+Consumption / Other IN/OUT / Today's Closing"), drill-down ledger with Party + Reference No. and 🔗
+click-through opening the source document, all 9 presets, and the Excel export reaching
+`/api/export/stock-statement` → 200 with a valid 1.4 MB workbook.
