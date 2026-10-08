@@ -487,3 +487,51 @@ same rule, different granularity.
 bought as milk (≈3.5 L/day) is now visible rather than hidden — it is why Mix Milk needed
 production cover at all. `REPLACE` (65 kg sold, no purchase) and `ELECTRICITY` (1 unit "sold") are
 not `Stock_Master` products, so they do not appear on the sheet.
+
+## H9 — App Stock Statement rebuilt as a daily chained statement (v1.4.29)
+
+**What changed.** The screen Stock Statement (`renderer/js/financial_reports.js`) no longer shows
+one aggregate row per product computed from a period filter. It is now backed by a new operation
+`getDailyStockStatement` (`shared/operations/dairy_costing.js`), wired through
+`shared/operations/index.js` → `main.js` (IPC `db:dairy:daily-stock-statement`) → `server.js`
+(`POST /api/dairy/daily-stock-statement`) → `preload.js` / `renderer/js/api.js`.
+
+**The rule.** For every date in the range (every day gets a row, even days with no records):
+
+```
+Closing(N) = Opening(N) + Collection + Purchase + Production − Used in Mixing
+             − Wastage + Other IN − Other OUT − Sales
+Opening(N+1) = Closing(N)
+opening(first day) = products.opening_stock (only when no 'opening' movement exists)
+                      + every in − out BEFORE the From Date
+```
+
+Nothing is stored: every read recomputes from the same `stock_movements` ledger every other stock
+view uses (`getStockLedger` + `flowDelta`), so backdated entries re-chain the whole period by
+construction and a mid-range query walks history back instead of assuming 0. Negative closings are
+**allowed** (sales are never blocked) but flagged per product-day (`is_negative_stock`) and counted
+in the response (`negative_days`).
+
+**Views.** `📈 Stock Movement` (default) renders the printed report layout — Product · Unit ·
+Opening Stock · Purchases In · [Production In · Used in Mixing] · Sales Out · [Other IN · Other
+OUT] · Closing Stock · Rate · Closing Value, TOTALS row, Total Closing Value + Low Stock Items
+cards, red negatives with ⚠ badges; those extra columns appear only when the period has such flows.
+Print produces the paper report (business header with phone/PAN, period strip, table, carry-forward
+footnote, Authorized Signature). `📅 Day by Day` shows the exact per-date chain with a product
+selector; empty days are faded rows with the closing carried forward. The previous views (Period
+Flow, Stock Summary, Detailed Ledger, Current Valuation) are untouched.
+
+**Acceptance.** `scripts/audit/test-daily-stock-statement.js` — TC-01…TC-10 from the spec
+(full range, mid-range walk-back, single day, missing-day carry-forward, zero-collection day,
+backdated recompute, same-day aggregation, empty range, range before any data, negative warning):
+**41/41**. Accounting suite 97/97 unchanged; `verify-modules` 39/41 (the 2 known id-argument
+failures). Live-verified through the web server: movement view identity holds on every product row
+(Cow Milk −250 + 13.10 − 13.10 − 11 = −261 ✓, Mix Milk −140.05 + 13.10 − 2,514 = −2,640.95 ✓),
+day-by-day chain exact, print HTML carries every required element.
+
+**Data note (2026-10-08).** The live ledger was rebuilt today by the advance-normalisation migration
+(3,090 movements) which re-derived the 82 mixing batches but **not** the 6 finished-goods shortfall
+batches that `apply-final-derivation.js` had posted in H8 — so the all-time shortfall is visible
+again (Mix Milk −2,640.95 L, Cow Milk −261, Ghee −56.5, NAUNI −144.5, PANEER −59.5, REPLACE −65;
+sales 35,102 L vs 32,461 L ever in). The statement surfaces this honestly with per-day warnings
+rather than hiding it; re-running the derivation pass after the data migrations settle will clear it.
