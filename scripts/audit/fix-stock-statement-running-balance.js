@@ -409,9 +409,53 @@ try {
 }
 
 // ── 9. Verify what is now on disk ───────────────────────────────────────────
+/**
+ * Structure check for a written formula: balanced parentheses, terminated
+ * strings, and SUMIFS/MAX called with a legal number of arguments.  Catches the
+ * failure mode the file-level checks cannot see — a typo that only shows up as
+ * Excel's "we found a problem with some content" repair prompt.
+ */
+function formulaProblems(formula) {
+    const out = [];
+    if (!formula) return out;
+    let depth = 0, inStr = false;
+    for (let i = 0; i < formula.length; i++) {
+        const ch = formula[i];
+        if (ch === '"') { if (inStr && formula[i + 1] === '"') { i++; continue; } inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '(') depth++;
+        else if (ch === ')') { depth--; if (depth < 0) return ['unbalanced )']; }
+    }
+    if (inStr) out.push('unterminated string');
+    if (depth !== 0) out.push('unbalanced parentheses');
+    // Argument shape of each function we emit.
+    for (const m of formula.matchAll(/(SUMIFS|MAX|IF|SUM)\(/g)) {
+        const name = m[1];
+        let d = 1, args = 1, str = false;
+        for (let i = m.index + m[0].length; i < formula.length && d > 0; i++) {
+            const ch = formula[i];
+            if (ch === '"') { str = !str; continue; }
+            if (str) continue;
+            if (ch === '(') d++;
+            else if (ch === ')') d--;
+            else if (ch === ',' && d === 1) args++;
+        }
+        if (name === 'SUMIFS' && (args < 3 || args % 2 === 0)) out.push(`SUMIFS with ${args} args`);
+        if (name === 'MAX' && args < 1) out.push('MAX with 0 args');
+        if ((name === 'IF' && (args < 2 || args > 3)) || (name === 'SUM' && args < 1)) out.push(`${name} with ${args} args`);
+    }
+    return out;
+}
+
 const chk = XLSX.readFile(XLSX_PATH, { cellFormula: true });
 const cws = chk.Sheets[SHEET];
 const problems = [];
+for (const r of [...productRows, ...blankRows, ...subtotalRows, totalsRow]) {
+    for (const col of ['C', 'D', 'E', 'F', 'I', 'J']) {
+        const f = String((cws[col + r] || {}).f || '');
+        for (const p of formulaProblems(f)) problems.push(`${col}${r}: ${p}`);
+    }
+}
 if (JSON.stringify(chk.SheetNames) !== JSON.stringify(sheetsBefore)) problems.push('sheet list changed');
 // A repeated attribute would make the part malformed XML for Excel.
 for (const [part, attr] of [['xl/workbook.xml', 'fullCalcOnLoad'], ['xl/workbook.xml', 'calcId']]) {
