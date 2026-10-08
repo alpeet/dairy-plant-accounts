@@ -415,3 +415,75 @@ attributes and only its text is rewritten (members inherit), a shared *member* i
 and only its cached value is refreshed. Every replacement uses a function, because formulas are
 full of `$10` / `$1679` and a replacement *string* would have been read as capture-group
 references and silently corrupted them. 26 sheets preserved, row counts unchanged, `unzip -t` clean.
+### H8 — Stock_Statement became a real running balance (2026-10-08)
+
+Operator report: *"why everywhere showing negative stock record — it's a very simple running balance
+of stock needed: yesterday closing − today sales + today purchase = today closing."* Correct, and
+the sheet was not doing it. Two independent causes:
+
+**1. Opening Stock never carried forward — the criteria column was wrong.** The "everything before
+the From date" SUMIFS looked at `Purchase_Entry!$A:$A` (the **Bikram Sambat text** date) and
+`Sales_Entry!$A:$A`, while `B5`/`D5` hold the **AD date serial**, which lives in column **B** on
+both sheets. In Excel a text value is greater than any number, so `"<"&$B$5` matched nothing and
+every Opening came out as `Stock_Master` opening stock — 0 for every product. Consequently
+`Closing = 0 + 0 − period sales` went negative whenever a product had sales and no purchase that
+day. The hard-coded ranges had also drifted (`$M$10:$M$1679` while Purchase_Entry has 1,682 rows,
+`$F$22:$F$2585` while Sales_Entry has 2,586), silently dropping the tail rows.
+
+**2. No production and no consumption.** Milk is bought as Cow Milk / Buffalo Milk and sold as Mix
+Milk; GHEE / NAUNI / PANEER are made in-house. The workbook recorded none of that, so Mix Milk had
+0 purchases against 483 L of sales and the made-in-house lines went negative. Once Opening really
+carried forward the raw milk also *piled up* (~36,000 L "on hand", ~Rs 29.5 lakh), because nothing
+ever showed it leaving into the mixing.
+
+`scripts/audit/fix-stock-statement-running-balance.js` rewrites columns C/D/E/I as whole-column,
+AD-date SUMIFS and adds a **Used in Mixing** column (J), so the sheet now reads:
+
+```text
+Product | Unit | Opening Stock | Purchases In | Sales Out | Closing Stock | Rate | Closing Value |
+Production In | Used in Mixing
+
+Opening        = Stock_Master opening + purchases + production − used in mixing − sales, all BEFORE the From date
+Closing        = Opening + Purchases In + Production In − Used in Mixing − Sales Out
+Production In  = Mix Milk: the Cow + Buffalo milk mixed that period, plus whatever keeps the balance ≥ 0
+                 every other product: the amount needed to cover its recorded sales
+Used in Mixing = the Cow + Buffalo milk consumed into Mix Milk
+```
+
+That is the application's own rule (`deriveProductionBatches` + `deriveShortfallBatches`) expressed
+as one closed form, so **today's Opening is exactly yesterday's Closing** for any From/To the
+operator types, and no row can close negative.
+
+Applied for 07-Oct-2026 (AD 46302):
+
+| Product | Before (Closing) | Opening | Purchases | Production | Used | Sales | Closing | Closing Value |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Mix Milk | −483.00 | 0.00 | 0.00 | 483.00 | 0.00 | 483.00 | 0.00 | 0 |
+| Cow Milk | 115.60 | 0.00 | 116.60 | 1.00 | 116.60 | 1.00 | 0.00 | 0 |
+| Buffalo Milk | 594.00 | 0.00 | 594.00 | 0.00 | 594.00 | 0.00 | 0.00 | 0 |
+| Ghee | −0.50 | 0.00 | 0.00 | 0.50 | 0.00 | 0.50 | 0.00 | 0 |
+| NAUNI | −3.00 | 0.00 | 0.00 | 3.00 | 0.00 | 3.00 | 0.00 | 0 |
+| PANEER | −0.50 | 0.00 | 0.00 | 0.50 | 0.00 | 0.50 | 0.00 | 0 |
+| DANA | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 |
+| Cream | 0.00 | 56.00 | 0.00 | 0.00 | 0.00 | 0.00 | 56.00 | 30,800 |
+
+`Closing Value` (H5/H24) is **Rs 30,800** — it was 21,273 only because every Opening was 0. Verified:
+26 sheets, row counts unchanged (Purchase_Entry 1,682 / Sales_Entry 2,586 / Party_Ledger 9,363 /
+Party_Master 495 / Stock_Master 42 / Collection 1,608), `unzip -t` clean, and the workbook still
+imports — `test-milk-supplier-identity.js` **18/18**. The sheet's own footnote was rewritten to
+state the new rule. Only the `Stock_Statement` sheet XML, the workbook print area (now `$A$1:$J$30`)
+and a recalculate-on-open flag are touched.
+
+**Application side.** The live `data/dairy-plant.db` also showed negatives for every product
+(Cow −261, Mix Milk −2,640.95, Ghee −56.5, NAUNI −144.5, PANEER −59.5, REPLACE −65), because its
+mixing batches existed but the finished-goods shortfall pass had never been run. Running the
+existing `scripts/audit/apply-final-derivation.js` (timestamped backup first) derived 82 mixing
+batches + **6 shortfall batches** and left **0 products negative**; the app's Stock Statement is
+non-negative for every product and period. The app patches day by day, so its screen figures carry
+a small residual (e.g. Mix Milk 668.09 L on 07-Oct) where the sheet's closed form lands on 0.00 —
+same rule, different granularity.
+
+**Left as-is on purpose:** the 359 L of Mix Milk sold over the book that was never recorded as
+bought as milk (≈3.5 L/day) is now visible rather than hidden — it is why Mix Milk needed
+production cover at all. `REPLACE` (65 kg sold, no purchase) and `ELECTRICITY` (1 unit "sold") are
+not `Stock_Master` products, so they do not appear on the sheet.
