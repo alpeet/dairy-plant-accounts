@@ -380,3 +380,38 @@ BILL-5204) with exactly one +160 L stock movement; Mina never receives it; `BILL
 party; re-import adds no rows or movements; the supplier daily reconciliation passes; and
 Replace-ALL and Add/Update agree. `scripts/audit/test-stock-statement.js` is updated to the new
 column set (**69 checks**). Full battery: **24 suites, 0 failures.**
+
+### H7 — "Production In" column added to the Excel Stock Statement (2026-10-08)
+
+The workbook records **no mixing at all**: milk is bought as Cow Milk / Buffalo Milk and sold as
+Mix Milk, so Mix Milk showed Purchases In 4,356 L against Sales Out 41,201 L and a spurious
+negative closing (e.g. **−483 L** for 07-Oct-2026) — the mixing that produced it existed nowhere in
+the workbook, while the application derives it (`deriveProductionBatches`: cow + buffalo collected
+that day → Mix Milk).
+
+`scripts/audit/add-stock-statement-production.js` adds a **Production In** column (column I) and
+makes Closing include it:
+
+```
+Product | Unit | Opening Stock | Purchases In | Sales Out |
+Closing Stock | Rate (Rs) | Closing Value | Production In
+Closing Stock = Opening + Purchases In + Production In − Sales Out
+```
+
+- **Mix Milk** production = the Cow + Buffalo milk purchased in the period (that milk is mixed);
+  every other product's production is 0.
+- Applied: Mix Milk production **710.60 L**, closing **−483 → +227.60 L**. Every product row now
+  satisfies `Opening + Purchases + Production − Sales = Closing` (verified, zero failures).
+- Cow Milk and Buffalo Milk deliberately keep their own stock — the lighter model chosen for this
+  round, so multi-day totals will not match the application, which converts all cow/buffalo into
+  Mix Milk and additionally derives finished-goods production (Ghee / NAUNI / PANEER show −0.5 /
+  −3 / −0.5 here because the workbook still records no production for them).
+
+**Safety properties.** The script patches only the `Stock_Statement` sheet XML (plus the workbook
+print area and a `fullCalcOnLoad` flag) inside the zip; it refuses to write while Excel holds the
+file open; it backs up first; it is verified after writing (sheet list, header, per-row identity,
+Mix Milk non-negative). Shared formulas are handled explicitly — a shared *master* keeps its group
+attributes and only its text is rewritten (members inherit), a shared *member* is left untouched
+and only its cached value is refreshed. Every replacement uses a function, because formulas are
+full of `$10` / `$1679` and a replacement *string* would have been read as capture-group
+references and silently corrupted them. 26 sheets preserved, row counts unchanged, `unzip -t` clean.
