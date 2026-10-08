@@ -1293,6 +1293,11 @@ authHandle('db:dairy:daily-closing', async (event, params = {}) => {
     return safeRun(() => ops.getDailyClosing(db, params));
 });
 
+// Daily chained stock statement (one row per day: opening → closing).
+authHandle('db:dairy:daily-stock-statement', async (event, params = {}) => {
+    return safeRun(() => ops.getDailyStockStatement(db, params));
+});
+
 authHandle('db:dairy:sale-traceability', async (event, params = {}) => {
     return safeRun(() => ops.getSaleTraceability(db, params));
 });

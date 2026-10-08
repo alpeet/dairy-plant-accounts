@@ -1740,6 +1740,11 @@ app.post('/api/dairy/daily-closing', (req, res) => {
     res.json(safeRun(() => ops.getDailyClosing(db, req.body || {})));
 });
 
+// Daily chained stock statement (one row per day: opening → closing).
+app.post('/api/dairy/daily-stock-statement', (req, res) => {
+    res.json(safeRun(() => ops.getDailyStockStatement(db, req.body || {})));
+});
+
 app.post('/api/dairy/sale-traceability', (req, res) => {
     res.json(safeRun(() => ops.getSaleTraceability(db, req.body || {})));
 });

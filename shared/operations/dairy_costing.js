@@ -1070,11 +1070,128 @@ function getBatchTraceability(db, { batchId } = {}) {
     return { batch_id: batchId, chain };
 }
 
+// ──────────────────────────────────────────────────────────────
+// Daily chained Stock Statement
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Per-day running balance — one row for EVERY day in the range, per product.
+ *
+ *   Closing(N) = Opening(N) + Collection + Purchase + Production
+ *                 − Production Consumption − Wastage + Other IN − Other OUT − Sales
+ *   Opening(N+1) = Closing(N)
+ *
+ * With only collection/purchase/sales present (the spec's fixtures) this is
+ * exactly `opening + collection + purchase − sales`.
+ *
+ * Opening(first day) = products.opening_stock (the initial stock, when the
+ * books carry no 'opening' movement for that product) + every movement before
+ * the From date — so a mid-range query walks history back instead of assuming 0
+ * (TC-02), and a backdated entry re-chains every later day (TC-06) because
+ * nothing is stored.
+ *
+ * Read from the same ledger as every other stock view (`getStockLedger` +
+ * `flowDelta`): one stock calculation, never a second one.
+ */
+function getDailyStockStatement(db, { from_date, to_date, product_id, category, search } = {}) {
+    const ledger = getStockLedger(db, { from_date, to_date, product_id });
+
+    // A date input can hand back an AD year (…2026); the ledger stores BS, so
+    // normalise before any comparison or day enumeration. '' stays ''.
+    const toBSD = (s) => {
+        const t = String(s == null ? '' : s).trim().slice(0, 10);
+        if (!t) return '';
+        const y = parseInt(t.slice(0, 4), 10);
+        if (Number.isFinite(y) && y > 0 && y < 2075) { const bs = adToBS(t); if (bs) return bs; }
+        return t;
+    };
+
+    // Blank bounds ('all' preset) walk the whole ledger's span.
+    const span = db.prepare('SELECT MIN(date) mn, MAX(date) mx FROM stock_movements').get() || {};
+    let from = toBSD(ledger.from_date);
+    let to = toBSD(ledger.to_date);
+    if (!from) from = span.mn || todayBS();
+    if (!to) to = span.mx || from;
+    if (String(to) < String(from)) to = from;
+    const days = bsDays(String(from), String(to));
+
+    const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+    const emptyDay = () => ({ collection: 0, purchase: 0, sales: 0, production: 0, consumption: 0, wastage: 0, other_in: 0, other_out: 0 });
+    const products = [];
+    let negativeDays = 0, identityOk = true;
+
+    for (const p of ledger.products) {
+        if (category && String(p.category || '') !== category) continue;
+        if (search && !norm(p.product_name).includes(norm(search)) && !norm(p.category || '').includes(norm(search))) continue;
+
+        // Initial stock = Stock_Master/products opening stock, but ONLY when the
+        // books carry no 'opening' movement — that movement already is it.
+        const meta = db.prepare('SELECT opening_stock FROM products WHERE id = ?').get(p.product_id) || {};
+        const hasOpening = !!db.prepare("SELECT 1 FROM stock_movements WHERE product_id = ? AND type = 'opening' LIMIT 1").get(p.product_id);
+        const initial = hasOpening ? 0 : round2(num(meta.opening_stock));
+
+        // Bucket this period's movements by date — one pass, never a query per day.
+        const byDate = new Map();
+        for (const r of (p.rows || [])) {
+            const fd = flowDelta(r);
+            const qty = round2(num(fd.qty));
+            if (!byDate.has(r.date)) byDate.set(r.date, emptyDay());
+            const b = byDate.get(r.date);
+            if (fd.column === 'collection_purchase') {
+                if (r.type === 'milk_collection') b.collection = round2(b.collection + qty);
+                else b.purchase = round2(b.purchase + qty);
+            } else if (fd.column === 'sales_issues') b.sales = round2(b.sales + qty);
+            else if (fd.column === 'production') b.production = round2(b.production + qty);
+            else if (fd.column === 'production_consumption') b.consumption = round2(b.consumption + qty);
+            else if (fd.column === 'wastage') b.wastage = round2(b.wastage + qty);
+            else if (fd.column === 'other_in') b.other_in = round2(b.other_in + qty);
+            else if (fd.column === 'other_out') b.other_out = round2(b.other_out + qty);
+        }
+
+        let balance = round2(num(p.opening_qty) + initial);
+        const firstOpening = balance;
+        const rows = [];
+        for (const day of days) {
+            const b = byDate.get(day) || emptyDay();
+            const opening = balance;
+            const closing = round2(opening + b.collection + b.purchase + b.production - b.consumption - b.wastage + b.other_in - b.other_out - b.sales);
+            const identityOkHere = Math.abs(round2(opening + b.collection + b.purchase + b.production - b.consumption - b.wastage + b.other_in - b.other_out - b.sales) - closing) < 0.02;
+            const negative = closing < -0.001;
+            if (negative) negativeDays++;
+            if (!identityOkHere) identityOk = false;
+            rows.push({
+                date: day, opening, collection: b.collection, purchase: b.purchase,
+                production: b.production, production_consumption: b.consumption,
+                wastage: b.wastage, other_in: b.other_in, other_out: b.other_out,
+                sales: b.sales, closing,
+                has_data: byDate.has(day), is_negative_stock: negative, identity_ok: identityOkHere
+            });
+            balance = closing;
+        }
+
+        const moved = rows.some(r => r.has_data);
+        if (!moved && firstOpening === 0) continue;   // skip idle products
+        products.push({
+            product_id: p.product_id, product_name: p.product_name, unit: p.unit,
+            category: p.category, initial_stock: initial,
+            first_opening: firstOpening, last_closing: balance,
+            negative_days: rows.filter(r => r.is_negative_stock).length,
+            rows
+        });
+    }
+
+    return {
+        from_date: from, to_date: to, days: days.length,
+        truncated: days.length >= 4000,
+        products, negative_days: negativeDays, identity_ok: identityOk
+    };
+}
+
 module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
     getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,
-    getManagementDashboard, getDailyClosing,
+    getManagementDashboard, getDailyClosing, getDailyStockStatement,
     getSaleTraceability, getBatchTraceability, traceBatchChain
 };

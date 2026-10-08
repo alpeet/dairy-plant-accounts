@@ -536,7 +536,7 @@ async function printReceivablePayable() {
 // ============================================================
 // Period + views state. The period comes from the SHARED date layer
 // (getDatePreset) — never hardcoded; 'custom' is the From/To pair.
-let _ssState = { preset: 'today', from: '', to: '', view: 'flow', category: '', search: '', product_id: '' };
+let _ssState = { preset: 'today', from: '', to: '', view: 'movement', category: '', search: '', product_id: '' };
 
 /** Local 2-dp rounding for summary figures (currency precision). */
 function round2ui(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -597,7 +597,9 @@ function _ssFilterBar(data) {
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
             <span style="font-size:12px;color:var(--text-light);font-weight:600">View:</span>
-            <button type="button" class="btn btn-sm ${_ssState.view === 'flow' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('flow')">📋 Daily Stock Statement</button>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'movement' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('movement')">📈 Stock Movement</button>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'daily' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('daily')">📅 Day by Day</button>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'flow' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('flow')">📋 Period Flow</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'summary' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('summary')">📊 Stock Summary</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'detail' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('detail')">🧾 Detailed Ledger</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'valuation' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('valuation')">💰 Current Valuation</button>
@@ -740,6 +742,205 @@ function _ssMatches(p) {
     return true;
 }
 
+// ──────────────────────────────────────────────────────────────
+// Stock Movement & Valuation view — the printed report layout
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Collapse the chained daily statement into one row per product, in the
+ * printed report's layout: Opening | Purchases In | … | Sales Out | Closing |
+ * Rate | Closing Value. Opening is the first day's carried-forward opening and
+ * Closing the last day's chained closing, so each row satisfies the movement
+ * identity by construction — the per-day chain (and backdated recompute) is
+ * done by getDailyStockStatement, never re-derived here.
+ */
+function _ssMovementTableModel(daily, valuation) {
+    const meta = {};
+    for (const i of ((valuation && valuation.items) || [])) meta[String(i.id)] = i;
+    const nz = v => Math.abs(v || 0) >= 0.005;
+
+    const rows = ((daily && daily.products) || []).map(p => {
+        const rs = p.rows || [];
+        const sum = k => rs.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+        const m = meta[String(p.product_id)] || {};
+        return {
+            product_id: p.product_id,
+            name: p.product_name,
+            unit: p.unit || '',
+            opening: rs.length ? rs[0].opening : 0,
+            purchase: round2ui(sum('collection') + sum('purchase')),
+            production: round2ui(sum('production')),
+            used: round2ui(sum('production_consumption')),
+            sales: round2ui(sum('sales')),
+            otherOut: round2ui(sum('wastage') + sum('other_out')),
+            otherIn: round2ui(sum('other_in')),
+            closing: rs.length ? rs[rs.length - 1].closing : 0,
+            rate: Number(m.rate) || 0,
+            reorder: Number(m.reorder_level) || 0,
+            negative_days: p.negative_days || 0
+        };
+    });
+
+    const tot = rows.reduce((s, r) => {
+        for (const k of ['opening', 'purchase', 'production', 'used', 'sales', 'otherOut', 'otherIn', 'closing']) s[k] += r[k];
+        s.value += r.closing * r.rate;
+        return s;
+    }, { opening: 0, purchase: 0, production: 0, used: 0, sales: 0, otherOut: 0, otherIn: 0, closing: 0, value: 0 });
+
+    return {
+        rows, tot,
+        showProduction: rows.some(r => nz(r.production) || nz(r.used)),
+        showOther: rows.some(r => nz(r.otherOut) || nz(r.otherIn)),
+        lowCount: rows.filter(r => r.closing <= r.reorder).length,
+        negativeDays: (daily && daily.negative_days) || 0
+    };
+}
+
+function _ssMovementView(daily, valuation, periodLabel) {
+    const m = _ssMovementTableModel(daily, valuation);
+    if (!m.rows.length) {
+        return '<div style="text-align:center;padding:40px;color:var(--text-light)">No stock products in this period.</div>';
+    }
+    const nz = v => Math.abs(v || 0) >= 0.005;
+    const q = v => nz(v) ? formatNumber(round2ui(v)) : '0';
+    const cell = v => `<td class="text-right">${q(v)}</td>`;
+
+    return `
+    <div class="summary-cards" style="grid-template-columns:repeat(2,minmax(0,260px));margin-bottom:14px">
+        <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">💰 Total Closing Value</span><span class="value" style="font-size:22px">${formatCurrency(round2ui(m.tot.value))}</span></div>
+        <div class="summary-card card-warning" style="margin:0;padding:12px"><span class="label">⚠️ Low Stock Items</span><span class="value" style="font-size:22px">${m.lowCount}</span></div>
+    </div>
+    ${m.negativeDays > 0 ? `<div style="background:#fdecea;border-left:4px solid #c0392b;padding:10px 14px;border-radius:6px;font-size:12px;margin-bottom:10px;color:#c0392b">
+        ⚠ <strong>${m.negativeDays}</strong> product-day(s) close negative in this period. Sales are never blocked, but a negative closing means stock left that was never recorded as received — open <em>Day by Day</em> to see which days, then add the missing purchase/collection or opening balance.
+    </div>` : ''}
+    <div class="table-container">
+        <table>
+            <thead><tr>
+                <th>Product</th>
+                <th>Unit</th>
+                <th class="text-right">Opening Stock</th>
+                <th class="text-right">Purchases In</th>
+                ${m.showProduction ? '<th class="text-right">Production In</th><th class="text-right">Used in Mixing</th>' : ''}
+                <th class="text-right">Sales Out</th>
+                ${m.showOther ? '<th class="text-right">Other IN</th><th class="text-right">Other OUT</th>' : ''}
+                <th class="text-right">Closing Stock</th>
+                <th class="text-right">Rate (Rs)</th>
+                <th class="text-right">Closing Value</th>
+            </tr></thead>
+            <tbody>
+            ${m.rows.map(r => `
+                <tr>
+                    <td><a href="#" onclick="event.preventDefault();ssDrillProduct(${r.product_id})" title="Open this product's movement ledger">${escapeHtml(r.name)}</a>${r.negative_days ? ` <span class="badge badge-danger" title="${r.negative_days} day(s) close negative">${r.negative_days}⚠</span>` : ''}</td>
+                    <td>${escapeHtml(r.unit)}</td>
+                    ${cell(r.opening)}
+                    ${cell(r.purchase)}
+                    ${m.showProduction ? cell(r.production) + cell(r.used) : ''}
+                    ${cell(r.sales)}
+                    ${m.showOther ? cell(r.otherIn) + cell(r.otherOut) : ''}
+                    <td class="text-right" style="font-weight:700;${r.closing < -0.001 ? 'color:var(--danger)' : ''}">${q(r.closing)}</td>
+                    <td class="text-right">${formatCurrency(r.rate)}</td>
+                    <td class="text-right" style="font-weight:600;${r.closing * r.rate < -0.001 ? 'color:var(--danger)' : ''}">${formatCurrency(round2ui(r.closing * r.rate))}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot><tr style="font-weight:700">
+                <td colspan="2">TOTALS</td>
+                <td class="text-right">${q(m.tot.opening)}</td>
+                <td class="text-right">${q(m.tot.purchase)}</td>
+                ${m.showProduction ? `<td class="text-right">${q(m.tot.production)}</td><td class="text-right">${q(m.tot.used)}</td>` : ''}
+                <td class="text-right">${q(m.tot.sales)}</td>
+                ${m.showOther ? `<td class="text-right">${q(m.tot.otherIn)}</td><td class="text-right">${q(m.tot.otherOut)}</td>` : ''}
+                <td class="text-right">${q(m.tot.closing)}</td>
+                <td></td>
+                <td class="text-right">${formatCurrency(round2ui(m.tot.value))}</td>
+            </tr></tfoot>
+        </table>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-light);line-height:1.6">
+        📅 Period: <strong>${escapeHtml(periodLabel)}</strong> — change the From/To dates above; the opening carries forward automatically.<br>
+        Opening Stock = the balance carried in from before the From Date. Closing = Opening + Purchases In [+ Production In − Used in Mixing] − Sales Out [+ Other IN − Other OUT], chained day by day — open <em>Day by Day</em> for the per-date table.
+    </div>`;
+}
+
+// ──────────────────────────────────────────────────────────────
+// Day-by-day chained view — one row per date, exact spec layout
+// ──────────────────────────────────────────────────────────────
+
+function _ssDailyView(daily, periodLabel) {
+    const products = (daily && daily.products) || [];
+    if (!products.length) {
+        return '<div style="text-align:center;padding:40px;color:var(--text-light)">No stock products in this period.</div>';
+    }
+    const sel = _ssState.product_id ? String(_ssState.product_id) : '';
+    const shown = sel ? products.filter(p => String(p.product_id) === sel) : products;
+    const nz = v => Math.abs(v || 0) >= 0.005;
+    const q = v => nz(v) ? formatNumber(round2ui(v)) : '0';
+    const MAX_ROWS = 400;
+
+    const sections = shown.map(p => {
+        const rs = p.rows || [];
+        const anyCol = rs.some(r => nz(r.collection));
+        const anyPur = rs.some(r => nz(r.purchase));
+        const anyProd = rs.some(r => nz(r.production) || nz(r.production_consumption));
+        const anyOther = rs.some(r => nz(r.wastage) || nz(r.other_in) || nz(r.other_out));
+        const capped = rs.slice(0, MAX_ROWS);
+        return `
+        <h3 style="margin:18px 0 8px;font-size:15px">${escapeHtml(p.product_name)}
+            <span style="color:var(--text-light);font-weight:400;font-size:12px">
+                (${escapeHtml(p.unit || '')}) — ${rs.length} day(s), opening ${q(rs.length ? rs[0].opening : 0)} → closing ${q(p.last_closing)}${p.negative_days ? ` · <span style="color:var(--danger)">${p.negative_days} negative day(s)</span>` : ''}
+            </span>
+        </h3>
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th>Date</th>
+                    <th class="text-right">Opening</th>
+                    ${anyCol ? '<th class="text-right">Collection</th>' : ''}
+                    ${anyPur ? '<th class="text-right">Purchase</th>' : ''}
+                    ${anyProd ? '<th class="text-right">Production</th><th class="text-right">Used in Mixing</th>' : ''}
+                    <th class="text-right">Sales</th>
+                    ${anyOther ? '<th class="text-right">Wastage</th><th class="text-right">Other IN</th><th class="text-right">Other OUT</th>' : ''}
+                    <th class="text-right">Closing</th>
+                </tr></thead>
+                <tbody>
+                ${capped.map(r => {
+                    const dash = '<span style="color:var(--text-light)">—</span>';
+                    const cell = v => `<td class="text-right">${r.has_data ? q(v) : dash}</td>`;
+                    const neg = r.closing < -0.001;
+                    return `<tr${r.has_data ? '' : ' style="opacity:.55;font-style:italic"'}>
+                        <td>${formatDate(r.date)}</td>
+                        <td class="text-right">${q(r.opening)}</td>
+                        ${anyCol ? cell(r.collection) : ''}
+                        ${anyPur ? cell(r.purchase) : ''}
+                        ${anyProd ? cell(r.production) + cell(r.production_consumption) : ''}
+                        ${cell(r.sales)}
+                        ${anyOther ? cell(r.wastage) + cell(r.other_in) + cell(r.other_out) : ''}
+                        <td class="text-right" style="font-weight:700;${neg ? 'color:var(--danger)' : ''}">${q(r.closing)}${neg ? ' ⚠' : ''}</td>
+                    </tr>`;
+                }).join('')}
+                </tbody>
+            </table>
+        </div>
+        ${rs.length > capped.length ? `<div style="font-size:12px;color:var(--text-light);margin:6px 0 0">Showing first ${capped.length} of ${rs.length} days — narrow the period.</div>` : ''}`;
+    }).join('');
+
+    return `
+    <div class="filter-bar">
+        <div class="form-group">
+            <label>Product</label>
+            <select class="form-control" id="ssDailyProduct" onchange="_ssState.product_id=this.value;showStockStatement()">
+                <option value="">All products</option>
+                ${products.map(p => `<option value="${p.product_id}" ${sel === String(p.product_id) ? 'selected' : ''}>${escapeHtml(p.product_name)}</option>`).join('')}
+            </select>
+        </div>
+        <div class="form-group" style="flex:1"><label>&nbsp;</label>
+            <div style="font-size:12px;color:var(--text-light);padding-top:6px">
+                ${escapeHtml(periodLabel)} — every day in the range gets a row. Closing(N) = Opening(N) + Collection + Purchase − Sales (+ Production − Used in Mixing ± other flows); Opening(N+1) = Closing(N). Faded rows are days with no records: the closing simply carries forward.
+            </div>
+        </div>
+    </div>
+    ${sections}`;
+}
+
 async function showStockStatement() {
     const container = document.getElementById('page-stock-statement');
     document.getElementById('topActions').innerHTML = '';
@@ -752,14 +953,21 @@ async function showStockStatement() {
         _ssState.to = r.to;
     }
 
-    const [ledgerRes, valRes] = await Promise.all([
+    const [ledgerRes, valRes, dailyRes] = await Promise.all([
         window.api.getStockLedger({ from_date: _ssState.from, to_date: _ssState.to }),
-        window.api.getStockStatement({ category: _ssState.category || undefined, search: _ssState.search || undefined })
+        window.api.getStockStatement({ category: _ssState.category || undefined, search: _ssState.search || undefined }),
+        window.api.getDailyStockStatement({
+            from_date: _ssState.from, to_date: _ssState.to,
+            category: _ssState.category || undefined, search: _ssState.search || undefined,
+            product_id: _ssState.view === 'daily' && _ssState.product_id ? _ssState.product_id : undefined
+        })
     ]);
     const data = valRes.success ? valRes.data : { items: [], total_value: 0, total_products: 0, total_quantity: 0, categories: [] };
     const ledger = (ledgerRes.success && ledgerRes.data) ? ledgerRes.data : { products: [] };
+    const daily = (dailyRes && dailyRes.success && dailyRes.data) ? dailyRes.data : { products: [], negative_days: 0 };
     _finLastData.stockStatement = data;
     _finLastData.stockLedger = ledger;
+    _finLastData.stockDaily = daily;
 
     const products = (ledger.products || []).filter(_ssMatches);
     const periodLabel = `${_ssState.from ? formatDate(_ssState.from) : 'Start'} → ${_ssState.to ? formatDate(_ssState.to) : 'Today'}`;
@@ -774,7 +982,11 @@ async function showStockStatement() {
     const singleDay = !!(_ssState.from && _ssState.to && String(_ssState.from) === String(_ssState.to));
 
     let viewHtml = '';
-    if (_ssState.view === 'flow') {
+    if (_ssState.view === 'movement') {
+        viewHtml = _ssMovementView(daily, data, periodLabel);
+    } else if (_ssState.view === 'daily') {
+        viewHtml = _ssDailyView(daily, periodLabel);
+    } else if (_ssState.view === 'flow') {
         viewHtml = _ssFlowView(products, periodLabel, singleDay);
     } else if (_ssState.view === 'summary') {
         viewHtml = `
@@ -941,19 +1153,91 @@ async function applyStockStatement() {
     showStockStatement();
 }
 
+/**
+ * Print the Stock Movement & Valuation report — the same table the screen
+ * shows, laid out for paper: business header with phone/PAN, period strip with
+ * Total Closing Value and Low Stock count, the movement table, and the
+ * carry-forward footnote.
+ */
 async function printStockStatementReport() {
-    const data = _finLastData.stockStatement;
-    if (!data) { showToast('Load data first', 'warning'); return; }
+    const daily = _finLastData.stockDaily;
+    if (!daily || !Array.isArray(daily.products) || !daily.products.length) { showToast('Load the Stock Movement view first', 'warning'); return; }
     const settings = await getSettingsCached();
+    const m = _ssMovementTableModel(daily, _finLastData.stockStatement);
+    const nz = v => Math.abs(v || 0) >= 0.005;
+    const q = v => nz(v) ? formatNumber(round2ui(v)) : '0.00';
+    const periodLabel = `${_ssState.from ? formatDate(_ssState.from) : 'Start'} → ${_ssState.to ? formatDate(_ssState.to) : 'Today'}`;
+    const th = 'background:#1a5276;color:#fff;padding:6px 8px;font-size:8.5pt;text-align:right;text-transform:uppercase;';
+    const td = 'border:1px solid #cfd8e3;padding:5px 8px;font-size:9.5pt;text-align:right;';
+    const tf = `${td}background:#eef2f7;font-weight:700;`;
+
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Stock Statement</h2><p>As of: ${formatDate(today())}</p></div>
-        <div class="value-cards">
-            <div class="value-card"><div class="value-label">Products</div><div class="value-number">${data.total_products}</div></div>
-            <div class="value-card"><div class="value-label">Total Qty</div><div class="value-number">${formatNumber(data.total_quantity)}</div></div>
-            <div class="value-card"><div class="value-label">Total Value</div><div class="value-number">${formatCurrency(data.total_value)}</div></div>
+    <div style="font-family:'Segoe UI',Arial,sans-serif;">
+        <div style="text-align:center;border-bottom:3px double #1a5276;padding-bottom:10px;margin-bottom:12px;">
+            <h1 style="font-size:18pt;color:#1a5276;margin:0;">${escapeHtml(settings.business_name || 'Prarambha Dairy Suppliers')}</h1>
+            <div style="font-size:8.5pt;color:#666;">
+                ${settings.business_phone ? 'Phone: ' + escapeHtml(settings.business_phone) : ''}
+                ${settings.business_phone && settings.business_pan ? ' &nbsp;|&nbsp; ' : ''}
+                ${settings.business_pan ? 'PAN/VAT: ' + escapeHtml(settings.business_pan) : ''}
+            </div>
+            <h2 style="font-size:12pt;color:#2c3e50;margin:8px 0 0;text-transform:uppercase;letter-spacing:1.5px;">Stock Movement &amp; Valuation Report</h2>
         </div>
-        <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
-    `;
+        <div style="display:flex;justify-content:space-between;gap:20px;font-size:9.5pt;margin-bottom:10px;">
+            <div><strong>Period:</strong> ${escapeHtml(periodLabel)}</div>
+            <div style="text-align:right">
+                <strong>Total Closing Value: Rs. ${formatNumber(round2ui(m.tot.value))}</strong><br>
+                <strong>Low Stock Items:</strong> <span style="color:${m.lowCount ? '#c0392b' : '#1e8449'}">${m.lowCount}</span>
+            </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+                <th style="${th}text-align:left">Product</th>
+                <th style="${th}">Unit</th>
+                <th style="${th}">Opening Stock</th>
+                <th style="${th}">Purchases In</th>
+                ${m.showProduction ? `<th style="${th}">Production In</th><th style="${th}">Used in Mixing</th>` : ''}
+                <th style="${th}">Sales Out</th>
+                ${m.showOther ? `<th style="${th}">Other IN</th><th style="${th}">Other OUT</th>` : ''}
+                <th style="${th}">Closing Stock</th>
+                <th style="${th}">Rate (Rs)</th>
+                <th style="${th}">Closing Value</th>
+            </tr></thead>
+            <tbody>
+            ${m.rows.map(r => `
+                <tr>
+                    <td style="${td}text-align:left"><strong>${escapeHtml(r.name)}</strong></td>
+                    <td style="${td}text-align:left">${escapeHtml(r.unit)}</td>
+                    <td style="${td}">${q(r.opening)}</td>
+                    <td style="${td}">${q(r.purchase)}</td>
+                    ${m.showProduction ? `<td style="${td}">${q(r.production)}</td><td style="${td}">${q(r.used)}</td>` : ''}
+                    <td style="${td}">${q(r.sales)}</td>
+                    ${m.showOther ? `<td style="${td}">${q(r.otherIn)}</td><td style="${td}">${q(r.otherOut)}</td>` : ''}
+                    <td style="${td};font-weight:700;${r.closing < -0.001 ? 'color:#c0392b;' : ''}">${q(r.closing)}</td>
+                    <td style="${td}">${formatNumber(r.rate)}</td>
+                    <td style="${td};font-weight:600;${r.closing * r.rate < -0.001 ? 'color:#c0392b;' : ''}">${formatNumber(round2ui(r.closing * r.rate))}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot><tr>
+                <td style="${tf}text-align:left" colspan="2">TOTALS</td>
+                <td style="${tf}">${q(m.tot.opening)}</td>
+                <td style="${tf}">${q(m.tot.purchase)}</td>
+                ${m.showProduction ? `<td style="${tf}">${q(m.tot.production)}</td><td style="${tf}">${q(m.tot.used)}</td>` : ''}
+                <td style="${tf}">${q(m.tot.sales)}</td>
+                ${m.showOther ? `<td style="${tf}">${q(m.tot.otherIn)}</td><td style="${tf}">${q(m.tot.otherOut)}</td>` : ''}
+                <td style="${tf}">${q(m.tot.closing)}</td>
+                <td style="${tf}"></td>
+                <td style="${tf}">${formatNumber(round2ui(m.tot.value))}</td>
+            </tr></tfoot>
+        </table>
+        <div style="font-size:8pt;color:#666;margin-top:10px;line-height:1.6">
+            ${m.negativeDays > 0 ? `<span style="color:#c0392b">⚠ ${m.negativeDays} product-day(s) close negative in this period — stock left that was never recorded as received.</span><br>` : ''}
+            Opening Stock = master opening + all in − all out BEFORE the From Date. Closing = Opening + Purchases In [+ Production In − Used in Mixing] − Sales Out, chained day by day (each day's Opening = the previous day's Closing).
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:9pt;color:#444;">
+            <div>Printed: ${new Date().toLocaleString('en-IN')}</div>
+            <div style="border-top:1px solid #999;padding-top:4px;min-width:180px;text-align:center;">Authorized Signature</div>
+        </div>
+    </div>`;
     printHTML(html);
 }
 

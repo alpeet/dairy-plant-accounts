@@ -305,6 +305,7 @@ module.exports = {
     getInventoryValuation: dairyCosting.getInventoryValuation,
     getManagementDashboard: dairyCosting.getManagementDashboard,
     getDailyClosing: dairyCosting.getDailyClosing,
+    getDailyStockStatement: dairyCosting.getDailyStockStatement,
     getSaleTraceability: dairyCosting.getSaleTraceability,
     getBatchTraceability: dairyCosting.getBatchTraceability,
     classifyInventoryCategory: dairyCosting.classifyInventoryCategory,

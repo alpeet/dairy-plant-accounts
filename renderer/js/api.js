@@ -268,6 +268,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getInventoryValuation: (params) => apiPost('/dairy/inventory-valuation', params || {}),
         getManagementDashboard: (params) => apiPost('/dairy/dashboard', params || {}),
         getDailyClosing: (params) => apiPost('/dairy/daily-closing', params || {}),
+        getDailyStockStatement: (params) => apiPost('/dairy/daily-stock-statement', params || {}),
         getSaleTraceability: (params) => apiPost('/dairy/sale-traceability', params || {}),
         getBatchTraceability: (params) => apiPost('/dairy/batch-traceability', params || {}),
 

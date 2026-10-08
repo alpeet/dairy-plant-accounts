@@ -327,9 +327,9 @@ function tsOpenStatement(productId) {
     _ssState.preset = 'custom';
     _ssState.from = filt.from || '';
     _ssState.to = filt.to || '';
-    // The button opens the Excel-style daily statement; a product link opens
-    // that product's movement ledger (traceability).
-    _ssState.view = productId ? 'detail' : 'flow';
+    // The button opens the Stock Movement & Valuation statement; a product
+    // link opens that product's movement ledger (traceability).
+    _ssState.view = productId ? 'detail' : 'movement';
     _ssState.product_id = productId ? String(productId) : '';
     _ssState.category = '';
     _ssState.search = '';
