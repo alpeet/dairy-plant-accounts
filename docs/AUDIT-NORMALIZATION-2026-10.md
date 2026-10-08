@@ -345,7 +345,26 @@ There are **no hidden transactions, duplicates or date-filter errors** — the w
 TOTALS range overlapping the subtotal row. `Closing Value` is *not* doubled because the subtotal
 row carries no `H` formula. Repair (explicit, verified, backed up):
 `node scripts/audit/fix-stock-statement-totals.js --apply` — it refuses to write while the
-workbook is open in Excel.
+workbook is open in Excel, and it patches **only the `Stock_Statement` sheet XML inside the zip**
+(`unzip -p` → edit → `zip`), so the workbook's other 25 sheets, their styles and every other cell
+are left byte-for-byte untouched. (Re-writing the whole file with the community xlsx writer would
+have stripped the workbook's formatting.)
+
+**Applied 2026-10-08.** Rows 18–23 are *unpopulated product slots* (their formula is a `SUMIFS`
+returning `""`, not a subtotal), so they stay inside the total — only row 12 is excluded. TOTALS
+is now `=SUM(D9:D11,D13:D23)`: **Purchases In 710.60**, **Sales Out 488**, **Closing 222.60**;
+`Closing Value` (H24/H5) is unchanged at 21,273. Verified: 26 sheets preserved, row counts
+unchanged, `unzip -t` clean.
+
+**App ↔ Excel reconciliation for 2083-06-21** (after importing the workbook into a fresh
+database and rebuilding the stock ledger):
+
+| | Excel (corrected) | Application |
+|---|---:|---:|
+| Purchases / Collection In | 710.60 | **710.60** (Buffalo 594 + Cow 116.60) |
+| Sales Out | 488.00 | **488.00** (Mix 483 + Cow 1 + Ghee 0.5 + NAUNI 3 + PANEER 0.5) |
+
+Both figures match exactly.
 
 The **Mix Milk −483 L** is a *genuine* structural artifact of that sheet: it has **no production /
 collection columns**, so Mix Milk (produced by mixing, with no `Purchase_Entry` line) shows
