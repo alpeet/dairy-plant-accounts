@@ -663,11 +663,12 @@ function _ssFlowView(products, periodLabel, singleDay) {
     const byUnit = new Map();
     for (const p of shown) {
         const u = p.unit || '—';
-        if (!byUnit.has(u)) byUnit.set(u, { opening: 0, sales: 0, remaining: 0, collection: 0, production: 0, consumption: 0, other: 0, closing: 0 });
+        if (!byUnit.has(u)) byUnit.set(u, { opening: 0, sales: 0, remaining: 0, collection: 0, production: 0, consumption: 0, wastage: 0, otherIn: 0, otherOut: 0, closing: 0 });
         const t = byUnit.get(u), f = p.flow || {};
         t.opening += f.opening || 0; t.sales += f.sales_issues || 0; t.remaining += f.remaining || 0;
         t.collection += f.collection_purchase || 0; t.production += f.production || 0;
-        t.consumption += f.production_consumption || 0; t.other += f.other || 0; t.closing += f.closing || 0;
+        t.consumption += f.production_consumption || 0; t.wastage += f.wastage || 0;
+        t.otherIn += f.other_in || 0; t.otherOut += f.other_out || 0; t.closing += f.closing || 0;
     }
 
     const rowsHtml = shown.map(p => {
@@ -681,10 +682,12 @@ function _ssFlowView(products, periodLabel, singleDay) {
             ${ssQtyCell(f.collection_purchase, 'in')}
             ${ssQtyCell(f.production, 'in')}
             ${ssQtyCell(f.production_consumption, 'out')}
-            ${ssQtyCell(f.other, 'plain')}
+            ${ssQtyCell(f.wastage, 'out')}
+            ${ssQtyCell(f.other_in, 'in')}
+            ${ssQtyCell(f.other_out, 'out')}
             <td class="text-right" style="font-weight:700">${formatNumber(round2ui(f.closing || 0))}</td>
         </tr>`;
-    }).join('') || `<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-light)">No stock movement in this period</td></tr>`;
+    }).join('') || `<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No stock movement in this period</td></tr>`;
 
     const unitFoot = [...byUnit.entries()].map(([u, t]) => `<tr style="background:var(--bg-light,#f7f7f7);font-weight:600">
         <td>Subtotal · ${escapeHtml(u)}</td>
@@ -694,13 +697,15 @@ function _ssFlowView(products, periodLabel, singleDay) {
         <td class="text-right" style="color:var(--success)">${t.collection ? '+ ' + formatNumber(round2ui(t.collection)) : '—'}</td>
         <td class="text-right" style="color:var(--success)">${t.production ? '+ ' + formatNumber(round2ui(t.production)) : '—'}</td>
         <td class="text-right" style="color:var(--danger)">${t.consumption ? '- ' + formatNumber(round2ui(t.consumption)) : '—'}</td>
-        <td class="text-right">${t.other ? formatNumber(round2ui(t.other)) : '—'}</td>
+        <td class="text-right" style="color:var(--danger)">${t.wastage ? '- ' + formatNumber(round2ui(t.wastage)) : '—'}</td>
+        <td class="text-right" style="color:var(--success)">${t.otherIn ? '+ ' + formatNumber(round2ui(t.otherIn)) : '—'}</td>
+        <td class="text-right" style="color:var(--danger)">${t.otherOut ? '- ' + formatNumber(round2ui(t.otherOut)) : '—'}</td>
         <td class="text-right">${formatNumber(round2ui(t.closing))}</td>
     </tr>`).join('');
 
     return `
     <div style="font-size:13px;color:var(--text-light);margin-bottom:8px">
-        ${escapeHtml(periodLabel)} — read down each row: <strong>${escapeHtml(L.opening)}</strong> → <strong>${escapeHtml(L.sales)}</strong> → <strong>${escapeHtml(L.remaining)}</strong> → <strong>${escapeHtml(L.collection)}</strong> → <strong>${escapeHtml(L.production)}</strong> → <strong>Production Consumption</strong> → <strong>${escapeHtml(L.closing)}</strong>. Each closing carries into the next day automatically.
+        ${escapeHtml(periodLabel)} — read down each row: <strong>${escapeHtml(L.opening)}</strong> → <strong>${escapeHtml(L.sales)}</strong> → <strong>${escapeHtml(L.remaining)}</strong> → <strong>${escapeHtml(L.collection)}</strong> → <strong>${escapeHtml(L.production)}</strong> → <strong>Production Consumption</strong> → <strong>Wastage</strong> → <strong>Other IN</strong> → <strong>Other OUT</strong> → <strong>${escapeHtml(L.closing)}</strong>. Each closing carries into the next day automatically.
     </div>
     <div class="table-container">
         <table>
@@ -712,7 +717,9 @@ function _ssFlowView(products, periodLabel, singleDay) {
                 <th class="text-right">${escapeHtml(L.collection)}</th>
                 <th class="text-right">${escapeHtml(L.production)}</th>
                 <th class="text-right">Production Consumption</th>
-                <th class="text-right">Other IN/OUT</th>
+                <th class="text-right">Wastage</th>
+                <th class="text-right">Other IN</th>
+                <th class="text-right">Other OUT</th>
                 <th class="text-right">${escapeHtml(L.closing)}</th>
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
@@ -720,7 +727,7 @@ function _ssFlowView(products, periodLabel, singleDay) {
         </table>
     </div>
     <div style="margin-top:10px;font-size:13px;padding:8px 12px;border-radius:6px;background:${allOk ? 'var(--success-light,#e8f6ee)' : 'var(--warning-light,#fff6e5)'};color:${allOk ? 'var(--success)' : 'var(--warning)'}">
-        ${allOk ? '✓ Every product reconciles: Opening − Sales + Collection/Purchase + Production − Production Consumption + Other = Closing.' : '⚠ At least one product does not reconcile — check the Detailed Ledger for that product.'}
+        ${allOk ? '✓ Every product reconciles: Opening − Sales + Collection/Purchase + Production − Production Consumption − Wastage + Other IN − Other OUT = Closing.' : '⚠ At least one product does not reconcile — check the Detailed Ledger for that product.'}
     </div>`;
 }
 

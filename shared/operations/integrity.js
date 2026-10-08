@@ -1367,6 +1367,127 @@ const CHECK_DEFS = [
                 note: `audit_log holds ${logged} row(s); ${docs} document(s) exist, ${editDocs} of them were edited after creation.`
             };
         }
+    },
+
+    // ───────────────────────── Milk procurement ─────────────────────────
+    {
+        id: 'milk_supplier_daily_reconciliation',
+        category: 'Milk',
+        title: 'Daily supplier-wise milk reconciliation (collection vs stock)',
+        what: 'For every date + supplier + milk type the collected litres must equal what entered raw-milk stock. A gap means the collection and its stock movement disagree — the defect that made one supplier\'s milk appear under another (req 16).',
+        severity: 'critical',
+        run: ({ db }) => {
+            const rows = run(db, `
+                SELECT mc.date, mc.party_id,
+                       COALESCE(p.name, '(party #' || mc.party_id || ' — missing)') AS party_name,
+                       mc.milk_type,
+                       ROUND(SUM(mc.quantity_liters), 2) AS collection_qty,
+                       ROUND(COALESCE(SUM((SELECT SUM(sm.inward_qty - sm.outward_qty) FROM stock_movements sm
+                            WHERE sm.reference_type = 'milk_collection' AND sm.reference_id = mc.id)), 0), 2) AS stock_qty,
+                       COUNT(*) AS collections
+                FROM milk_collections mc
+                LEFT JOIN parties p ON p.id = mc.party_id
+                GROUP BY mc.date, mc.party_id, mc.milk_type
+                ORDER BY mc.date DESC, party_name`);
+            const issues = [];
+            for (const r of rows) {
+                const diff = r2(num(r.collection_qty) - num(r.stock_qty));
+                if (Math.abs(diff) <= EPS) continue;
+                let status;
+                if (num(r.stock_qty) === 0) status = 'ERROR — no stock recorded';
+                else if (Math.abs(num(r.stock_qty)) > Math.abs(num(r.collection_qty)) + EPS) status = 'ERROR — possible duplicate';
+                else status = 'WARNING';
+                issues.push(issue(
+                    `${r.date} · ${r.party_name} · ${r.milk_type}`,
+                    `${status}: ${r.collections} collection(s) posted, but raw-milk stock does not equal the collected litres`,
+                    `${money(r.collection_qty)} L (collected)`,
+                    `${money(r.stock_qty)} L (in stock)`,
+                    `${money(diff)} L`,
+                    'Supplier purchase quantity and stock addition must agree'
+                ));
+            }
+            return { scanned: rows.length, scannedLabel: 'date/supplier/type groups', issues };
+        }
+    },
+    {
+        id: 'duplicate_milk_procurement',
+        category: 'Milk',
+        title: 'Possible duplicate milk procurement',
+        what: 'The same date + quantity + milk type + amount booked more than once. Sharing a supplier is a strong duplicate; the same figures under different suppliers is the "one purchase entered under two suppliers" case (req 4).',
+        severity: 'high',
+        run: ({ db }) => {
+            const rows = run(db, `
+                SELECT mc.date, mc.shift, mc.milk_type,
+                       ROUND(mc.quantity_liters, 2) AS qty, ROUND(mc.amount, 2) AS amount,
+                       COUNT(*) AS n, COUNT(DISTINCT mc.party_id) AS parties,
+                       SUBSTR(GROUP_CONCAT(DISTINCT COALESCE(p.name, '#' || mc.party_id)), 1, 240) AS party_names,
+                       SUBSTR(GROUP_CONCAT(DISTINCT mc.collection_no), 1, 240) AS collection_nos
+                FROM milk_collections mc
+                LEFT JOIN parties p ON p.id = mc.party_id
+                WHERE mc.quantity_liters <> 0
+                GROUP BY mc.date, mc.shift, mc.milk_type, ROUND(mc.quantity_liters, 2), ROUND(mc.amount, 2)
+                HAVING COUNT(*) > 1
+                ORDER BY mc.date DESC`);
+            const issues = [];
+            for (const r of rows) {
+                const cross = num(r.parties) > 1;
+                issues.push(issue(
+                    `${r.date} · ${r.shift} · ${r.milk_type} · ${money(r.qty)} L · ${money(r.amount)}`,
+                    cross
+                        ? `Potential duplicate — the same quantity/amount is booked against ${r.parties} different suppliers`
+                        : `Strong duplicate — the same purchase appears ${r.n} times for one supplier`,
+                    '1 procurement line',
+                    `${r.n} lines`,
+                    `${money(r.qty)} L × ${r.n}`,
+                    `suppliers: ${r.party_names} · receipts: ${r.collection_nos}`
+                ));
+            }
+            return { scanned: rows.length, scannedLabel: 'duplicate groups', issues };
+        }
+    },
+    {
+        id: 'party_identity_audit',
+        category: 'Parties',
+        title: 'Supplier / party master identity audit',
+        what: 'Supplier names carrying a numeric suffix (e.g. "NAME 322") and near-duplicate records that reduce to the same base name can silently split one supplier\'s history across two party rows. Informational — merging is never automatic (req 18).',
+        severity: 'info',
+        run: ({ db }) => {
+            const baseName = (s) => String(s || '')
+                .toLowerCase().replace(/[^a-z0-9 ]+/g, ' ')
+                .replace(/\s+\d+\s*$/g, '').replace(/\s+/g, ' ').trim();
+            const parties = run(db, `
+                SELECT p.id, p.name, p.type, COALESCE(p.opening_balance, 0) AS opening_balance,
+                       (SELECT COUNT(*) FROM milk_collections mc WHERE mc.party_id = p.id) AS collections,
+                       (SELECT COALESCE(SUM(mc.quantity_liters), 0) FROM milk_collections mc WHERE mc.party_id = p.id) AS liters
+                FROM parties p ORDER BY p.name`);
+            const groups = new Map();
+            for (const p of parties) {
+                const b = baseName(p.name);
+                if (!b) continue;
+                if (!groups.has(b)) groups.set(b, []);
+                groups.get(b).push(p);
+            }
+            const issues = [];
+            for (const [base, list] of groups) {
+                if (list.length > 1) {
+                    issues.push(issue(
+                        `base name "${base}" → ${list.length} party rows`,
+                        'Near-duplicate supplier/customer records reduce to the same base name — verify before merging',
+                        'one party row per real party',
+                        `${list.length} rows`,
+                        '',
+                        list.map((p) => `#${p.id} ${p.name} (${p.type}, ${p.collections} collections / ${money(p.liters)} L)`).join(' · ')
+                    ));
+                }
+            }
+            const suffixed = parties.filter((p) => /\s\d+\s*$/.test(String(p.name || '')));
+            return {
+                scanned: parties.length,
+                scannedLabel: 'parties',
+                issues,
+                note: `${parties.length} parties · ${suffixed.length} carry a numeric suffix in the name (e.g. "… 322"). These are display names, not identity — relationships are keyed on party_id.`
+            };
+        }
     }
 ];
 

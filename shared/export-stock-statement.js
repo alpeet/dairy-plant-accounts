@@ -45,7 +45,7 @@ function dailyFlowRows(product) {
                 date: r.date,
                 refs: new Set(), parties: new Set(),
                 sales_issues: 0, collection_purchase: 0, production: 0,
-                production_consumption: 0, other: 0
+                production_consumption: 0, wastage: 0, other_in: 0, other_out: 0
             });
         }
         const day = byDate.get(r.date);
@@ -61,7 +61,8 @@ function dailyFlowRows(product) {
         const opening = balance;
         const remaining = round2(opening - day.sales_issues);
         const computed = round2(
-            remaining + day.collection_purchase + day.production - day.production_consumption + day.other
+            remaining + day.collection_purchase + day.production
+            - day.production_consumption - day.wastage + day.other_in - day.other_out
         );
         out.push({
             date: day.date,
@@ -75,7 +76,9 @@ function dailyFlowRows(product) {
             collection_purchase: round2(day.collection_purchase),
             production: round2(day.production),
             production_consumption: round2(day.production_consumption),
-            other: round2(day.other),
+            wastage: round2(day.wastage),
+            other_in: round2(day.other_in),
+            other_out: round2(day.other_out),
             closing: computed
         });
         balance = computed;
@@ -94,7 +97,7 @@ function summarise(set) {
 const STATEMENT_HEADERS = [
     'Date', 'Reference', 'Party', 'Product',
     'Opening', 'Sales/Issues', 'Remaining', 'Collection/Purchase',
-    'Production', 'Production Consumption', 'Other', 'Closing'
+    'Production', 'Production Consumption', 'Wastage', 'Other IN', 'Other OUT', 'Closing'
 ];
 
 const LEDGER_HEADERS = [
@@ -128,7 +131,8 @@ function buildStockStatementWorkbook(db, opts = {}) {
             statementAoa.push([
                 row.date, row.reference, row.party, row.product,
                 row.opening, row.sales_issues, row.remaining, row.collection_purchase,
-                row.production, row.production_consumption, row.other, row.closing
+                row.production, row.production_consumption, row.wastage, row.other_in,
+                row.other_out, row.closing
             ]);
         }
         // Movement-level ledger with the running balance and open reference.

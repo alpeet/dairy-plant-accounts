@@ -253,3 +253,111 @@ Remaining After Today's Sales / Today's Collection/Purchase / Today's Production
 Consumption / Other IN/OUT / Today's Closing"), drill-down ledger with Party + Reference No. and 🔗
 click-through opening the source document, all 9 presets, and the Excel export reaching
 `/api/export/stock-statement` → 200 with a valid 1.4 MB workbook.
+
+## H. MILK SUPPLIER IDENTITY + DAILY STOCK FLOW (v1.4.25, 2026-10-08)
+
+### H1 — THE SHREE PAROHA 160 L ROOT CAUSE (found, reproduced, fixed)
+
+**Symptom.** A milk purchase of **160 L from SHREE PAROHA DAIRY UDHYOG** (AD 2026-10-07,
+BS 2083-06-21, BILL-5204, Buffalo Milk, rate 83, Rs 13,280) appeared under
+**MINA LAMICHHANE 322**.
+
+**Root cause — in the Excel importer, not the report.** `importPurchases()` grouped the
+`Purchase_Entry` rows into documents keyed on `bill_no + date` only, and took the document's
+party from `rows[0]`. In this workbook a bill number is routinely reused on the same date by
+several suppliers. Reproduced from the real workbook:
+
+```
+groupKey = BILL-5204||67013
+  member: MINA LAMICHHANE 322     | Cow Milk    4.3 L   ← rows[0] → the group's party
+  member: DANDA PANI ACHARYA      | Cow Milk    3.1 L
+  member: DANDA PANI ACHARYA      | Cow Milk    3.0 L
+  member: SHREE PAROHA DAIRY UDHYOG | Buffalo Milk 160 L
+⇒ ALL rows booked under MINA LAMICHHANE 322's party_id
+```
+
+The same defect class existed in `importSales()` (invoice number keyed without date/party;
+`BILL-6557` is shared by GIRI KIRANA and LOCAL). Collisions were not rare: **BILL-5154** alone
+collapsed BODESH 310 and NEW FARM PHARSATIKAT on 30+ dates.
+
+**Fix (authoritative relationship, not the report).** The **supplier is part of the document
+identity**: grouping key and upsert lookup are now
+`bill_no + date + normalized(supplier)` in purchases and `invoice_no + date + normalized(party)`
+in sales. No quantity, rate, amount, date or reference number is touched (req 21); the same
+party_id now flows Milk Collection → Stock Movement → Stock Ledger → Statement → Reports
+(the ledger resolves the party by `reference_id` → source-document `party_id`, never by name).
+
+### H2 — SECOND ROOT CAUSE: “Add / Update” never generated stock
+
+`rebuildStockLedger()` — the routine that turns imported documents into `stock_movements`
+— ran **only in `mode === 'fresh'`**. An “Add / Update New Records” import therefore inserted
+milk collections, sales and purchases **without ever moving stock** (this is why a fresh
+replace “looked correct” while Add/Update lost or mis-stated stock — req 20). Upsert now
+rebuilds the stock ledger too, **preserving app-entered manual movements** (adjustments and
+returns that no document explains), then re-derives documented shortfall batches exactly as
+fresh mode does. The rebuild is idempotent (`DELETE FROM stock_movements` + regenerate from
+the authoritative document tables).
+
+### H3 — Daily stock flow, operator columns (reqs 1–4 / 11 / 25)
+
+The single engine (`shared/operations/dairy_costing.js`) is extended — **no second engine**.
+`flowDelta()` now maps movements into distinct columns
+(`sales_issues`, `collection_purchase`, `production`, `production_consumption`, **`wastage`**,
+**`other_in`**, **`other_out`**), and `stockFlowRow()` asserts the identity
+
+```
+Opening − Sales/Issues + Collection/Purchase + Production − Production Consumption
+        − Wastage + Other IN − Other OUT = Closing
+```
+
+Carry-forward was already automatic (previous day's closing becomes the next day's opening; no
+manual daily opening entry). The Stock Statement UI, the Excel export (`Export Statement`) and
+the engine all read the same columns — the export's independent day-accumulator was updated in
+step, so the workbook and the screen cannot drift.
+
+### H4 — Reconciliation & identity audits (reqs 16–18)
+
+Three checks added to the Data Integrity Doctor (`shared/operations/integrity.js`, read-only,
+so they also run from `scripts/audit/integrity-doctor.js`):
+
+- **Daily supplier-wise milk reconciliation** — per date + supplier + milk type, collected
+  litres vs raw-milk stock inbound, with difference and PASS/WARNING/ERROR. *Passes on live data.*
+- **Possible duplicate milk procurement** — same date **+ shift** + milk type + qty + amount
+  booked more than once (strong duplicate within one supplier; the same figures under several
+  suppliers is the “one purchase entered under two suppliers” case). Shift is part of the key so
+  legitimate morning+evening deliveries are never flagged. *Passes on live data.*
+- **Supplier / party master identity audit** — near-duplicate parties reducing to one base name
+  and names carrying a numeric suffix (e.g. `… 322`); informational only, nothing is merged
+  automatically.
+
+### H5 — The Excel `Stock_Statement` TOTALS (reqs 10–12) — explained, not guessed
+
+The report's TOTALS row is `=SUM(D9:D23)`, which **includes row 12** — the group subtotal
+`=SUM(D9:D11)`. The first product group is therefore counted **twice**:
+
+| Column | Shown TOTALS | Visible product rows | Cause |
+|---|---:|---:|---|
+| Purchases In | 1,421.20 | 710.60 | row 12 subtotal summed again (2 × 710.60) |
+| Sales Out | 972.00 | 488.00 | subtotal (484) summed again |
+| Closing | 449.20 | 222.60 | subtotal (226.60) summed again |
+
+There are **no hidden transactions, duplicates or date-filter errors** — the whole gap is the
+TOTALS range overlapping the subtotal row. `Closing Value` is *not* doubled because the subtotal
+row carries no `H` formula. Repair (explicit, verified, backed up):
+`node scripts/audit/fix-stock-statement-totals.js --apply` — it refuses to write while the
+workbook is open in Excel.
+
+The **Mix Milk −483 L** is a *genuine* structural artifact of that sheet: it has **no production /
+collection columns**, so Mix Milk (produced by mixing, with no `Purchase_Entry` line) shows
+0 purchases against 483 sales. The application records the mixing/production output, so its
+statement carries Mix Milk forward correctly; the two reports reconcile once production is
+included.
+
+### H6 — Verification
+
+`scripts/audit/test-milk-supplier-identity.js` (new, 18 checks) imports the **real workbook**
+into a fresh database and proves: the 160 L lands on Shree Paroha (buffalo, 160 L, Rs 13,280,
+BILL-5204) with exactly one +160 L stock movement; Mina never receives it; `BILL-6557` splits by
+party; re-import adds no rows or movements; the supplier daily reconciliation passes; and
+Replace-ALL and Add/Update agree. `scripts/audit/test-stock-statement.js` is updated to the new
+column set (**69 checks**). Full battery: **24 suites, 0 failures.**

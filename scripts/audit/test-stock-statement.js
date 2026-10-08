@@ -111,8 +111,9 @@ console.log('\nA. flowDelta — the single movement → column mapping');
         [{ type: 'purchase', inward_qty: 10, outward_qty: 0 }, 'collection_purchase', 10],
         [{ type: 'production_output', inward_qty: 10, outward_qty: 0 }, 'production', 10],
         [{ type: 'production_input', inward_qty: 0, outward_qty: 10 }, 'production_consumption', 10],
-        [{ type: 'adjustment', inward_qty: 0, outward_qty: 5 }, 'other', -5],
-        [{ type: 'return_in', inward_qty: 5, outward_qty: 0 }, 'other', 5]
+        [{ type: 'adjustment', inward_qty: 0, outward_qty: 5 }, 'other_out', 5],
+        [{ type: 'adjustment', reference_type: 'wastage', inward_qty: 0, outward_qty: 5 }, 'wastage', 5],
+        [{ type: 'return_in', inward_qty: 5, outward_qty: 0 }, 'other_in', 5]
     ];
     for (const [m, col, qty] of cases) {
         const d = dairy.flowDelta(m);
@@ -129,7 +130,8 @@ console.log('\nB. req 18 — acceptance example (Raw Milk)');
     ok(near(f.collection_purchase, 500), "today's collection = 500 L", f.collection_purchase);
     ok(near(f.production, 0), 'no production output for raw milk', f.production);
     ok(near(f.production_consumption, 600), 'production consumption = 600 L', f.production_consumption);
-    ok(near(f.other, -5), 'wastage shows in Other = −5 L', f.other);
+    ok(near(f.wastage, 5), 'wastage gets its own OUT column = 5 L', f.wastage);
+    ok(near(f.other_in, 0) && near(f.other_out, 0), 'no spurious Other IN/OUT for this day', [f.other_in, f.other_out]);
     ok(near(f.closing, 295), "today's closing = 295 L (400 + 500 − 600 − 5)", f.closing);
     ok(f.identity_ok === true, 'identity asserted by the engine, not assumed');
 
@@ -263,7 +265,7 @@ console.log('\nH. req 17 — Excel export reconciles with the application');
 
     const stmt = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Statement'], { header: 1 });
     ok(JSON.stringify(stmt[0]) === JSON.stringify(['Date', 'Reference', 'Party', 'Product', 'Opening', 'Sales/Issues',
-        'Remaining', 'Collection/Purchase', 'Production', 'Production Consumption', 'Other', 'Closing']),
+        'Remaining', 'Collection/Purchase', 'Production', 'Production Consumption', 'Wastage', 'Other IN', 'Other OUT', 'Closing']),
         'stock statement columns exactly as specified', stmt[0]);
     const led = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Ledger'], { header: 1 });
     ok(JSON.stringify(led[0]) === JSON.stringify(['Date', 'Reference No.', 'Party', 'Product', 'Transaction Type',
@@ -273,18 +275,18 @@ console.log('\nH. req 17 — Excel export reconciles with the application');
     // Cross-check the row arithmetic on every exported statement row.
     let badRow = 0;
     for (const row of stmt.slice(1)) {
-        const [, , , , opening, sales, remaining, coll, prod2, cons, other, closing] = row;
+        const [, , , , opening, sales, remaining, coll, prod2, cons, wastage, otherIn, otherOut, closing] = row;
         if (!near(opening - sales, remaining)) badRow++;
-        if (!near(remaining + coll + prod2 - cons + other, closing)) badRow++;
+        if (!near(remaining + coll + prod2 - cons - wastage + otherIn - otherOut, closing)) badRow++;
     }
     ok(badRow === 0, 'every exported row satisfies Opening − Sales = Remaining and Remaining + IN − OUT = Closing', badRow);
 
     // Carry-forward across days is present in the export.
     const rawRows = stmt.slice(1).filter(r => r[3] === 'Raw Milk');
     ok(rawRows.length >= 3, 'raw milk has one exported row per day', rawRows.length);
-    ok(near(rawRows[0][11], 295) && near(rawRows[1][4], 295),
-        'exported day 2 opening = day 1 closing (automatic carry-forward)', [rawRows[0][11], rawRows[1][4]]);
-    ok(near(rawRows[rawRows.length - 1][11], 205), 'last exported closing = engine closing', rawRows[rawRows.length - 1][11]);
+    ok(near(rawRows[0][13], 295) && near(rawRows[1][4], 295),
+        'exported day 2 opening = day 1 closing (automatic carry-forward)', [rawRows[0][13], rawRows[1][4]]);
+    ok(near(rawRows[rawRows.length - 1][13], 205), 'last exported closing = engine closing', rawRows[rawRows.length - 1][13]);
 
     const exportedRawParties = stmt.slice(1).filter(r => r[3] === 'Raw Milk').map(r => String(r[2]));
     ok(exportedRawParties.some(s => s.includes('Ram Bahadur')) && exportedRawParties.some(s => s.includes('Production / Internal')),

@@ -603,7 +603,7 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
         // Net effect per Excel-style column (a row may carry BOTH an inward and
         // an outward side — e.g. a sales return posted as type 'sale', or a
         // production reversal), so identity holds for every row (req 18).
-        const netFlow = { sales_issues: 0, collection_purchase: 0, production: 0, production_consumption: 0, other: 0 };
+        const netFlow = { sales_issues: 0, collection_purchase: 0, production: 0, production_consumption: 0, wastage: 0, other_in: 0, other_out: 0 };
         for (const m of movements) {
             const inQty = round2(m.inward_qty), outQty = round2(m.outward_qty);
             balance = round2(balance + inQty - outQty);
@@ -687,7 +687,9 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
             collection_purchase: netFlow.collection_purchase,
             production: netFlow.production,
             production_consumption: netFlow.production_consumption,
-            other: netFlow.other,
+            wastage: netFlow.wastage,
+            other_in: netFlow.other_in,
+            other_out: netFlow.other_out,
             closing: balance
         });
         ledger.push({
@@ -730,7 +732,18 @@ function flowDelta(row = {}) {
         case 'purchase': return { column: 'collection_purchase', qty: delta };
         case 'production_output': return { column: 'production', qty: delta };
         case 'production_input': return { column: 'production_consumption', qty: round2(-delta) };
-        default: return { column: 'other', qty: delta };
+        // Wastage (adjustment + reference_type 'wastage') gets its own OUT
+        // column; every remaining movement splits into Other IN / Other OUT on
+        // its net direction (reqs 1–3 / 11 / 25).
+        case 'adjustment':
+            if (row.reference_type === 'wastage') return { column: 'wastage', qty: round2(-delta) };
+            return delta >= 0
+                ? { column: 'other_in', qty: delta }
+                : { column: 'other_out', qty: round2(-delta) };
+        default:
+            return delta >= 0
+                ? { column: 'other_in', qty: delta }
+                : { column: 'other_out', qty: round2(-delta) };
     }
 }
 
@@ -741,8 +754,10 @@ function stockFlowRow(input = {}) {
     const collectionPurchase = round2(input.collection_purchase || 0);
     const production = round2(input.production || 0);
     const consumption = round2(input.production_consumption || 0);
-    const other = round2(input.other || 0);
-    const computed = round2(opening - salesIssues + collectionPurchase + production - consumption + other);
+    const wastage = round2(input.wastage || 0);
+    const otherIn = round2(input.other_in || 0);
+    const otherOut = round2(input.other_out || 0);
+    const computed = round2(opening - salesIssues + collectionPurchase + production - consumption - wastage + otherIn - otherOut);
     // Authoritative closing comes from the engine's replay; the identity is
     // asserted against it, never assumed.
     const closing = (input.closing === undefined || input.closing === null) ? computed : round2(input.closing);
@@ -753,7 +768,11 @@ function stockFlowRow(input = {}) {
         collection_purchase: collectionPurchase,
         production,
         production_consumption: consumption,
-        other,
+        wastage,
+        other_in: otherIn,
+        other_out: otherOut,
+        // Net of Other IN − Other OUT, kept for callers that want one number.
+        other: round2(otherIn - otherOut),
         closing,
         identity_ok: Math.abs(computed - closing) < 0.02
     };

@@ -838,7 +838,8 @@ function importSales(db, sheetData, opts) {
     const autoCreate = true;
     log('\n  📋 Importing Sales...');
 
-    const findSale = db.prepare('SELECT id FROM sales WHERE invoice_no = ?');
+    // Invoice identity = number + date + party (mirrors the purchase fix).
+    const findSale = db.prepare('SELECT id FROM sales WHERE invoice_no = ? AND date = ? AND party_id = ?');
     const deleteSaleItems = db.prepare('DELETE FROM sales_items WHERE sale_id = ?');
     const insertSale = db.prepare(`
         INSERT INTO sales (invoice_no, date, party_id, subtotal, discount, discount_percent,
@@ -876,8 +877,13 @@ function importSales(db, sheetData, opts) {
         if (!row || !row[invIdx]) continue;
         const invNo = toStr(row[invIdx]);
         if (!invNo) continue;
-        if (!invoiceGroups[invNo]) invoiceGroups[invNo] = [];
-        invoiceGroups[invNo].push(row);
+        // Invoice identity = number + date + party, not the number alone:
+        // Sales_Entry reuses one invoice number for two parties on the same day
+        // (BILL-6557: GIRI KIRANA + LOCAL) and reuses numbers across dates.
+        // Keying on the number alone credited every line to rows[0]'s party.
+        const gKey = invNo + '||' + (toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01') + '||' + normalize(toStr(row[partyIdx]));
+        if (!invoiceGroups[gKey]) invoiceGroups[gKey] = [];
+        invoiceGroups[gKey].push(row);
     }
 
     // Rows WITHOUT an invoice number are the workbook's internal issues: milk written
@@ -917,8 +923,11 @@ function importSales(db, sheetData, opts) {
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
-        for (const [invNo, rows] of Object.entries(invoiceGroups)) {
+        for (const [groupKey, rows] of Object.entries(invoiceGroups)) {
             const firstRow = rows[0];
+            // Orphan (no-invoice) groups were injected under their synthetic
+            // INT-… number, so fall back to the key's leading segment.
+            const invNo = toStr(firstRow[invIdx]) || groupKey.split('||')[0];
 
             const bsDate = toBSDate(firstRow[dateIdx]) || toBSDate(firstRow[adDateIdx]) || '2082-01-01';
 
@@ -947,7 +956,7 @@ function importSales(db, sheetData, opts) {
             if (status === 'paid') paidAmount = grandTotal;
             else if (status === 'partial') paidAmount = grandTotal * 0.5;
 
-            const existing = findSale.get(invNo);
+            const existing = findSale.get(invNo, bsDate, partyId);
             let saleId;
             if (existing) {
                 // CHANGE DETECTION: rewrite the invoice only when its values
@@ -1013,7 +1022,10 @@ function importPurchases(db, sheetData, opts) {
     const autoCreate = true;
     log('\n  📋 Importing Purchases...');
 
-    const findPurchase = db.prepare('SELECT id FROM purchases WHERE bill_no = ? AND date = ?');
+    // Document identity is bill + date + SUPPLIER. One bill number is routinely
+    // shared by several suppliers on the same date in Purchase_Entry, so the
+    // supplier must take part in both the grouping key and the upsert lookup.
+    const findPurchase = db.prepare('SELECT id FROM purchases WHERE bill_no = ? AND date = ? AND party_id = ?');
     const deletePurchaseItems = db.prepare('DELETE FROM purchase_items WHERE purchase_id = ?');
     const insertPurchase = db.prepare(`
         INSERT INTO purchases (bill_no, date, party_id, subtotal, discount, tax,
@@ -1070,7 +1082,14 @@ function importPurchases(db, sheetData, opts) {
         // 2083/06/01) and must not collapse into one bill — the old bill-only
         // key silently dropped 62 milk lines worth Rs 119,903.
         const rowDate = toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01';
-        const groupKey = billNo + '||' + rowDate;
+        // The SUPPLIER is part of the document identity. In this workbook one
+        // bill number is routinely reused on the same date across suppliers
+        // (BILL-5204 on 2083-06-21 carries Shree Paroha's 160 L Buffalo line
+        // AND Mina Lamichhane / Danda Pani Acharya cow lines). Keying on
+        // bill+date alone collapsed them into a single document whose party was
+        // taken from rows[0] — which is exactly how Shree Paroha's 160 L was
+        // booked against Mina Lamichhane (root-cause fix, reqs 5–8 / 19–21).
+        const groupKey = billNo + '||' + rowDate + '||' + normalize(toStr(row[partyIdx]));
         if (!billGroups[groupKey]) billGroups[groupKey] = [];
         billGroups[groupKey].push(row);
     }
@@ -1110,7 +1129,7 @@ function importPurchases(db, sheetData, opts) {
             if (status === 'paid') paidAmount = grandTotal;
             else if (status === 'partial') paidAmount = grandTotal * 0.5;
 
-            const existing = findPurchase.get(billNo, bsDate);
+            const existing = findPurchase.get(billNo, bsDate, partyId);
             let purchaseId;
             if (existing) {
                 // CHANGE DETECTION (mirrors sales): items + head comparison.
@@ -1693,11 +1712,37 @@ function deriveShortfallBatches(db, log) {
     return { created };
 }
 
-function rebuildStockLedger(db, log) {
+function rebuildStockLedger(db, log, opts = {}) {
     log('\n  📦 Rebuilding stock ledger (opening + purchases + milk + production + sales)...');
 
     const products = db.prepare('SELECT id, name, opening_stock FROM products').all();
     const movements = [];
+
+    // Upsert (“Add / Update”) must never delete movements that no document
+    // explains: stock adjustments and returns entered in the app are not derived
+    // from any imported sheet, so they are carried across the rebuild unchanged.
+    // (A fresh import legitimately replaces everything; upsert does not.)
+    if (opts.preserveManual) {
+        const manual = db.prepare(`
+            SELECT product_id, date, type, inward_qty, outward_qty, rate, notes, reference_type, reference_id
+            FROM stock_movements
+            WHERE type NOT IN ('opening', 'purchase', 'sale', 'milk_collection', 'production_input', 'production_output')
+        `).all();
+        for (const m of manual) {
+            movements.push({
+                product_id: m.product_id,
+                date: m.date,
+                type: m.type,
+                inward: toNum(m.inward_qty),
+                outward: toNum(m.outward_qty),
+                rate: toNum(m.rate),
+                notes: m.notes || '',
+                ref_type: m.reference_type,
+                ref_id: m.reference_id
+            });
+        }
+        if (manual.length) log(`  \u21ba Preserving ${manual.length} manual movement(s) (adjustments/returns) across the rebuild`);
+    }
 
     for (const p of products) {
         if (toNum(p.opening_stock) > 0) {
@@ -2926,6 +2971,19 @@ function runExcelImport(db, excelPath, opts = {}) {
         results.shortfallBatches = short.created;
         if (short.created > 0) {
             results.stockMovements = rebuildStockLedger(db, log);
+        }
+    } else if (mode === 'upsert') {
+        // Add/Update must produce the SAME stock ledger a fresh import does.
+        // Imports insert documents (purchases, milk collections, sales,
+        // production batches) but only a fresh import rebuilt their stock
+        // movements — so an “Add / Update” import recorded milk without ever
+        // moving stock (root cause of “Fresh works, Add/Update misses records”,
+        // reqs 13 / 20). Manual movements (adjustments, returns) are preserved.
+        results.stockMovements = rebuildStockLedger(db, log, { preserveManual: true });
+        const short = deriveShortfallBatches(db, log);
+        results.shortfallBatches = short.created;
+        if (short.created > 0) {
+            results.stockMovements = rebuildStockLedger(db, log, { preserveManual: true });
         }
     }
 
