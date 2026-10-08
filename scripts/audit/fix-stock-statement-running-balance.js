@@ -362,7 +362,11 @@ if (valueRow && ws['H' + valueRow] && ws['H' + valueRow].f) xml = setCacheOnly(x
 if (xml === xmlBefore) { console.error('Patch produced no change — aborting.'); process.exit(1); }
 
 // Workbook-level: recalculate on open + widen the print area to column J.
-let wbPatch = wbXml.replace(/<calcPr([^>]*?)\/>/, '<calcPr$1 fullCalcOnLoad="1"/>');
+// `fullCalcOnLoad` must be set idempotently — a workbook patched twice would
+// otherwise end up with the attribute twice, which is malformed XML.
+let wbPatch = /fullCalcOnLoad=/.test(wbXml)
+    ? wbXml
+    : wbXml.replace(/<calcPr([^>]*?)\/>/, '<calcPr$1 fullCalcOnLoad="1"/>');
 wbPatch = wbPatch.replace(/(Stock_Statement'?!\$A\$1:\$)[A-Z](\$\d+)/, '$1J$2');
 
 // The sheet's footnote describes the old (wrong) rule — rewrite it, but only if
@@ -409,6 +413,11 @@ const chk = XLSX.readFile(XLSX_PATH, { cellFormula: true });
 const cws = chk.Sheets[SHEET];
 const problems = [];
 if (JSON.stringify(chk.SheetNames) !== JSON.stringify(sheetsBefore)) problems.push('sheet list changed');
+// A repeated attribute would make the part malformed XML for Excel.
+for (const [part, attr] of [['xl/workbook.xml', 'fullCalcOnLoad'], ['xl/workbook.xml', 'calcId']]) {
+    const n = (unzip(part).match(new RegExp(attr + '=', 'g')) || []).length;
+    if (n > 1) problems.push(`${part} has ${attr} ${n} times`);
+}
 if (String((cws['J' + headerRow] || {}).v) !== 'Used in Mixing') problems.push(`header J${headerRow} = ${JSON.stringify((cws['J' + headerRow] || {}).v)}`);
 for (const r of productRows) {
     const e = expect[r];
