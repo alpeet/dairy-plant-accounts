@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * DAILY (CHAINED) STOCK STATEMENT — TC-01 … TC-10
+ * DAILY (CHAINED) STOCK STATEMENT — TC-01 … TC-12
  * ===============================================
  * Implements the acceptance test file for the daily running-balance statement:
  *
@@ -248,9 +248,100 @@ ok(rows.length === 3 && near(rows[0].opening, 0) && rows[0].opening >= 0
 
 db.close();
 
+// ── TC-12 — the combined milk total (Buffalo + Cow + Mix = ONE stock) ────
+// Operator's rule: deduct today's TOTAL sales from yesterday's TOTAL closing,
+// then add today's TOTAL collection — one row per day, in total only. A type
+// selling beyond its own stock is covered by the other types' surplus, so the
+// phantom per-type shortfalls disappear while a genuine whole-stock deficit
+// still shows on the total.
+console.log('\n── TC-12 milk chains as ONE total (sales from yesterday\'s TOTAL closing, then today\'s TOTAL collection) ──');
+const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-milk-'));
+const db2 = initDatabase(dir2, 'test.db');
+const mkMilk = (name) => Number(db2.prepare(
+    "INSERT INTO products (name, unit, category, rate) VALUES (?, 'liter', 'Milk', 80)"
+).run(name).lastInsertRowid);
+const pBuf = mkMilk('Buffalo Milk');
+const pCow = mkMilk('Cow Milk');
+const pMix = mkMilk('Mix Milk');
+const pCream = Number(db2.prepare(
+    "INSERT INTO products (name, unit, category, rate) VALUES ('Cream', 'kg', 'Dairy', 300)"
+).run().lastInsertRowid);
+const mv2 = db2.prepare(`INSERT INTO stock_movements
+    (product_id, date, type, reference_type, reference_id, inward_qty, outward_qty, balance_after, rate, notes)
+    VALUES (?, ?, ?, NULL, NULL, ?, ?, 0, 0, 'tc12')`);
+
+// Day 1: only Buffalo collects (100 L) but MIX sells 60 L and Buffalo 50 L —
+// a type selling beyond its own stock. Day 2: Cow collects 70 L, Mix sells 40.
+mv2.run(pBuf, D[0], 'milk_collection', 100, 0);
+mv2.run(pMix, D[0], 'sale', 0, 60);
+mv2.run(pBuf, D[0], 'sale', 0, 50);
+mv2.run(pCow, D[1], 'milk_collection', 70, 0);
+mv2.run(pMix, D[1], 'sale', 0, 40);
+// Cream (non-milk) keeps its own chain untouched by the milk grouping.
+mv2.run(pCream, D[0], 'purchase', 10, 0);
+mv2.run(pCream, D[0], 'sale', 0, 2);
+
+const stmtAll = (from, to) => dairy.getDailyStockStatement(db2, { from_date: from, to_date: to });
+const r12 = stmtAll(D[0], D[2]);
+const milk = (r12.products || []).find(p => p.product_id === dairy.MILK_TOTAL_ID);
+ok(!!milk, 'milk appears as ONE combined entry (product_id -1)', (r12.products || []).map(p => p.product_name));
+ok(milk && milk.product_name === 'Milk Total (Buffalo+Cow+Mix)',
+    'the total is named after its members', milk && milk.product_name);
+ok(milk && (milk.members || []).length >= 3,
+    'the total still reports each type\'s own chain (for valuation)',
+    milk && (milk.members || []).map(m => m.product_name));
+ok(!(r12.products || []).some(p => [pBuf, pCow, pMix].includes(p.product_id)),
+    'no separate per-type milk rows anywhere in the statement');
+ok((r12.products || []).some(p => p.product_id === pCream),
+    'non-milk products (Cream) keep their own rows');
+
+if (milk) {
+    const mrows = milk.rows || [];
+    // D0: 0 opening + 100 total collection − 110 total sales → shortfall 10.
+    // Per type this would have been a phantom 60 L on Mix alone.
+    ok(mrows.length === 3 && near(mrows[0].opening, 0) && near(mrows[0].collection, 100)
+        && near(mrows[0].sales, 110) && near(mrows[0].closing, 0) && near(mrows[0].shortfall, 10)
+        && mrows[0].is_shortfall === true,
+        'day 1: 0 + 100 total collection − 110 total sales → closing 0, shortfall 10 (computed on the TOTAL)',
+        mrows[0] && { open: mrows[0].opening, coll: mrows[0].collection, sal: mrows[0].sales, close: mrows[0].closing, short: mrows[0].shortfall });
+    // D1: yesterday's TOTAL closing (0) + 70 collected − 40 sold = 30.
+    ok(near(mrows[1].opening, 0) && near(mrows[1].collection, 70) && near(mrows[1].sales, 40)
+        && near(mrows[1].closing, 30) && near(mrows[1].shortfall, 0) && mrows[1].is_shortfall === false,
+        'day 2: yesterday\'s TOTAL closing 0 + 70 − 40 = 30, no shortfall',
+        mrows[1] && { open: mrows[1].opening, coll: mrows[1].collection, sal: mrows[1].sales, close: mrows[1].closing });
+    // D2: no records — the total's closing carries forward.
+    ok(near(mrows[2].opening, 30) && mrows[2].has_data === false && near(mrows[2].closing, 30),
+        'day 3: no records — the total\'s closing carries forward (30), opening never negative',
+        mrows[2] && { open: mrows[2].opening, close: mrows[2].closing, has: mrows[2].has_data });
+    ok(mrows.every(x => x.closing >= 0 && x.identity_ok !== false),
+        'identity holds and no closing on the combined chain is negative');
+    const bufM = (milk.members || []).find(m => m.product_id === pBuf);
+    const cowM = (milk.members || []).find(m => m.product_id === pCow);
+    const mixM = (milk.members || []).find(m => m.product_id === pMix);
+    ok(!!bufM && !!cowM && !!mixM
+        && near(bufM.last_closing, 50) && near(cowM.last_closing, 70) && near(mixM.last_closing, 0),
+        'members keep their own floored chains (Buffalo 50, Cow 70, Mix 0) — only the TOTAL is presented',
+        milk.members && milk.members.map(m => [m.product_name, m.last_closing]));
+}
+ok(r12.shortfall_days === 1 && near(r12.shortfall_total, 10),
+    'the statement counts ONE shortfall day / 10 L — on the total, never per type',
+    { days: r12.shortfall_days, total: r12.shortfall_total });
+ok(r12.identity_ok === true, 'statement-wide identity_ok across the combined chain');
+
+// The daily view's product dropdown drills by id — the sentinel selects the
+// total, a real id still gets that type's own chain.
+const r12b = dairy.getDailyStockStatement(db2, { from_date: D[0], to_date: D[2], product_id: dairy.MILK_TOTAL_ID });
+ok(r12b.products.length === 1 && r12b.products[0].product_id === dairy.MILK_TOTAL_ID,
+    'product_id = -1 selects exactly the combined milk total', r12b.products.map(p => p.product_name));
+const r12c = dairy.getDailyStockStatement(db2, { from_date: D[0], to_date: D[2], product_id: pBuf });
+ok(r12c.products.length === 1 && r12c.products[0].product_id === pBuf,
+    'a single milk product still gets its own chain (per-type drill-down)',
+    r12c.products.map(p => p.product_name));
+db2.close();
+
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 if (fail) {
-    console.log('❌ DAILY STOCK STATEMENT — TC-01…TC-11 not fully satisfied');
+    console.log('❌ DAILY STOCK STATEMENT — TC-01…TC-12 not fully satisfied');
     process.exit(1);
 }
-console.log('✅ DAILY STOCK STATEMENT — TC-01…TC-11 all passed');
+console.log('✅ DAILY STOCK STATEMENT — TC-01…TC-12 all passed');

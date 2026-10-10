@@ -285,14 +285,26 @@ console.log('\nH. req 17 — Excel export reconciles with the application');
     }
     ok(badRow === 0, 'every exported row satisfies Opening − Sales + In − Out + Shortfall = Closing and never closes negative', badRow);
 
-    // Carry-forward across days is present in the export.
-    const rawRows = stmt.slice(1).filter(r => r[3] === 'Raw Milk');
-    ok(rawRows.length >= 3, 'raw milk has one exported row per day', rawRows.length);
-    ok(near(rawRows[0][14], 295) && near(rawRows[1][4], 295),
-        'exported day 2 opening = day 1 closing (automatic carry-forward)', [rawRows[0][14], rawRows[1][4]]);
-    ok(near(rawRows[rawRows.length - 1][14], 205), 'last exported closing = engine closing', rawRows[rawRows.length - 1][14]);
+    // Milk (Raw + Pasteurized, both category 'Milk') is ONE combined product —
+    // the same total the screen shows — with the per-day chain carried forward.
+    const MILK_TOTAL = 'Milk Total (Pasteurized+Raw)';
+    ok(!stmt.slice(1).some(r => r[3] === 'Raw Milk'),
+        'per-type milk rows are gone from the statement sheet (combined, never duplicated)');
+    const rawRows = stmt.slice(1).filter(r => r[3] === MILK_TOTAL);
+    ok(rawRows.length >= 3, 'the combined milk total has one exported row per day', rawRows.length);
+    ok(rawRows.length >= 3 && near(rawRows[0][14], 895) && near(rawRows[1][4], 895),
+        'exported day 2 opening = day 1 closing (automatic carry-forward, combined total)',
+        rawRows.length >= 3 ? [rawRows[0][14], rawRows[1][4]] : rawRows.length);
+    ok(rawRows.length >= 3 && near(rawRows[rawRows.length - 1][14], 805),
+        'last exported closing = engine closing (950 → 895 → 795 → 805)',
+        rawRows.length ? rawRows[rawRows.length - 1][14] : null);
 
-    const exportedRawParties = stmt.slice(1).filter(r => r[3] === 'Raw Milk').map(r => String(r[2]));
+    // The movement-level Stock_Ledger sheet still names the actual type.
+    const ledRows = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Ledger'], { header: 1 });
+    ok(ledRows.slice(1).some(r => r[3] === 'Raw Milk') && ledRows.slice(1).some(r => r[3] === 'Pasteurized Milk'),
+        'the Stock_Ledger sheet keeps each milk type on its own movements');
+
+    const exportedRawParties = rawRows.map(r => String(r[2]));
     ok(exportedRawParties.some(s => s.includes('Ram Bahadur')) && exportedRawParties.some(s => s.includes('Production / Internal')),
         'exported statement names its parties/sources', exportedRawParties.slice(0, 3));
 }
@@ -306,7 +318,7 @@ console.log('\nI. presentation — all-zero products are hidden, non-zero kept')
     const built = buildStockStatementWorkbook(db, { from_date: TODAY, to_date: TODAY });
     const stmt = XLSX.utils.sheet_to_json(built.workbook.Sheets['Stock_Statement'], { header: 1 });
     ok(!stmt.slice(1).some(r => r[3] === 'Empty Thing'), 'the empty product is omitted from the export');
-    ok(stmt.slice(1).some(r => r[3] === 'Raw Milk'), 'a product with movement is present');
+    ok(stmt.slice(1).some(r => r[3] === 'Milk Total (Pasteurized+Raw)'), 'a product with movement is present (the combined milk total)');
 
     // dailyFlowRows is the exported shape of one product's day-by-day flow.
     const days = dailyFlowRows(one(pRaw, '', ''), { db, from_date: '' });

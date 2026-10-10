@@ -546,14 +546,27 @@ function getProductCostReport(db, { from_date, to_date, product_id } = {}) {
  * current lot-based inventory value. Never recomputes stock independently —
  * quantities replay `stock_movements`, values read the lots.
  */
-function getStockLedger(db, { product_id, from_date, to_date } = {}) {
+function getStockLedger(db, { product_id, from_date, to_date, category, search, group_milk } = {}) {
     // Explicit empty string = "no bound" (All Dates); undefined keeps the
     // single-day default. The date layer sends '' for the 'all' preset.
     const from = (from_date === undefined || from_date === null) ? todayBS() : String(from_date);
     const to = (to_date === undefined || to_date === null) ? todayBS() : String(to_date);
-    const products = product_id
+    // product_id = MILK_TOTAL_ID asks for the combined milk total — resolve it
+    // to every milk product (never `WHERE id = -1`).
+    const wantMilk = product_id != null && product_id !== '' && Number(product_id) === MILK_TOTAL_ID;
+    let products = (product_id && !wantMilk)
         ? db.prepare('SELECT * FROM products WHERE id = ?').all(product_id)
         : db.prepare('SELECT * FROM products ORDER BY name').all();
+
+    // Statement filters live HERE — filter FIRST, then group milk — so a search
+    // for one milk type shows that type alone instead of summoning the total,
+    // and the daily chain, the ledger views and the Excel export always see the
+    // same product set (one stock calculation, never a second one).
+    const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+    const nq = norm(search);
+    if (category) products = products.filter(p => String(p.category || '') === category);
+    if (nq) products = products.filter(p => norm(p.name).includes(nq) || norm(p.category).includes(nq));
+    if (wantMilk) products = products.filter(isMilkGroupProduct);
 
     // Reference labels + party names, batch-loaded once (no per-row lookups).
     // Party comes from the source document so every movement is traceable
@@ -648,6 +661,9 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
             const party = (m.reference_id != null && refParty.get(refKey)) || internalParty(m);
             rows.push({
                 date: m.date,
+                // The product the movement actually belongs to — the combined
+                // milk total groups rows, but each row keeps its real type.
+                product_name: p.name,
                 time: timeRaw.slice(0, 8),
                 created_at: createdAt,
                 reference_type: m.reference_type, reference_id: m.reference_id,
@@ -702,7 +718,10 @@ function getStockLedger(db, { product_id, from_date, to_date } = {}) {
             rows
         });
     }
-    return { from_date: from, to_date: to, products: ledger };
+    return {
+        from_date: from, to_date: to,
+        products: group_milk ? groupMilkProducts(ledger, { db, from, keepMemberRows: false }) : ledger
+    };
 }
 
 /**
@@ -1071,6 +1090,154 @@ function getBatchTraceability(db, { batchId } = {}) {
 }
 
 // ──────────────────────────────────────────────────────────────
+// Combined Milk total (operator's rule, 2026-10)
+// ──────────────────────────────────────────────────────────────
+
+// The statement reads milk as ONE stock: today's TOTAL sales (Buffalo + Cow
+// + Mix) deduct from yesterday's TOTAL closing first, then today's TOTAL
+// collection is added. Chaining each milk type separately invents phantom
+// shortfalls (one type sold beyond its own stock while another type carries
+// surplus), so the types are summed BEFORE the floor rule is applied.
+// Non-milk products (Cream, Paneer, Ghee, …) keep their own chains — litres
+// and kilograms are never summed together.
+const MILK_TOTAL_ID = -1;
+
+/** True for a product that belongs in the combined milk total. */
+function isMilkGroupProduct(p) {
+    const cat = String((p && p.category) || '').trim().toLowerCase();
+    if (cat === 'milk') return true;
+    return isMilkProductName(String((p && (p.product_name || p.name)) || ''));
+}
+
+/** "Buffalo Milk" → "Buffalo"; the total reads `Milk Total (Buffalo+Cow+Mix)`. */
+function milkTotalName(milk) {
+    const parts = milk.map(p => {
+        const n = String(p.product_name || p.name || '');
+        return n.replace(/\s+milk$/i, '').trim() || n;
+    });
+    return `Milk Total (${parts.join('+')})`;
+}
+
+/**
+ * Combine every milk product into ONE entry — grouped per unit (litres are
+ * never added to kilograms), placed where the first milk product was.
+ *
+ * The merged entry replays its running balance from the SUM of the members'
+ * period openings over the concatenated, date-ordered movements, so
+ * Σ(member closings) == merged closing; the daily floor rule is applied LATER
+ * by the chain that consumes this entry, never here.
+ *
+ * `keepMemberRows` keeps the members' full ledger entries inside `members`
+ * (only the daily chain wants them); ledger/Excel consumers pass `false` for a
+ * light payload. With `db` the merged entry also carries `opening_before` —
+ * the summed, floor-replayed opening the Excel export's chain starts from.
+ */
+function groupMilkProducts(products, opts = {}) {
+    const { db = null, from = '', keepMemberRows = false } = opts;
+    const milk = products.filter(isMilkGroupProduct);
+    if (milk.length < 2) return products.slice();
+
+    const byUnit = new Map();
+    for (const p of milk) {
+        const u = String(p.unit || '').trim();
+        const key = u.toLowerCase();   // "Liter" and "liter" are the same unit
+        if (!byUnit.has(key)) byUnit.set(key, { unit: u, members: [] });
+        byUnit.get(key).members.push(p);
+    }
+    const replacements = [];
+    for (const g of byUnit.values()) {
+        replacements.push(g.members.length >= 2
+            ? mergeMilkEntries(g.members, { db, from, keepMemberRows })
+            : g.members[0]);
+    }
+
+    const out = [];
+    let placed = false;
+    for (const p of products) {
+        if (isMilkGroupProduct(p)) {
+            if (!placed) { placed = true; out.push(...replacements); }
+            continue;
+        }
+        out.push(p);
+    }
+    return out;
+}
+
+/** Build the single merged milk entry from its members (see groupMilkProducts). */
+function mergeMilkEntries(milk, { db = null, from = '', keepMemberRows = false } = {}) {
+    const rows = [];
+    for (const p of milk) for (const r of (p.rows || [])) rows.push(r);
+    rows.sort((a, b) => String(a.date).localeCompare(String(b.date))
+        || String(a.time || '').localeCompare(String(b.time || ''))
+        || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+
+    const opening = round2(milk.reduce((s, p) => s + num(p.opening_qty), 0));
+    let balance = opening;
+    for (const r of rows) {
+        balance = round2(balance + num(r.inward_qty) - num(r.outward_qty));
+        r.balance = balance;   // ONE running balance for the combined stock
+    }
+
+    const summary = {};
+    for (const key of Object.keys((milk[0] && milk[0].summary) || {})) {
+        summary[key] = round2(milk.reduce((s, p) => s + num((p.summary || {})[key]), 0));
+    }
+    summary.opening = opening;
+    summary.closing = balance;
+
+    const sumFlow = (k) => round2(milk.reduce((s, p) => s + num((p.flow || {})[k]), 0));
+    const flow = stockFlowRow({
+        opening,
+        sales_issues: sumFlow('sales_issues'),
+        collection_purchase: sumFlow('collection_purchase'),
+        production: sumFlow('production'),
+        production_consumption: sumFlow('production_consumption'),
+        wastage: sumFlow('wastage'),
+        other_in: sumFlow('other_in'),
+        other_out: sumFlow('other_out'),
+        closing: balance
+    });
+
+    // Name the total after the members that actually have books ANYWHERE in
+    // history: a dormant seeded twin ("Mixed Milk" — never a single movement)
+    // still joins the numbers but doesn't clutter the name, while a member
+    // that is merely idle THIS period keeps its place — the name never changes
+    // with the date range.
+    let active;
+    if (db) {
+        const everMoved = db.prepare('SELECT 1 FROM stock_movements WHERE product_id = ? LIMIT 1');
+        active = milk.filter(p => stockOpeningBefore(db, p.product_id, '') !== 0
+            || !!everMoved.get(p.product_id));
+    } else {
+        active = milk.filter(p => (p.rows || []).length > 0 || num(p.opening_qty) !== 0);
+    }
+
+    const entry = {
+        product_id: MILK_TOTAL_ID,
+        product_name: milkTotalName(active.length ? active : milk),
+        unit: milk[0].unit || '',
+        category: 'Milk',
+        inventory_category: milk[0].inventory_category || classifyInventoryCategory(milk[0]),
+        is_milk_total: true,
+        opening_qty: opening,
+        closing_qty: balance,
+        lot_value: round2(milk.reduce((s, p) => s + num(p.lot_value), 0)),
+        summary,
+        flow,
+        members: milk.map(p => keepMemberRows ? p : {
+            product_id: p.product_id, product_name: p.product_name, unit: p.unit,
+            opening_qty: p.opening_qty, closing_qty: p.closing_qty
+        }),
+        rows
+    };
+    if (db) {
+        entry.opening_before = round2(
+            milk.reduce((s, p) => s + stockOpeningBefore(db, p.product_id, from || ''), 0));
+    }
+    return entry;
+}
+
+// ──────────────────────────────────────────────────────────────
 // Daily chained Stock Statement
 // ──────────────────────────────────────────────────────────────
 
@@ -1139,9 +1306,18 @@ function stockOpeningBefore(db, productId, from) {
  *
  * Read from the same ledger as every other stock view (`getStockLedger` +
  * `flowDelta`): one stock calculation, never a second one.
+ *
+ * MILK IS ONE STOCK (operator's rule, 2026-10): Buffalo + Cow + Mix chain as
+ * a single combined total — today's total sales deduct from yesterday's TOTAL
+ * closing first, then today's total collection is added, and the closing
+ * never goes below zero. The combined entry (product_id = MILK_TOTAL_ID) also
+ * reports each type's own chain under `members` (one recursive call per type)
+ * so the print report can value the closing at each type's rate. The
+ * category/search filters run inside getStockLedger BEFORE the milk grouping,
+ * so every view and the Excel export see the same product set.
  */
 function getDailyStockStatement(db, { from_date, to_date, product_id, category, search } = {}) {
-    const ledger = getStockLedger(db, { from_date, to_date, product_id });
+    const ledger = getStockLedger(db, { from_date, to_date, product_id, category, search });
 
     // A date input can hand back an AD year (…2026); the ledger stores BS, so
     // normalise before any comparison or day enumeration. '' stays ''.
@@ -1162,19 +1338,25 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
     if (String(to) < String(from)) to = from;
     const days = bsDays(String(from), String(to));
 
-    const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
     const emptyDay = () => ({ collection: 0, purchase: 0, sales: 0, production: 0, consumption: 0, wastage: 0, other_in: 0, other_out: 0 });
     const products = [];
     let shortfallDays = 0, shortfallTotal = 0, identityOk = true;
 
-    for (const p of ledger.products) {
-        if (category && String(p.category || '') !== category) continue;
-        if (search && !norm(p.product_name).includes(norm(search)) && !norm(p.category || '').includes(norm(search))) continue;
+    // Milk is ONE stock (operator's rule): Buffalo + Cow + Mix chain as a
+    // single combined total. The category/search filters were applied inside
+    // getStockLedger BEFORE this grouping — filter, then group — so a search
+    // for one milk type shows that type alone.
+    const chains = groupMilkProducts(ledger.products, { db, from, keepMemberRows: false });
 
+    for (const p of chains) {
+        const milkMembers = (p.product_id === MILK_TOTAL_ID && Array.isArray(p.members)) ? p.members : null;
         // Opening = initial stock + pre-range history, replayed with the same
         // floor rule as the visible days (a raw SUM would understate it once any
-        // earlier day closed short — see stockOpeningBefore).
-        const initial = stockOpeningBefore(db, p.product_id, from);
+        // earlier day closed short — see stockOpeningBefore). The combined milk
+        // total opens at the SUM of its members' replayed openings.
+        const initial = milkMembers
+            ? round2(milkMembers.reduce((s, m) => s + stockOpeningBefore(db, m.product_id, from), 0))
+            : stockOpeningBefore(db, p.product_id, from);
 
         // Bucket this period's movements by date — one pass, never a query per day.
         const byDate = new Map();
@@ -1224,12 +1406,28 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
 
         const moved = rows.some(r => r.has_data);
         if (!moved && firstOpening === 0) continue;   // skip idle products
+
+        // The combined milk total also reports each type's own chain — the
+        // print report values the closing at each type's rate, never a blended
+        // guess. One recursive call per member reuses this very engine (its
+        // product_id selects that type alone, so no further grouping happens),
+        // and those figures never enter the statement totals above.
+        const members = milkMembers ? milkMembers.map(m => {
+            const sub = (getDailyStockStatement(db, { from_date: from, to_date: to, product_id: m.product_id }).products || [])[0] || {};
+            return {
+                product_id: m.product_id, product_name: m.product_name, unit: m.unit,
+                first_opening: sub.first_opening || 0, last_closing: sub.last_closing || 0,
+                shortfall: sub.shortfall || 0, shortfall_days: sub.shortfall_days || 0
+            };
+        }) : undefined;
+
         products.push({
             product_id: p.product_id, product_name: p.product_name, unit: p.unit,
             category: p.category, initial_stock: initial,
             first_opening: firstOpening, last_closing: balance,
             shortfall: round2(rows.reduce((s, r) => s + (Number(r.shortfall) || 0), 0)),
             shortfall_days: rows.filter(r => r.is_shortfall).length,
+            members,
             rows
         });
     }
@@ -1244,6 +1442,7 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
 
 module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
+    MILK_TOTAL_ID, isMilkGroupProduct, milkTotalName, groupMilkProducts,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
     getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,

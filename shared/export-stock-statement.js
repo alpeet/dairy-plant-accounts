@@ -16,6 +16,8 @@
  *       Date | Reference | Party | Product | Opening | Sales/Issues |
  *       Remaining | Collection/Purchase | Production | Production Consumption |
  *       Other | Shortfall | Closing
+ *     Milk (Buffalo + Cow + Mix) is ONE combined product — the same total the
+ *     screen shows — so sales deduct from yesterday's TOTAL milk closing.
  *     Opening on the first day is the stock immediately BEFORE the period;
  *     each following day carries the previous closing forward automatically
  *     (req 11). The closing NEVER goes below zero: a day deducts only what the
@@ -67,9 +69,16 @@ function dailyFlowRows(product, ctx) {
         if (r.party) day.parties.add(String(r.party));
     }
     const days = [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    let balance = (ctx && ctx.db)
-        ? stockOpeningBefore(ctx.db, product.product_id, ctx.from_date || '')
-        : round2(product.opening_qty || 0);
+    let balance;
+    if (ctx && ctx.db) {
+        // The combined milk total carries its summed member openings
+        // (`opening_before`); a normal product replays its own history.
+        balance = product.opening_before != null
+            ? round2(product.opening_before)
+            : stockOpeningBefore(ctx.db, product.product_id, ctx.from_date || '');
+    } else {
+        balance = round2(product.opening_qty || 0);
+    }
     const out = [];
     for (const day of days) {
         const opening = balance;
@@ -131,15 +140,17 @@ const LEDGER_HEADERS = [
  */
 function buildStockStatementWorkbook(db, opts = {}) {
     const { from_date = '', to_date = '', category = '', search = '' } = opts;
-    const ledger = getStockLedger(db, { from_date, to_date });
-    const q = String(search || '').toLowerCase();
-    const products = (ledger.products || []).filter(p => {
-        if (category && p.category !== category) return false;
-        if (q && !String(p.product_name || '').toLowerCase().includes(q)
-            && !String(p.category || '').toLowerCase().includes(q)) return false;
-        // Only products with movement in the period or a non-zero opening.
-        return (p.rows || []).length > 0 || round2(p.opening_qty || 0) !== 0;
+    // category/search + the combined milk grouping happen INSIDE the ledger
+    // (filter first, then group) — the workbook then sees exactly the product
+    // set the on-screen statement shows, so the two can never drift apart.
+    const ledger = getStockLedger(db, {
+        from_date, to_date,
+        category: category || undefined, search: search || undefined,
+        group_milk: true
     });
+    const products = (ledger.products || []).filter(p =>
+        // Only products with movement in the period or a non-zero opening.
+        (p.rows || []).length > 0 || round2(p.opening_qty || 0) !== 0);
 
     const statementAoa = [STATEMENT_HEADERS];
     const ledgerAoa = [LEDGER_HEADERS];
@@ -166,7 +177,7 @@ function buildStockStatementWorkbook(db, opts = {}) {
             const openQty = running;
             running = round2(running + inQty - outQty);
             ledgerAoa.push([
-                r.date, r.reference_no || '', r.party || '', p.product_name, r.label || r.type || '',
+                r.date, r.reference_no || '', r.party || '', r.product_name || p.product_name, r.label || r.type || '',
                 openQty, inQty || '', outQty || '', running,
                 round2(r.unit_cost || 0), round2(r.value || 0)
             ]);

@@ -802,6 +802,23 @@ function _ssMovementTableModel(daily, valuation) {
         const rs = p.rows || [];
         const sum = k => rs.reduce((s, r) => s + (Number(r[k]) || 0), 0);
         const m = meta[String(p.product_id)] || {};
+        const closing = rs.length ? rs[rs.length - 1].closing : 0;
+        let rate = Number(m.rate) || 0;
+        let reorder = Number(m.reorder_level) || 0;
+        // The combined Milk total has no single master rate: value each type's
+        // OWN closing at its own rate, and show the closing-weighted rate.
+        if (Array.isArray(p.members) && p.members.length) {
+            let value = 0, rateSum = 0, rateN = 0, reorderSum = 0;
+            for (const mm of p.members) {
+                const mmMeta = meta[String(mm.product_id)] || {};
+                const mmRate = Number(mmMeta.rate) || 0;
+                value += (Number(mm.last_closing) || 0) * mmRate;
+                if (mmMeta.rate != null && mmMeta.rate !== '') { rateSum += mmRate; rateN++; }
+                reorderSum += Number(mmMeta.reorder_level) || 0;
+            }
+            rate = Math.abs(closing) > 0.005 ? value / closing : (rateN ? rateSum / rateN : 0);
+            reorder = reorderSum;
+        }
         return {
             product_id: p.product_id,
             name: p.product_name,
@@ -813,9 +830,9 @@ function _ssMovementTableModel(daily, valuation) {
             sales: round2ui(sum('sales')),
             otherOut: round2ui(sum('wastage') + sum('other_out')),
             otherIn: round2ui(sum('other_in')),
-            closing: rs.length ? rs[rs.length - 1].closing : 0,
-            rate: Number(m.rate) || 0,
-            reorder: Number(m.reorder_level) || 0,
+            closing,
+            rate,
+            reorder,
             shortfall: round2ui(sum('shortfall')),
             shortfallDays: p.shortfall_days || 0
         };
@@ -1001,7 +1018,14 @@ async function showStockStatement() {
     }
 
     const [ledgerRes, valRes, dailyRes] = await Promise.all([
-        window.api.getStockLedger({ from_date: _ssState.from, to_date: _ssState.to }),
+        // group_milk: the ledger-backed views (Stock Summary / Detailed Ledger)
+        // show ONE combined milk total — the engine filters first, then groups,
+        // exactly like the daily chain does.
+        window.api.getStockLedger({
+            from_date: _ssState.from, to_date: _ssState.to,
+            category: _ssState.category || undefined, search: _ssState.search || undefined,
+            group_milk: true
+        }),
         window.api.getStockStatement({ category: _ssState.category || undefined, search: _ssState.search || undefined }),
         window.api.getDailyStockStatement({
             from_date: _ssState.from, to_date: _ssState.to,
@@ -1097,9 +1121,17 @@ async function showStockStatement() {
             </table>
         </div>`;
     } else if (_ssState.view === 'detail') {
+        // A drill-down can name a milk member (Today's Stock links per type)
+        // while the statement shows the combined total — resolve to its host.
+        let selPid = _ssState.product_id ? String(_ssState.product_id) : '';
+        if (selPid && !products.some(p => String(p.product_id) === selPid)) {
+            const host = products.find(p => Array.isArray(p.members)
+                && p.members.some(mm => String(mm.product_id) === selPid));
+            if (host) selPid = String(host.product_id);
+        }
         const allRows = [];
         for (const p of products) {
-            if (_ssState.product_id && Number(_ssState.product_id) !== p.product_id) continue;
+            if (selPid && String(p.product_id) !== selPid) continue;
             for (const r of (p.rows || [])) allRows.push({ p, r });
         }
         allRows.sort((a, b) => String(`${a.r.date} ${a.r.time || ''}`).localeCompare(`${b.r.date} ${b.r.time || ''}`));
@@ -1110,7 +1142,7 @@ async function showStockStatement() {
                 <label>Product</label>
                 <select class="form-control" id="ssProduct" onchange="_ssState.product_id=this.value;showStockStatement()">
                     <option value="">All products</option>
-                    ${products.map(p => `<option value="${p.product_id}" ${String(_ssState.product_id) === String(p.product_id) ? 'selected' : ''}>${escapeHtml(p.product_name)}</option>`).join('')}
+                    ${products.map(p => `<option value="${p.product_id}" ${selPid === String(p.product_id) ? 'selected' : ''}>${escapeHtml(p.product_name)}</option>`).join('')}
                 </select>
             </div>
             <div class="form-group" style="flex:1"><label>&nbsp;</label><div style="font-size:12px;color:var(--text-light);padding-top:6px">Ordered by Date + Time + entry sequence. ${allRows.length > capped.length ? `Showing first ${capped.length} of ${allRows.length} rows — narrow the product or period.` : `${allRows.length} row(s).`}</div></div>
@@ -1137,7 +1169,7 @@ async function showStockStatement() {
                     <td style="font-size:11px;color:var(--text-light)">${escapeHtml(r.time || '—')}</td>
                     <td style="font-size:11px" title="${escapeHtml(r.notes || '')}">${refCell}</td>
                     <td style="font-size:12px">${escapeHtml(r.party || '—')}</td>
-                    <td>${escapeHtml(p.product_name)}</td>
+                    <td>${escapeHtml(r.product_name || p.product_name)}</td>
                     <td><span class="badge ${r.inward_qty > 0 ? 'badge-success' : r.outward_qty > 0 ? 'badge-danger' : 'badge-secondary'}">${escapeHtml(r.label || r.type)}</span></td>
                     <td class="text-right">${formatNumber(openQty)}</td>
                     <td class="text-right">${r.inward_qty ? formatNumber(r.inward_qty) : '—'}</td>
