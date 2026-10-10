@@ -720,7 +720,7 @@ function getStockLedger(db, { product_id, from_date, to_date, category, search, 
     }
     return {
         from_date: from, to_date: to,
-        products: group_milk ? groupMilkProducts(ledger, { db, from, keepMemberRows: false }) : ledger
+        products: group_milk ? groupMilkProducts(ledger, { db, from, to, keepMemberRows: false }) : ledger
     };
 }
 
@@ -1133,7 +1133,7 @@ function milkTotalName(milk) {
  * the summed, floor-replayed opening the Excel export's chain starts from.
  */
 function groupMilkProducts(products, opts = {}) {
-    const { db = null, from = '', keepMemberRows = false } = opts;
+    const { db = null, from = '', to = '', keepMemberRows = false } = opts;
     const milk = products.filter(isMilkGroupProduct);
     if (milk.length < 2) return products.slice();
 
@@ -1147,7 +1147,7 @@ function groupMilkProducts(products, opts = {}) {
     const replacements = [];
     for (const g of byUnit.values()) {
         replacements.push(g.members.length >= 2
-            ? mergeMilkEntries(g.members, { db, from, keepMemberRows })
+            ? mergeMilkEntries(g.members, { db, from, to, keepMemberRows })
             : g.members[0]);
     }
 
@@ -1163,8 +1163,80 @@ function groupMilkProducts(products, opts = {}) {
     return out;
 }
 
+/**
+ * Combined chain for products that share ONE stock (milk): their initial stock
+ * summed, then every movement replayed day by day with the statement's own
+ * floor rule. Returns
+ *
+ *   opening   — the group's closing immediately BEFORE `from` (yesterday's
+ *               total closing when the range starts at `from`)
+ *   closing   — its closing at the end of the replayed window (`to`)
+ *   shortfall — what the floor had to absorb INSIDE the window
+ *
+ * This is what makes "opening = yesterday's TOTAL closing" literally true for a
+ * mid-range query, and it is the SAME replay the daily statement presents — so
+ * a panel reading these figures can never disagree with the statement.
+ * Summing each member's own `stockOpeningBefore` would be wrong: every type
+ * floors its own deficit at zero, so one type's surplus would be counted while
+ * another's deficit is forgiven.
+ */
+function groupChainFor(db, productIds, from, to) {
+    const ids = (productIds || []).map(Number).filter(Number.isFinite);
+    if (!ids.length) return { opening: 0, closing: 0, shortfall: 0 };
+    let balance = 0;
+    for (const id of ids) {
+        const hasOpening = !!db.prepare("SELECT 1 FROM stock_movements WHERE product_id = ? AND type = 'opening' LIMIT 1").get(id);
+        const meta = hasOpening ? null : db.prepare('SELECT opening_stock FROM products WHERE id = ?').get(id);
+        const initial = num(meta && meta.opening_stock);
+        balance = round2(balance + (initial > 0 ? initial : 0));
+    }
+    const start = String(from || '');
+    const end = String(to || '');
+    const marks = ids.map(() => '?').join(',');
+    const rows = end
+        ? db.prepare(`SELECT date, inward_qty, outward_qty FROM stock_movements
+                      WHERE product_id IN (${marks}) AND date <= ? ORDER BY date, id`).all(...ids, end)
+        : db.prepare(`SELECT date, inward_qty, outward_qty FROM stock_movements
+                      WHERE product_id IN (${marks}) ORDER BY date, id`).all(...ids);
+
+    let opening = balance;
+    let inWindow = !start;          // a blank `from` starts the window at the beginning
+    let shortfall = 0;
+    let curDate = null, net = 0;
+    const flushDay = () => {
+        if (curDate === null) return;
+        balance = round2(balance + net);
+        if (balance < 0) {
+            if (inWindow) shortfall = round2(shortfall - balance);
+            balance = 0;            // a day never carries a negative balance
+        }
+        net = 0;
+    };
+    for (const r of rows) {
+        if (r.date !== curDate) {
+            flushDay();
+            curDate = r.date;
+            // Everything before `from` is folded into the opening; the first
+            // day AT or after it begins the window.
+            if (!inWindow && r.date >= start) { opening = balance; inWindow = true; }
+        }
+        net += num(r.inward_qty) - num(r.outward_qty);
+    }
+    flushDay();
+    if (!inWindow) opening = balance;   // `from` lies after every movement
+    return { opening, closing: balance, shortfall };
+}
+
+/**
+ * The combined opening alone (yesterday's TOTAL closing for the group) — see
+ * groupChainFor for the replay and why a per-type sum would be wrong.
+ */
+function groupOpeningBefore(db, productIds, from) {
+    return groupChainFor(db, productIds, from, null).opening;
+}
+
 /** Build the single merged milk entry from its members (see groupMilkProducts). */
-function mergeMilkEntries(milk, { db = null, from = '', keepMemberRows = false } = {}) {
+function mergeMilkEntries(milk, { db = null, from = '', to = '', keepMemberRows = false } = {}) {
     const rows = [];
     for (const p of milk) for (const r of (p.rows || [])) rows.push(r);
     rows.sort((a, b) => String(a.date).localeCompare(String(b.date))
@@ -1231,8 +1303,15 @@ function mergeMilkEntries(milk, { db = null, from = '', keepMemberRows = false }
         rows
     };
     if (db) {
-        entry.opening_before = round2(
-            milk.reduce((s, p) => s + stockOpeningBefore(db, p.product_id, from || ''), 0));
+        // One combined replay, not the sum of each type's separately-floored
+        // chain (see groupChainFor): `opening_before` is yesterday's TOTAL
+        // closing; `chain_closing`/`chain_shortfall` are what the daily
+        // statement will show for this same window, so the Today's Stock panel
+        // can present the milk row exactly as the statement does.
+        const chain = groupChainFor(db, milk.map(p => p.product_id), from || '', to || '');
+        entry.opening_before = chain.opening;
+        entry.chain_closing = chain.closing;
+        entry.chain_shortfall = chain.shortfall;
     }
     return entry;
 }
@@ -1346,16 +1425,17 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
     // single combined total. The category/search filters were applied inside
     // getStockLedger BEFORE this grouping — filter, then group — so a search
     // for one milk type shows that type alone.
-    const chains = groupMilkProducts(ledger.products, { db, from, keepMemberRows: false });
+    const chains = groupMilkProducts(ledger.products, { db, from, to, keepMemberRows: false });
 
     for (const p of chains) {
         const milkMembers = (p.product_id === MILK_TOTAL_ID && Array.isArray(p.members)) ? p.members : null;
         // Opening = initial stock + pre-range history, replayed with the same
         // floor rule as the visible days (a raw SUM would understate it once any
         // earlier day closed short — see stockOpeningBefore). The combined milk
-        // total opens at the SUM of its members' replayed openings.
-        const initial = milkMembers
-            ? round2(milkMembers.reduce((s, m) => s + stockOpeningBefore(db, m.product_id, from), 0))
+        // total opens at its own combined replay (`opening_before`), so it is
+        // literally yesterday's TOTAL closing — never the sum of per-type chains.
+        const initial = p.opening_before != null
+            ? round2(p.opening_before)
             : stockOpeningBefore(db, p.product_id, from);
 
         // Bucket this period's movements by date — one pass, never a query per day.
@@ -1443,6 +1523,7 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
 module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
     MILK_TOTAL_ID, isMilkGroupProduct, milkTotalName, groupMilkProducts,
+    groupChainFor, groupOpeningBefore,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
     getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,

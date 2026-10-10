@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * DAILY (CHAINED) STOCK STATEMENT — TC-01 … TC-12
+ * DAILY (CHAINED) STOCK STATEMENT — TC-01 … TC-14
  * ===============================================
  * Implements the acceptance test file for the daily running-balance statement:
  *
@@ -270,6 +270,13 @@ const mv2 = db2.prepare(`INSERT INTO stock_movements
     (product_id, date, type, reference_type, reference_id, inward_qty, outward_qty, balance_after, rate, notes)
     VALUES (?, ?, ?, NULL, NULL, ?, ?, 0, 0, 'tc12')`);
 
+// One day BEFORE the range: Cow collects 100 L while Mix sells 500 L. Per type
+// that floors the Mix deficit away — Cow would carry 100 L forward — but as ONE
+// stock the plant sold what it had, so the range must open at 0 (TC-13).
+const D_PRE = '2083-05-31';
+mv2.run(pCow, D_PRE, 'milk_collection', 100, 0);
+mv2.run(pMix, D_PRE, 'sale', 0, 500);
+
 // Day 1: only Buffalo collects (100 L) but MIX sells 60 L and Buffalo 50 L —
 // a type selling beyond its own stock. Day 2: Cow collects 70 L, Mix sells 40.
 mv2.run(pBuf, D[0], 'milk_collection', 100, 0);
@@ -319,8 +326,8 @@ if (milk) {
     const cowM = (milk.members || []).find(m => m.product_id === pCow);
     const mixM = (milk.members || []).find(m => m.product_id === pMix);
     ok(!!bufM && !!cowM && !!mixM
-        && near(bufM.last_closing, 50) && near(cowM.last_closing, 70) && near(mixM.last_closing, 0),
-        'members keep their own floored chains (Buffalo 50, Cow 70, Mix 0) — only the TOTAL is presented',
+        && near(bufM.last_closing, 50) && near(cowM.last_closing, 170) && near(mixM.last_closing, 0),
+        'members keep their own floored chains (Buffalo 50, Cow 170 incl. its 100 L before the range, Mix 0) — only the TOTAL is presented',
         milk.members && milk.members.map(m => [m.product_name, m.last_closing]));
 }
 ok(r12.shortfall_days === 1 && near(r12.shortfall_total, 10),
@@ -337,11 +344,56 @@ const r12c = dairy.getDailyStockStatement(db2, { from_date: D[0], to_date: D[2],
 ok(r12c.products.length === 1 && r12c.products[0].product_id === pBuf,
     'a single milk product still gets its own chain (per-type drill-down)',
     r12c.products.map(p => p.product_name));
+
+// ── TC-13 — the opening really is yesterday's TOTAL closing ──────────────
+// The day before the range sold 500 L against 100 L collected. Each type's own
+// chain floors its deficit away (Cow would carry 100 L), but the total — the
+// stock the statement actually presents — closed at 0 that day, so the range
+// must OPEN at 0. A per-type sum would wrongly report 100 L of opening milk.
+console.log('\n── TC-13 opening = yesterday\'s TOTAL closing (one combined replay) ──');
+const r13 = stmtAll(D[0], D[2]);
+const m13 = (r13.products || []).find(p => p.product_id === dairy.MILK_TOTAL_ID);
+const memberSum = [pBuf, pCow, pMix].reduce((s, id) => s + dairy.stockOpeningBefore(db2, id, D[0]), 0);
+ok(!!m13 && near(m13.rows[0].opening, 0),
+    'the range opens at 0 — the day before it, the plant sold more milk than it had',
+    m13 && m13.rows[0].opening);
+ok(memberSum > 0 && !near(memberSum, m13.rows[0].opening),
+    `a sum of per-type chains would have opened at ${Math.round(memberSum * 100) / 100} L instead`,
+    { per_type_sum: memberSum, used: m13 && m13.rows[0].opening });
+ok(near(dairy.groupOpeningBefore(db2, [pBuf, pCow, pMix], D[0]), 0),
+    'groupOpeningBefore reproduces the combined replay (same floor rule as the visible days)',
+    dairy.groupOpeningBefore(db2, [pBuf, pCow, pMix], D[0]));
+ok(near(dairy.groupOpeningBefore(db2, [pCow], D[0]), 100),
+    'the same replay for Cow alone still shows its own 100 L (per-type chain is untouched)',
+    dairy.groupOpeningBefore(db2, [pCow], D[0]));
+
+// ── TC-14 — Today's Stock reads the SAME chain figures the statement shows ──
+// The panel is fed by getStockLedger(group_milk): opening / closing / shortfall
+// must equal the daily statement's own numbers, or the two screens disagree.
+console.log('\n── TC-14 Today\'s Stock panel figures = the statement\'s chain ──');
+const ledMilk = (dairy.getStockLedger(db2, { from_date: D[0], to_date: D[2], group_milk: true }).products || [])
+    .find(p => p.product_id === dairy.MILK_TOTAL_ID);
+const stmtMilk = ((stmtAll(D[0], D[2]).products) || []).find(p => p.product_id === dairy.MILK_TOTAL_ID);
+ok(!!ledMilk && !!stmtMilk
+    && near(ledMilk.opening_before, stmtMilk.first_opening)
+    && near(ledMilk.chain_closing, stmtMilk.last_closing)
+    && near(ledMilk.chain_shortfall, stmtMilk.shortfall),
+    'the grouped ledger entry matches the statement (opening 0, closing 30, shortfall 10)',
+    ledMilk && { open: ledMilk.opening_before, close: ledMilk.chain_closing, short: ledMilk.chain_shortfall, stmt: stmtMilk && [stmtMilk.first_opening, stmtMilk.last_closing, stmtMilk.shortfall] });
+const rawMilkSum = (dairy.getStockLedger(db2, { from_date: D[0], to_date: D[2] }).products || [])
+    .filter(p => [pBuf, pCow, pMix].includes(p.product_id))
+    .reduce((s, p) => s + (Number(p.closing_qty) || 0), 0);
+ok(rawMilkSum < 0 && !!ledMilk && near(ledMilk.chain_closing, 30),
+    'the raw ledger would show a NEGATIVE milk balance — the panel shows the floored chain instead',
+    { raw_per_type_sum: Math.round(rawMilkSum * 100) / 100, chained: ledMilk && ledMilk.chain_closing });
+ok(!!ledMilk && ledMilk.is_milk_total === true && Array.isArray(ledMilk.members) && ledMilk.members.length >= 3,
+    'the row is the combined milk total (one row, all types)',
+    ledMilk && { name: ledMilk.product_name, members: (ledMilk.members || []).length });
 db2.close();
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 if (fail) {
-    console.log('❌ DAILY STOCK STATEMENT — TC-01…TC-12 not fully satisfied');
+    console.log('❌ DAILY STOCK STATEMENT — TC-01…TC-14 not fully satisfied');
     process.exit(1);
 }
-console.log('✅ DAILY STOCK STATEMENT — TC-01…TC-12 all passed');
+console.log('✅ DAILY STOCK STATEMENT — TC-01…TC-14 all passed');

@@ -956,10 +956,11 @@ function _ssDailyView(daily, periodLabel) {
                 <thead><tr>
                     <th>Date</th>
                     <th class="text-right">Opening</th>
+                    <th class="text-right">Sales</th>
+                    <th class="text-right">Remaining</th>
                     ${anyCol ? '<th class="text-right">Collection</th>' : ''}
                     ${anyPur ? '<th class="text-right">Purchase</th>' : ''}
                     ${anyProd ? '<th class="text-right">Production</th><th class="text-right">Used in Mixing</th>' : ''}
-                    <th class="text-right">Sales</th>
                     ${anyOther ? '<th class="text-right">Wastage</th><th class="text-right">Other IN</th><th class="text-right">Other OUT</th>' : ''}
                     ${anyShort ? '<th class="text-right" style="color:var(--danger)">Shortfall</th>' : ''}
                     <th class="text-right">Closing</th>
@@ -968,14 +969,19 @@ function _ssDailyView(daily, periodLabel) {
                 ${capped.map(r => {
                     const dash = '<span style="color:var(--text-light)">—</span>';
                     const cell = v => `<td class="text-right">${r.has_data ? q(v) : dash}</td>`;
+                    // Yesterday's closing absorbs today's sales; what is physically
+                    // left is never allowed to be negative (the deficit comes out
+                    // of today's collection — see the Shortfall column).
+                    const remCell = `<td class="text-right">${r.has_data ? q(Math.max(0, round2ui(r.opening - r.sales))) : dash}</td>`;
                     const shortCell = `<td class="text-right" style="${nz(r.shortfall) ? 'color:var(--danger);font-weight:600' : 'color:var(--text-light)'}">${r.has_data ? (nz(r.shortfall) ? '- ' + q(r.shortfall) : '—') : dash}</td>`;
                     return `<tr${r.has_data ? '' : ' style="opacity:.55;font-style:italic"'}>
                         <td>${formatDate(r.date)}</td>
                         <td class="text-right">${q(r.opening)}</td>
+                        ${cell(r.sales)}
+                        ${remCell}
                         ${anyCol ? cell(r.collection) : ''}
                         ${anyPur ? cell(r.purchase) : ''}
                         ${anyProd ? cell(r.production) + cell(r.production_consumption) : ''}
-                        ${cell(r.sales)}
                         ${anyOther ? cell(r.wastage) + cell(r.other_in) + cell(r.other_out) : ''}
                         ${anyShort ? shortCell : ''}
                         <td class="text-right" style="font-weight:700">${q(r.closing)}</td>
@@ -998,7 +1004,7 @@ function _ssDailyView(daily, periodLabel) {
         </div>
         <div class="form-group" style="flex:1"><label>&nbsp;</label>
             <div style="font-size:12px;color:var(--text-light);padding-top:6px">
-                ${escapeHtml(periodLabel)} — every day in the range gets a row. Closing(N) = Opening(N) + Collection + Purchase − Sales (+ Production − Used in Mixing ± other flows), never below zero: sales deduct from yesterday's closing first and the excess from today's purchase, so whatever neither covers shows in red as <strong>Shortfall</strong>. Opening(N+1) = Closing(N). Faded rows are days with no records: the closing simply carries forward.
+                ${escapeHtml(periodLabel)} — every day in the range gets a row, in total. Read a row left to right: <strong>Opening</strong> (yesterday's total closing) → <strong>Sales</strong> (today's total) → <strong>Remaining</strong> → <strong>Collection</strong> (today's total) → <strong>Closing</strong>. Opening − Sales is never allowed to go below zero: when it would, that deficit is deducted from today's Collection first, and only what the Collection still cannot cover shows in red as <strong>Shortfall</strong> — no figure in this table is ever negative. Closing(N) becomes Opening(N+1); faded rows are days with no records, where the closing simply carries forward.
             </div>
         </div>
     </div>

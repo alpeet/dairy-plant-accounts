@@ -211,6 +211,11 @@ async function renderStock() {
 // opening entries inside the period) derived from the SAME summary, so
 // every row balances exactly. Click-through hands the SAME period to the
 // Stock Statement screen — same engine, no second stock calculation.
+//
+// MILK IS ONE ROW (group_milk): Buffalo + Cow + Mix appear as the combined
+// "Milk Total" the statement shows, with the statement's OWN chain figures —
+// floored opening/closing and the red Shortfall — so the panel can never
+// present a negative milk balance that the statement contradicts.
 
 async function renderTodaysStock() {
     const body = document.getElementById('todaysStockBody');
@@ -225,7 +230,9 @@ async function renderTodaysStock() {
 
     let res;
     try {
-        res = await window.api.getStockLedger({ from_date: filt.from || '', to_date: filt.to || '' });
+        res = await window.api.getStockLedger({
+            from_date: filt.from || '', to_date: filt.to || '', group_milk: true
+        });
     } catch (e) {
         res = { success: false, error: e.message };
     }
@@ -240,18 +247,27 @@ async function renderTodaysStock() {
     let hidden = 0;
     for (const p of products) {
         const b = p.summary || {};
-        const opening = r2(b.opening || 0);
+        // The combined milk row carries the statement's own chain figures
+        // (floored opening/closing + shortfall); every other row is the raw
+        // ledger period, whose identity holds by construction (residual = Other).
+        const chained = p.chain_closing !== undefined && p.chain_closing !== null;
+        const opening = chained ? r2(p.opening_before || 0) : r2(b.opening || 0);
         const collection = r2((b.collection_in || 0) + (b.purchase_in || 0));
         const production = r2(b.production_in || 0);
         const sales = r2(b.sales_out || 0);
         const consumption = r2(b.production_out || 0);
         const wastage = r2(b.wastage_out || 0);
-        const closing = r2(b.closing !== undefined && b.closing !== null ? b.closing : p.closing_qty);
-        const other = r2((closing - opening) - (collection + production - sales - consumption - wastage));
-        const vals = [opening, collection, production, sales, consumption, wastage, other, closing];
+        const closing = chained
+            ? r2(p.chain_closing)
+            : r2(b.closing !== undefined && b.closing !== null ? b.closing : p.closing_qty);
+        const shortfall = chained ? r2(p.chain_shortfall || 0) : 0;
+        // Residual after the statement's own identity
+        // (Opening + In − Out + Shortfall = Closing) — zero for a clean chain.
+        const other = r2((closing - opening) - (collection + production - sales - consumption - wastage) - shortfall);
+        const vals = [opening, collection, production, sales, consumption, wastage, shortfall, other, closing];
         if (vals.every(v => Math.abs(v) < 0.005)) { hidden++; continue; }
-        const lhs = r2(r2(r2(opening + collection + production) - r2(sales + consumption + wastage)) + other);
-        rows.push({ p, opening, collection, production, sales, consumption, wastage, other, closing, ok: Math.abs(lhs - closing) < 0.01 });
+        const lhs = r2(r2(r2(opening + collection + production) - r2(sales + consumption + wastage)) + other + shortfall);
+        rows.push({ p, opening, collection, production, sales, consumption, wastage, shortfall, other, closing, ok: Math.abs(lhs - closing) < 0.01 });
     }
 
     if (!rows.length) {
@@ -264,11 +280,14 @@ async function renderTodaysStock() {
     for (const r of rows) {
         const u = r.p.unit || 'qty';
         let t = units.get(u);
-        if (!t) { t = { opening: 0, collection: 0, production: 0, sales: 0, consumption: 0, wastage: 0, other: 0, closing: 0 }; units.set(u, t); }
-        for (const k of ['opening', 'collection', 'production', 'sales', 'consumption', 'wastage', 'other', 'closing']) t[k] = r2(t[k] + r[k]);
+        if (!t) { t = { opening: 0, collection: 0, production: 0, sales: 0, consumption: 0, wastage: 0, shortfall: 0, other: 0, closing: 0 }; units.set(u, t); }
+        for (const k of ['opening', 'collection', 'production', 'sales', 'consumption', 'wastage', 'shortfall', 'other', 'closing']) t[k] = r2(t[k] + r[k]);
     }
 
     const cell = (v) => `<td class="text-right">${Math.abs(v) >= 0.005 ? formatNumber(v) : '<span style="color:var(--text-light)">—</span>'}</td>`;
+    const shortCell = (v) => `<td class="text-right" style="${Math.abs(v) >= 0.005 ? 'color:var(--danger);font-weight:600' : 'color:var(--text-light)'}">${Math.abs(v) >= 0.005 ? '- ' + formatNumber(Math.abs(v)) : '—'}</td>`;
+    const showShortfall = rows.some(r => Math.abs(r.shortfall) >= 0.005);
+    const hasMilkTotal = rows.some(r => r.p.is_milk_total);
     const bad = rows.filter(r => !r.ok).length;
     body.innerHTML = `
         <div style="font-size:12px;margin-bottom:6px;${bad ? 'color:var(--danger);font-weight:600' : 'color:#2e7d32'}">
@@ -284,6 +303,7 @@ async function renderTodaysStock() {
                     <th class="text-right">Sales</th>
                     <th class="text-right">Consumption</th>
                     <th class="text-right">Wastage</th>
+                    ${showShortfall ? '<th class="text-right" style="color:var(--danger)" title="Stock sold beyond what the books recorded — the closing never goes below zero">Shortfall</th>' : ''}
                     <th class="text-right" title="Returns, adjustments, reversals and opening entries inside the period">Other ±</th>
                     <th class="text-right">Closing</th>
                 </tr></thead>
@@ -292,20 +312,20 @@ async function renderTodaysStock() {
                         <tr>
                             <td><a href="#" onclick="event.preventDefault();tsOpenStatement(${r.p.product_id})" title="Open this product in Stock Statement (detailed ledger)"><strong>${escapeHtml(r.p.product_name)}</strong></a>${r.p.active === 0 ? ' <span class="badge badge-warning">archived</span>' : ''}</td>
                             <td>${escapeHtml(r.p.unit || '')}</td>
-                            ${cell(r.opening)}${cell(r.collection)}${cell(r.production)}${cell(r.sales)}${cell(r.consumption)}${cell(r.wastage)}${cell(r.other)}
+                            ${cell(r.opening)}${cell(r.collection)}${cell(r.production)}${cell(r.sales)}${cell(r.consumption)}${cell(r.wastage)}${showShortfall ? shortCell(r.shortfall) : ''}${cell(r.other)}
                             <td class="text-right" style="font-weight:700">${formatNumber(r.closing)}</td>
                         </tr>`).join('')}
                     ${[...units.entries()].map(([u, t]) => `
                         <tr style="background:rgba(0,0,0,0.04);font-weight:700">
                             <td colspan="2">TOTAL (${escapeHtml(u)})</td>
-                            ${cell(t.opening)}${cell(t.collection)}${cell(t.production)}${cell(t.sales)}${cell(t.consumption)}${cell(t.wastage)}${cell(t.other)}
+                            ${cell(t.opening)}${cell(t.collection)}${cell(t.production)}${cell(t.sales)}${cell(t.consumption)}${cell(t.wastage)}${showShortfall ? shortCell(t.shortfall) : ''}${cell(t.other)}
                             <td class="text-right">${formatNumber(t.closing)}</td>
                         </tr>`).join('')}
                 </tbody>
             </table>
         </div>
         <div style="font-size:11px;color:var(--text-light);margin-top:6px">
-            ${rows.length} product(s) shown${hidden ? ` · ${hidden} with zero balance and no activity hidden` : ''} · period ${filt.from ? formatDate(filt.from) : 'start'} → ${filt.to ? formatDate(filt.to) : 'today'}
+            ${rows.length} product(s) shown${hidden ? ` · ${hidden} with zero balance and no activity hidden` : ''} · period ${filt.from ? formatDate(filt.from) : 'start'} → ${filt.to ? formatDate(filt.to) : 'today'}${hasMilkTotal ? ' · Milk (Buffalo + Cow + Mix) is shown as one combined total, exactly as the Stock Statement does' : ''}
         </div>`;
 }
 
