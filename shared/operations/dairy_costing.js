@@ -1075,20 +1075,67 @@ function getBatchTraceability(db, { batchId } = {}) {
 // ──────────────────────────────────────────────────────────────
 
 /**
+ * Opening balance for the daily chained statement: the product's initial stock
+ * (products.opening_stock, when the books carry no 'opening' movement) replayed
+ * through EVERY movement before `from`, day by day, with the statement's own
+ * floor rule — a day can never close below zero; whatever stock could not cover
+ * is that day's shortfall.
+ *
+ * A plain SUM would be wrong here: once any day has closed short, the floored
+ * chain and the raw sum differ (the floor forgives the deficit), and the
+ * statement has to open exactly where the previous day's floored closing left
+ * it. `from` '' = "from the beginning" → just the initial stock.
+ */
+function stockOpeningBefore(db, productId, from) {
+    const hasOpening = !!db.prepare("SELECT 1 FROM stock_movements WHERE product_id = ? AND type = 'opening' LIMIT 1").get(productId);
+    const meta = hasOpening ? null : db.prepare('SELECT opening_stock FROM products WHERE id = ?').get(productId);
+    let balance = round2(num(meta && meta.opening_stock));
+    if (balance < 0) balance = 0;
+    if (!from) return balance;
+    const rows = db.prepare(
+        'SELECT date, inward_qty, outward_qty FROM stock_movements WHERE product_id = ? AND date < ? ORDER BY date, id'
+    ).all(productId, from);
+    let curDate = null, net = 0;
+    const flushDay = () => {
+        if (curDate === null) return;
+        balance = round2(balance + net);
+        if (balance < 0) balance = 0;
+        net = 0;
+    };
+    for (const r of rows) {
+        if (r.date !== curDate) { flushDay(); curDate = r.date; }
+        net += num(r.inward_qty) - num(r.outward_qty);
+    }
+    flushDay();
+    return balance;
+}
+
+/**
  * Per-day running balance — one row for EVERY day in the range, per product.
  *
- *   Closing(N) = Opening(N) + Collection + Purchase + Production
- *                 − Production Consumption − Wastage + Other IN − Other OUT − Sales
- *   Opening(N+1) = Closing(N)
+ *   Remaining stock = Opening(N) + Collection + Purchase + Production
+ *                      + Other IN − Production Consumption − Wastage
+ *                      − Other OUT − Sales
+ *   Closing(N)      = max(0, Remaining stock)      — never negative
+ *   Shortfall(N)    = max(0, −Remaining stock)     — what stock could not cover
+ *   Opening(N+1)    = Closing(N)
+ *
+ * A day deducts only what the stock actually HAS: today's sales come out of
+ * yesterday's closing first, the excess out of today's purchase/collection
+ * (operator's rule, 2026-10); anything beyond that is reported as a red
+ * Shortfall figure instead of a negative closing. The identity every row
+ * asserts is therefore:
+ *
+ *   Opening + In − Out + Shortfall = Closing
  *
  * With only collection/purchase/sales present (the spec's fixtures) this is
- * exactly `opening + collection + purchase − sales`.
+ * exactly `opening + collection + purchase − sales` — the floor only ever
+ * engages when the books recorded more leaving than entering.
  *
- * Opening(first day) = products.opening_stock (the initial stock, when the
- * books carry no 'opening' movement for that product) + every movement before
- * the From date — so a mid-range query walks history back instead of assuming 0
- * (TC-02), and a backdated entry re-chains every later day (TC-06) because
- * nothing is stored.
+ * Opening(first day) = `stockOpeningBefore` — initial stock plus every movement
+ * before the From date replayed with the SAME floor rule, so a mid-range query
+ * walks history back instead of assuming 0 (TC-02), and a backdated entry
+ * re-chains every later day (TC-06) because nothing is stored.
  *
  * Read from the same ledger as every other stock view (`getStockLedger` +
  * `flowDelta`): one stock calculation, never a second one.
@@ -1118,17 +1165,16 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
     const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
     const emptyDay = () => ({ collection: 0, purchase: 0, sales: 0, production: 0, consumption: 0, wastage: 0, other_in: 0, other_out: 0 });
     const products = [];
-    let negativeDays = 0, identityOk = true;
+    let shortfallDays = 0, shortfallTotal = 0, identityOk = true;
 
     for (const p of ledger.products) {
         if (category && String(p.category || '') !== category) continue;
         if (search && !norm(p.product_name).includes(norm(search)) && !norm(p.category || '').includes(norm(search))) continue;
 
-        // Initial stock = Stock_Master/products opening stock, but ONLY when the
-        // books carry no 'opening' movement — that movement already is it.
-        const meta = db.prepare('SELECT opening_stock FROM products WHERE id = ?').get(p.product_id) || {};
-        const hasOpening = !!db.prepare("SELECT 1 FROM stock_movements WHERE product_id = ? AND type = 'opening' LIMIT 1").get(p.product_id);
-        const initial = hasOpening ? 0 : round2(num(meta.opening_stock));
+        // Opening = initial stock + pre-range history, replayed with the same
+        // floor rule as the visible days (a raw SUM would understate it once any
+        // earlier day closed short — see stockOpeningBefore).
+        const initial = stockOpeningBefore(db, p.product_id, from);
 
         // Bucket this period's movements by date — one pass, never a query per day.
         const byDate = new Map();
@@ -1148,23 +1194,30 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
             else if (fd.column === 'other_out') b.other_out = round2(b.other_out + qty);
         }
 
-        let balance = round2(num(p.opening_qty) + initial);
+        let balance = round2(initial);
         const firstOpening = balance;
         const rows = [];
         for (const day of days) {
             const b = byDate.get(day) || emptyDay();
             const opening = balance;
-            const closing = round2(opening + b.collection + b.purchase + b.production - b.consumption - b.wastage + b.other_in - b.other_out - b.sales);
-            const identityOkHere = Math.abs(round2(opening + b.collection + b.purchase + b.production - b.consumption - b.wastage + b.other_in - b.other_out - b.sales) - closing) < 0.02;
-            const negative = closing < -0.001;
-            if (negative) negativeDays++;
+            const inFlow = round2(b.collection + b.purchase + b.production + b.other_in);
+            const outFlow = round2(b.sales + b.consumption + b.wastage + b.other_out);
+            const net = round2(opening + inFlow - outFlow);
+            // Deduct only what the stock actually has: sales take yesterday's
+            // closing first, the excess takes today's in-flows; the rest is the
+            // day's shortfall. The closing never goes below zero.
+            const shortfall = net < 0 ? round2(-net) : 0;
+            const closing = net < 0 ? 0 : net;
+            const identityOkHere = Math.abs(round2(opening + inFlow - outFlow + shortfall) - closing) < 0.02;
+            const short = shortfall > 0.001;
+            if (short) { shortfallDays++; shortfallTotal = round2(shortfallTotal + shortfall); }
             if (!identityOkHere) identityOk = false;
             rows.push({
                 date: day, opening, collection: b.collection, purchase: b.purchase,
                 production: b.production, production_consumption: b.consumption,
                 wastage: b.wastage, other_in: b.other_in, other_out: b.other_out,
-                sales: b.sales, closing,
-                has_data: byDate.has(day), is_negative_stock: negative, identity_ok: identityOkHere
+                sales: b.sales, closing, shortfall,
+                has_data: byDate.has(day), is_shortfall: short, identity_ok: identityOkHere
             });
             balance = closing;
         }
@@ -1175,7 +1228,8 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
             product_id: p.product_id, product_name: p.product_name, unit: p.unit,
             category: p.category, initial_stock: initial,
             first_opening: firstOpening, last_closing: balance,
-            negative_days: rows.filter(r => r.is_negative_stock).length,
+            shortfall: round2(rows.reduce((s, r) => s + (Number(r.shortfall) || 0), 0)),
+            shortfall_days: rows.filter(r => r.is_shortfall).length,
             rows
         });
     }
@@ -1183,7 +1237,8 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
     return {
         from_date: from, to_date: to, days: days.length,
         truncated: days.length >= 4000,
-        products, negative_days: negativeDays, identity_ok: identityOk
+        products, shortfall_days: shortfallDays, shortfall_total: round2(shortfallTotal),
+        identity_ok: identityOk
     };
 }
 
@@ -1192,6 +1247,6 @@ module.exports = {
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
     getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,
-    getManagementDashboard, getDailyClosing, getDailyStockStatement,
+    getManagementDashboard, getDailyClosing, getDailyStockStatement, stockOpeningBefore,
     getSaleTraceability, getBatchTraceability, traceBatchChain
 };

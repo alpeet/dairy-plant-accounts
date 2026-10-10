@@ -652,29 +652,65 @@ function ssOpenSource(referenceType, referenceId) {
     if (typeof showToast === 'function') showToast('No linked document for this movement', 'info');
 }
 
+/**
+ * Collapse the chained daily statement into the Excel-style period flow row —
+ * the SAME engine, never a second calculation. `Remaining` is floored at zero:
+ * sales deduct from yesterday's closing first, and anything beyond that comes
+ * out of the period's in-flows — whatever neither covers is the row's
+ * `shortfall`. The row then satisfies, exactly:
+ *
+ *   Opening − Sales + In − Out + Shortfall = Closing
+ */
+function _ssFlowRow(p) {
+    const rs = p.rows || [];
+    const sum = k => round2ui(rs.reduce((s, r) => s + (Number(r[k]) || 0), 0));
+    const opening = rs.length ? round2ui(rs[0].opening) : 0;
+    const sales = sum('sales');
+    const f = {
+        opening,
+        sales_issues: sales,
+        remaining: Math.max(0, round2ui(opening - sales)),
+        collection_purchase: round2ui(sum('collection') + sum('purchase')),
+        production: sum('production'),
+        production_consumption: sum('production_consumption'),
+        wastage: sum('wastage'),
+        other_in: sum('other_in'),
+        other_out: sum('other_out'),
+        shortfall: sum('shortfall'),
+        closing: rs.length ? round2ui(rs[rs.length - 1].closing) : 0
+    };
+    f.identity_ok = Math.abs(round2ui(
+        f.opening - f.sales_issues + f.collection_purchase + f.production
+        - f.production_consumption - f.wastage + f.other_in - f.other_out + f.shortfall
+    ) - f.closing) < 0.02;
+    return f;
+}
+
 function _ssFlowView(products, periodLabel, singleDay) {
     const L = ssFlowLabels(singleDay);
     const shown = products.filter(p => {
-        const f = p.flow || {};
         if ((p.rows || []).length) return true;
-        return round2ui(f.opening || 0) !== 0 || round2ui(f.closing || 0) !== 0;
+        const f = _ssFlowRow(p);
+        return round2ui(f.opening) !== 0 || round2ui(f.closing) !== 0;
     });
-    const allOk = shown.every(p => (p.flow || {}).identity_ok !== false);
+    const rowsData = shown.map(p => ({ p, f: _ssFlowRow(p) }));
+    const showShortfall = rowsData.some(({ f }) => Math.abs(f.shortfall || 0) >= 0.005);
+    const allOk = rowsData.every(({ f }) => f.identity_ok !== false);
+    const colCount = (showShortfall ? 12 : 11);
 
     // Unit subtotals — never mix litres with kilograms in one figure.
     const byUnit = new Map();
-    for (const p of shown) {
+    for (const { p, f } of rowsData) {
         const u = p.unit || '—';
-        if (!byUnit.has(u)) byUnit.set(u, { opening: 0, sales: 0, remaining: 0, collection: 0, production: 0, consumption: 0, wastage: 0, otherIn: 0, otherOut: 0, closing: 0 });
-        const t = byUnit.get(u), f = p.flow || {};
+        if (!byUnit.has(u)) byUnit.set(u, { opening: 0, sales: 0, remaining: 0, collection: 0, production: 0, consumption: 0, wastage: 0, otherIn: 0, otherOut: 0, shortfall: 0, closing: 0 });
+        const t = byUnit.get(u);
         t.opening += f.opening || 0; t.sales += f.sales_issues || 0; t.remaining += f.remaining || 0;
         t.collection += f.collection_purchase || 0; t.production += f.production || 0;
         t.consumption += f.production_consumption || 0; t.wastage += f.wastage || 0;
-        t.otherIn += f.other_in || 0; t.otherOut += f.other_out || 0; t.closing += f.closing || 0;
+        t.otherIn += f.other_in || 0; t.otherOut += f.other_out || 0; t.shortfall += f.shortfall || 0; t.closing += f.closing || 0;
     }
 
-    const rowsHtml = shown.map(p => {
-        const f = p.flow || {};
+    const rowsHtml = rowsData.map(({ p, f }) => {
         return `<tr>
             <td><a href="#" onclick="event.preventDefault();ssDrillProduct(${p.product_id})" title="Show this product's movement ledger"><strong>${escapeHtml(p.product_name)}</strong></a>
                 <div style="font-size:11px;color:var(--text-light)">${escapeHtml(p.category || p.inventory_category || '')} · ${escapeHtml(p.unit || '')}</div></td>
@@ -687,9 +723,10 @@ function _ssFlowView(products, periodLabel, singleDay) {
             ${ssQtyCell(f.wastage, 'out')}
             ${ssQtyCell(f.other_in, 'in')}
             ${ssQtyCell(f.other_out, 'out')}
+            ${showShortfall ? ssQtyCell(-(f.shortfall || 0), 'out') : ''}
             <td class="text-right" style="font-weight:700">${formatNumber(round2ui(f.closing || 0))}</td>
         </tr>`;
-    }).join('') || `<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No stock movement in this period</td></tr>`;
+    }).join('') || `<tr><td colspan="${colCount}" style="text-align:center;padding:30px;color:var(--text-light)">No stock movement in this period</td></tr>`;
 
     const unitFoot = [...byUnit.entries()].map(([u, t]) => `<tr style="background:var(--bg-light,#f7f7f7);font-weight:600">
         <td>Subtotal · ${escapeHtml(u)}</td>
@@ -702,12 +739,13 @@ function _ssFlowView(products, periodLabel, singleDay) {
         <td class="text-right" style="color:var(--danger)">${t.wastage ? '- ' + formatNumber(round2ui(t.wastage)) : '—'}</td>
         <td class="text-right" style="color:var(--success)">${t.otherIn ? '+ ' + formatNumber(round2ui(t.otherIn)) : '—'}</td>
         <td class="text-right" style="color:var(--danger)">${t.otherOut ? '- ' + formatNumber(round2ui(t.otherOut)) : '—'}</td>
+        ${showShortfall ? `<td class="text-right" style="color:var(--danger)">${t.shortfall ? '- ' + formatNumber(round2ui(t.shortfall)) : '—'}</td>` : ''}
         <td class="text-right">${formatNumber(round2ui(t.closing))}</td>
     </tr>`).join('');
 
     return `
     <div style="font-size:13px;color:var(--text-light);margin-bottom:8px">
-        ${escapeHtml(periodLabel)} — read down each row: <strong>${escapeHtml(L.opening)}</strong> → <strong>${escapeHtml(L.sales)}</strong> → <strong>${escapeHtml(L.remaining)}</strong> → <strong>${escapeHtml(L.collection)}</strong> → <strong>${escapeHtml(L.production)}</strong> → <strong>Production Consumption</strong> → <strong>Wastage</strong> → <strong>Other IN</strong> → <strong>Other OUT</strong> → <strong>${escapeHtml(L.closing)}</strong>. Each closing carries into the next day automatically.
+        ${escapeHtml(periodLabel)} — read down each row: <strong>${escapeHtml(L.opening)}</strong> → <strong>${escapeHtml(L.sales)}</strong> → <strong>${escapeHtml(L.remaining)}</strong> → <strong>${escapeHtml(L.collection)}</strong> → <strong>${escapeHtml(L.production)}</strong> → <strong>Production Consumption</strong> → <strong>Wastage</strong> → <strong>Other IN</strong> → <strong>Other OUT</strong>${showShortfall ? ' → <strong>Shortfall</strong>' : ''} → <strong>${escapeHtml(L.closing)}</strong>. Each closing carries into the next day automatically. Sales beyond yesterday's closing come out of today's in-flows; anything stock cannot cover shows in red as <strong>Shortfall</strong> and the closing never goes below zero. <em>Remaining</em> is what is physically on hand after yesterday's closing absorbs today's sales (it never shows a negative).
     </div>
     <div class="table-container">
         <table>
@@ -722,6 +760,7 @@ function _ssFlowView(products, periodLabel, singleDay) {
                 <th class="text-right">Wastage</th>
                 <th class="text-right">Other IN</th>
                 <th class="text-right">Other OUT</th>
+                ${showShortfall ? '<th class="text-right" style="color:var(--danger)">Shortfall</th>' : ''}
                 <th class="text-right">${escapeHtml(L.closing)}</th>
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
@@ -729,7 +768,7 @@ function _ssFlowView(products, periodLabel, singleDay) {
         </table>
     </div>
     <div style="margin-top:10px;font-size:13px;padding:8px 12px;border-radius:6px;background:${allOk ? 'var(--success-light,#e8f6ee)' : 'var(--warning-light,#fff6e5)'};color:${allOk ? 'var(--success)' : 'var(--warning)'}">
-        ${allOk ? '✓ Every product reconciles: Opening − Sales + Collection/Purchase + Production − Production Consumption − Wastage + Other IN − Other OUT = Closing.' : '⚠ At least one product does not reconcile — check the Detailed Ledger for that product.'}
+        ${allOk ? `✓ Every product reconciles: Opening − Sales + Collection/Purchase + Production − Production Consumption − Wastage + Other IN − Other OUT${showShortfall ? ' + Shortfall' : ''} = Closing.` : '⚠ At least one product does not reconcile — check the Detailed Ledger for that product.'}
     </div>`;
 }
 
@@ -777,22 +816,24 @@ function _ssMovementTableModel(daily, valuation) {
             closing: rs.length ? rs[rs.length - 1].closing : 0,
             rate: Number(m.rate) || 0,
             reorder: Number(m.reorder_level) || 0,
-            negative_days: p.negative_days || 0
+            shortfall: round2ui(sum('shortfall')),
+            shortfallDays: p.shortfall_days || 0
         };
     });
 
     const tot = rows.reduce((s, r) => {
-        for (const k of ['opening', 'purchase', 'production', 'used', 'sales', 'otherOut', 'otherIn', 'closing']) s[k] += r[k];
+        for (const k of ['opening', 'purchase', 'production', 'used', 'sales', 'otherOut', 'otherIn', 'shortfall', 'closing']) s[k] += r[k];
         s.value += r.closing * r.rate;
         return s;
-    }, { opening: 0, purchase: 0, production: 0, used: 0, sales: 0, otherOut: 0, otherIn: 0, closing: 0, value: 0 });
+    }, { opening: 0, purchase: 0, production: 0, used: 0, sales: 0, otherOut: 0, otherIn: 0, shortfall: 0, closing: 0, value: 0 });
 
     return {
         rows, tot,
         showProduction: rows.some(r => nz(r.production) || nz(r.used)),
         showOther: rows.some(r => nz(r.otherOut) || nz(r.otherIn)),
+        showShortfall: rows.some(r => nz(r.shortfall)),
         lowCount: rows.filter(r => r.closing <= r.reorder).length,
-        negativeDays: (daily && daily.negative_days) || 0
+        shortfallDays: (daily && daily.shortfall_days) || 0
     };
 }
 
@@ -810,8 +851,8 @@ function _ssMovementView(daily, valuation, periodLabel) {
         <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">💰 Total Closing Value</span><span class="value" style="font-size:22px">${formatCurrency(round2ui(m.tot.value))}</span></div>
         <div class="summary-card card-warning" style="margin:0;padding:12px"><span class="label">⚠️ Low Stock Items</span><span class="value" style="font-size:22px">${m.lowCount}</span></div>
     </div>
-    ${m.negativeDays > 0 ? `<div style="background:#fdecea;border-left:4px solid #c0392b;padding:10px 14px;border-radius:6px;font-size:12px;margin-bottom:10px;color:#c0392b">
-        ⚠ <strong>${m.negativeDays}</strong> product-day(s) close negative in this period. Sales are never blocked, but a negative closing means stock left that was never recorded as received — open <em>Day by Day</em> to see which days, then add the missing purchase/collection or opening balance.
+    ${m.shortfallDays > 0 ? `<div style="background:#fdecea;border-left:4px solid #c0392b;padding:10px 14px;border-radius:6px;font-size:12px;margin-bottom:10px;color:#c0392b">
+        ⚠ <strong>${m.shortfallDays}</strong> product-day(s) closed short in this period — stock was sold beyond what the books recorded as received. Sales are never blocked: the closing stays at zero and the uncovered amount shows in red as <em>Shortfall</em>. Open <em>Day by Day</em> to see which days, then add the missing purchase/collection or opening balance.
     </div>` : ''}
     <div class="table-container">
         <table>
@@ -823,6 +864,7 @@ function _ssMovementView(daily, valuation, periodLabel) {
                 ${m.showProduction ? '<th class="text-right">Production In</th><th class="text-right">Used in Mixing</th>' : ''}
                 <th class="text-right">Sales Out</th>
                 ${m.showOther ? '<th class="text-right">Other IN</th><th class="text-right">Other OUT</th>' : ''}
+                ${m.showShortfall ? '<th class="text-right" style="color:var(--danger)">Shortfall</th>' : ''}
                 <th class="text-right">Closing Stock</th>
                 <th class="text-right">Rate (Rs)</th>
                 <th class="text-right">Closing Value</th>
@@ -830,16 +872,17 @@ function _ssMovementView(daily, valuation, periodLabel) {
             <tbody>
             ${m.rows.map(r => `
                 <tr>
-                    <td><a href="#" onclick="event.preventDefault();ssDrillProduct(${r.product_id})" title="Open this product's movement ledger">${escapeHtml(r.name)}</a>${r.negative_days ? ` <span class="badge badge-danger" title="${r.negative_days} day(s) close negative">${r.negative_days}⚠</span>` : ''}</td>
+                    <td><a href="#" onclick="event.preventDefault();ssDrillProduct(${r.product_id})" title="Open this product's movement ledger">${escapeHtml(r.name)}</a>${r.shortfallDays ? ` <span class="badge badge-danger" title="${r.shortfallDays} day(s) closed short — see the Shortfall column">${r.shortfallDays}⚠</span>` : ''}</td>
                     <td>${escapeHtml(r.unit)}</td>
                     ${cell(r.opening)}
                     ${cell(r.purchase)}
                     ${m.showProduction ? cell(r.production) + cell(r.used) : ''}
                     ${cell(r.sales)}
                     ${m.showOther ? cell(r.otherIn) + cell(r.otherOut) : ''}
-                    <td class="text-right" style="font-weight:700;${r.closing < -0.001 ? 'color:var(--danger)' : ''}">${q(r.closing)}</td>
+                    ${m.showShortfall ? `<td class="text-right" style="${nz(r.shortfall) ? 'color:var(--danger);font-weight:600' : 'color:var(--text-light)'}">${nz(r.shortfall) ? '- ' + q(r.shortfall) : '—'}</td>` : ''}
+                    <td class="text-right" style="font-weight:700">${q(r.closing)}</td>
                     <td class="text-right">${formatCurrency(r.rate)}</td>
-                    <td class="text-right" style="font-weight:600;${r.closing * r.rate < -0.001 ? 'color:var(--danger)' : ''}">${formatCurrency(round2ui(r.closing * r.rate))}</td>
+                    <td class="text-right" style="font-weight:600">${formatCurrency(round2ui(r.closing * r.rate))}</td>
                 </tr>`).join('')}
             </tbody>
             <tfoot><tr style="font-weight:700">
@@ -849,6 +892,7 @@ function _ssMovementView(daily, valuation, periodLabel) {
                 ${m.showProduction ? `<td class="text-right">${q(m.tot.production)}</td><td class="text-right">${q(m.tot.used)}</td>` : ''}
                 <td class="text-right">${q(m.tot.sales)}</td>
                 ${m.showOther ? `<td class="text-right">${q(m.tot.otherIn)}</td><td class="text-right">${q(m.tot.otherOut)}</td>` : ''}
+                ${m.showShortfall ? `<td class="text-right" style="${nz(m.tot.shortfall) ? 'color:var(--danger)' : ''}">${nz(m.tot.shortfall) ? '- ' + q(m.tot.shortfall) : '—'}</td>` : ''}
                 <td class="text-right">${q(m.tot.closing)}</td>
                 <td></td>
                 <td class="text-right">${formatCurrency(round2ui(m.tot.value))}</td>
@@ -857,7 +901,7 @@ function _ssMovementView(daily, valuation, periodLabel) {
     </div>
     <div style="margin-top:10px;font-size:12px;color:var(--text-light);line-height:1.6">
         📅 Period: <strong>${escapeHtml(periodLabel)}</strong> — change the From/To dates above; the opening carries forward automatically.<br>
-        Opening Stock = the balance carried in from before the From Date. Closing = Opening + Purchases In [+ Production In − Used in Mixing] − Sales Out [+ Other IN − Other OUT], chained day by day — open <em>Day by Day</em> for the per-date table.
+        Opening Stock = the balance carried in from before the From Date (never below zero). Closing = Opening + Purchases In [+ Production In − Used in Mixing] − Sales Out [+ Other IN − Other OUT] + Shortfall, chained day by day — a day deducts only what the stock actually has (sales take yesterday's closing first, the excess takes today's purchase) and whatever neither covers is the red Shortfall. Open <em>Day by Day</em> for the per-date table.
     </div>`;
 }
 
@@ -882,11 +926,12 @@ function _ssDailyView(daily, periodLabel) {
         const anyPur = rs.some(r => nz(r.purchase));
         const anyProd = rs.some(r => nz(r.production) || nz(r.production_consumption));
         const anyOther = rs.some(r => nz(r.wastage) || nz(r.other_in) || nz(r.other_out));
+        const anyShort = rs.some(r => nz(r.shortfall));
         const capped = rs.slice(0, MAX_ROWS);
         return `
         <h3 style="margin:18px 0 8px;font-size:15px">${escapeHtml(p.product_name)}
             <span style="color:var(--text-light);font-weight:400;font-size:12px">
-                (${escapeHtml(p.unit || '')}) — ${rs.length} day(s), opening ${q(rs.length ? rs[0].opening : 0)} → closing ${q(p.last_closing)}${p.negative_days ? ` · <span style="color:var(--danger)">${p.negative_days} negative day(s)</span>` : ''}
+                (${escapeHtml(p.unit || '')}) — ${rs.length} day(s), opening ${q(rs.length ? rs[0].opening : 0)} → closing ${q(p.last_closing)}${p.shortfall_days ? ` · <span style="color:var(--danger)">${p.shortfall_days} shortfall day(s)</span>` : ''}
             </span>
         </h3>
         <div class="table-container">
@@ -899,13 +944,14 @@ function _ssDailyView(daily, periodLabel) {
                     ${anyProd ? '<th class="text-right">Production</th><th class="text-right">Used in Mixing</th>' : ''}
                     <th class="text-right">Sales</th>
                     ${anyOther ? '<th class="text-right">Wastage</th><th class="text-right">Other IN</th><th class="text-right">Other OUT</th>' : ''}
+                    ${anyShort ? '<th class="text-right" style="color:var(--danger)">Shortfall</th>' : ''}
                     <th class="text-right">Closing</th>
                 </tr></thead>
                 <tbody>
                 ${capped.map(r => {
                     const dash = '<span style="color:var(--text-light)">—</span>';
                     const cell = v => `<td class="text-right">${r.has_data ? q(v) : dash}</td>`;
-                    const neg = r.closing < -0.001;
+                    const shortCell = `<td class="text-right" style="${nz(r.shortfall) ? 'color:var(--danger);font-weight:600' : 'color:var(--text-light)'}">${r.has_data ? (nz(r.shortfall) ? '- ' + q(r.shortfall) : '—') : dash}</td>`;
                     return `<tr${r.has_data ? '' : ' style="opacity:.55;font-style:italic"'}>
                         <td>${formatDate(r.date)}</td>
                         <td class="text-right">${q(r.opening)}</td>
@@ -914,7 +960,8 @@ function _ssDailyView(daily, periodLabel) {
                         ${anyProd ? cell(r.production) + cell(r.production_consumption) : ''}
                         ${cell(r.sales)}
                         ${anyOther ? cell(r.wastage) + cell(r.other_in) + cell(r.other_out) : ''}
-                        <td class="text-right" style="font-weight:700;${neg ? 'color:var(--danger)' : ''}">${q(r.closing)}${neg ? ' ⚠' : ''}</td>
+                        ${anyShort ? shortCell : ''}
+                        <td class="text-right" style="font-weight:700">${q(r.closing)}</td>
                     </tr>`;
                 }).join('')}
                 </tbody>
@@ -934,7 +981,7 @@ function _ssDailyView(daily, periodLabel) {
         </div>
         <div class="form-group" style="flex:1"><label>&nbsp;</label>
             <div style="font-size:12px;color:var(--text-light);padding-top:6px">
-                ${escapeHtml(periodLabel)} — every day in the range gets a row. Closing(N) = Opening(N) + Collection + Purchase − Sales (+ Production − Used in Mixing ± other flows); Opening(N+1) = Closing(N). Faded rows are days with no records: the closing simply carries forward.
+                ${escapeHtml(periodLabel)} — every day in the range gets a row. Closing(N) = Opening(N) + Collection + Purchase − Sales (+ Production − Used in Mixing ± other flows), never below zero: sales deduct from yesterday's closing first and the excess from today's purchase, so whatever neither covers shows in red as <strong>Shortfall</strong>. Opening(N+1) = Closing(N). Faded rows are days with no records: the closing simply carries forward.
             </div>
         </div>
     </div>
@@ -964,7 +1011,7 @@ async function showStockStatement() {
     ]);
     const data = valRes.success ? valRes.data : { items: [], total_value: 0, total_products: 0, total_quantity: 0, categories: [] };
     const ledger = (ledgerRes.success && ledgerRes.data) ? ledgerRes.data : { products: [] };
-    const daily = (dailyRes && dailyRes.success && dailyRes.data) ? dailyRes.data : { products: [], negative_days: 0 };
+    const daily = (dailyRes && dailyRes.success && dailyRes.data) ? dailyRes.data : { products: [], shortfall_days: 0, shortfall_total: 0 };
     _finLastData.stockStatement = data;
     _finLastData.stockLedger = ledger;
     _finLastData.stockDaily = daily;
@@ -973,9 +1020,23 @@ async function showStockStatement() {
     const periodLabel = `${_ssState.from ? formatDate(_ssState.from) : 'Start'} → ${_ssState.to ? formatDate(_ssState.to) : 'Today'}`;
 
     // Period totals (mixed units — informational, same basis as the old total).
+    // The daily chain is the authority for Opening/Closing/Shortfall (it never
+    // presents a negative); the raw ledger supplies the movement buckets. A
+    // product the daily statement skips (idle — nothing to say) falls back to a
+    // floored raw figure, so no view can present a negative closing.
+    const dailyByPid = new Map(((daily && daily.products) || []).map(d => [String(d.product_id), d]));
+    const summaryFigures = (p, b) => {
+        const d = dailyByPid.get(String(p.product_id));
+        return {
+            opening: d ? d.first_opening : Math.max(0, round2ui(b.opening || 0)),
+            closing: d ? d.last_closing : Math.max(0, round2ui(p.closing_qty || 0)),
+            shortfall: d ? (d.shortfall || 0) : 0
+        };
+    };
     const tot = products.reduce((s, p) => {
         const b = p.summary || {};
-        s.opening += b.opening || 0; s.in += b.total_in || 0; s.out += b.total_out || 0; s.closing += p.closing_qty || 0;
+        const f = summaryFigures(p, b);
+        s.opening += f.opening; s.in += b.total_in || 0; s.out += b.total_out || 0; s.closing += f.closing;
         return s;
     }, { opening: 0, in: 0, out: 0, closing: 0 });
 
@@ -987,7 +1048,7 @@ async function showStockStatement() {
     } else if (_ssState.view === 'daily') {
         viewHtml = _ssDailyView(daily, periodLabel);
     } else if (_ssState.view === 'flow') {
-        viewHtml = _ssFlowView(products, periodLabel, singleDay);
+        viewHtml = _ssFlowView((daily.products || []).filter(_ssMatches), periodLabel, singleDay);
     } else if (_ssState.view === 'summary') {
         viewHtml = `
         <div class="summary-cards" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
@@ -1009,16 +1070,18 @@ async function showStockStatement() {
                     <th class="text-right">Returns</th>
                     <th class="text-right">Wastage</th>
                     <th class="text-right">Adjustment/Other</th>
+                    <th class="text-right" style="color:var(--danger)">Shortfall</th>
                     <th class="text-right">Closing</th>
                 </tr></thead>
                 <tbody>
                 ${products.map(p => {
                     const b = p.summary || {};
+                    const f = summaryFigures(p, b);
                     const cell = (v) => `<td class="text-right">${v ? formatNumber(v) : '0'}</td>`;
                     return `<tr>
                         <td><strong>${escapeHtml(p.product_name)}</strong> <span style="color:var(--text-light);font-size:11px">${escapeHtml(p.category || '')}</span></td>
                         <td>${escapeHtml(p.unit || '')}</td>
-                        ${cell(b.opening)}
+                        ${cell(f.opening)}
                         ${cell(round2ui((b.collection_in || 0) + (b.purchase_in || 0)))}
                         ${cell(b.production_in)}
                         ${cell(b.production_out)}
@@ -1026,9 +1089,10 @@ async function showStockStatement() {
                         ${cell(round2ui((b.returns_in || 0) + (b.returns_out || 0)))}
                         ${cell(b.wastage_out)}
                         ${cell(round2ui((b.adjustment_in || 0) + (b.adjustment_out || 0) + (b.other_in || 0) + (b.other_out || 0)))}
-                        <td class="text-right" style="font-weight:700">${formatNumber(p.closing_qty)}</td>
+                        <td class="text-right" style="${f.shortfall ? 'color:var(--danger);font-weight:600' : 'color:var(--text-light)'}">${f.shortfall ? '- ' + formatNumber(round2ui(f.shortfall)) : '—'}</td>
+                        <td class="text-right" style="font-weight:700">${formatNumber(round2ui(f.closing))}</td>
                     </tr>`;
-                }).join('') || '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text-light)">No products</td></tr>'}
+                }).join('') || '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">No products</td></tr>'}
                 </tbody>
             </table>
         </div>`;
@@ -1198,6 +1262,7 @@ async function printStockStatementReport() {
                 ${m.showProduction ? `<th style="${th}">Production In</th><th style="${th}">Used in Mixing</th>` : ''}
                 <th style="${th}">Sales Out</th>
                 ${m.showOther ? `<th style="${th}">Other IN</th><th style="${th}">Other OUT</th>` : ''}
+                ${m.showShortfall ? `<th style="${th}">Shortfall</th>` : ''}
                 <th style="${th}">Closing Stock</th>
                 <th style="${th}">Rate (Rs)</th>
                 <th style="${th}">Closing Value</th>
@@ -1212,9 +1277,10 @@ async function printStockStatementReport() {
                     ${m.showProduction ? `<td style="${td}">${q(r.production)}</td><td style="${td}">${q(r.used)}</td>` : ''}
                     <td style="${td}">${q(r.sales)}</td>
                     ${m.showOther ? `<td style="${td}">${q(r.otherIn)}</td><td style="${td}">${q(r.otherOut)}</td>` : ''}
-                    <td style="${td};font-weight:700;${r.closing < -0.001 ? 'color:#c0392b;' : ''}">${q(r.closing)}</td>
+                    ${m.showShortfall ? `<td style="${td};${nz(r.shortfall) ? 'color:#c0392b;font-weight:600' : ''}">${nz(r.shortfall) ? '-' + q(r.shortfall) : '—'}</td>` : ''}
+                    <td style="${td};font-weight:700">${q(r.closing)}</td>
                     <td style="${td}">${formatNumber(r.rate)}</td>
-                    <td style="${td};font-weight:600;${r.closing * r.rate < -0.001 ? 'color:#c0392b;' : ''}">${formatNumber(round2ui(r.closing * r.rate))}</td>
+                    <td style="${td};font-weight:600">${formatNumber(round2ui(r.closing * r.rate))}</td>
                 </tr>`).join('')}
             </tbody>
             <tfoot><tr>
@@ -1224,14 +1290,15 @@ async function printStockStatementReport() {
                 ${m.showProduction ? `<td style="${tf}">${q(m.tot.production)}</td><td style="${tf}">${q(m.tot.used)}</td>` : ''}
                 <td style="${tf}">${q(m.tot.sales)}</td>
                 ${m.showOther ? `<td style="${tf}">${q(m.tot.otherIn)}</td><td style="${tf}">${q(m.tot.otherOut)}</td>` : ''}
+                ${m.showShortfall ? `<td style="${tf};${nz(m.tot.shortfall) ? 'color:#c0392b' : ''}">${nz(m.tot.shortfall) ? '-' + q(m.tot.shortfall) : '—'}</td>` : ''}
                 <td style="${tf}">${q(m.tot.closing)}</td>
                 <td style="${tf}"></td>
                 <td style="${tf}">${formatNumber(round2ui(m.tot.value))}</td>
             </tr></tfoot>
         </table>
         <div style="font-size:8pt;color:#666;margin-top:10px;line-height:1.6">
-            ${m.negativeDays > 0 ? `<span style="color:#c0392b">⚠ ${m.negativeDays} product-day(s) close negative in this period — stock left that was never recorded as received.</span><br>` : ''}
-            Opening Stock = master opening + all in − all out BEFORE the From Date. Closing = Opening + Purchases In [+ Production In − Used in Mixing] − Sales Out, chained day by day (each day's Opening = the previous day's Closing).
+            ${m.shortfallDays > 0 ? `<span style="color:#c0392b">⚠ ${m.shortfallDays} product-day(s) closed short — stock sold beyond what the books recorded as received; the uncovered amount is the red Shortfall column.</span><br>` : ''}
+            Opening Stock = master opening + all in − all out BEFORE the From Date (never below zero). Closing = Opening + Purchases In [+ Production In − Used in Mixing] − Sales Out${m.showShortfall ? ' + Shortfall' : ''}, chained day by day (each day's Opening = the previous day's Closing): sales deduct from yesterday's closing first, the excess from today's purchase.
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:9pt;color:#444;">
             <div>Printed: ${new Date().toLocaleString('en-IN')}</div>

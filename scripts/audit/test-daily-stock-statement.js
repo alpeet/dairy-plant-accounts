@@ -4,9 +4,16 @@
  * ===============================================
  * Implements the acceptance test file for the daily running-balance statement:
  *
- *   Closing(N)   = Opening(N) + Collection + Purchase − Sales
+ *   Closing(N)   = max(0, Opening(N) + Collection + Purchase − Sales)
+ *   Shortfall(N) = max(0, −(Opening(N) + Collection + Purchase − Sales))
  *   Opening(N+1) = Closing(N)
- *   opening(first day) = initial stock + Σ(collection + purchase − sales) before the range
+ *   opening(first day) = initial stock + Σ(collection + purchase − sales) before the range,
+ *                        replayed with the same floor rule
+ *
+ * A day deducts only what the stock actually has: sales take yesterday's
+ * closing first, the excess takes today's purchase — whatever neither covers
+ * is reported as a red Shortfall figure instead of a negative closing
+ * (operator's rule, 2026-10).
  *
  * NOTE ON DATES: the spec's fixtures are written in AD (2026/10/01 … 2026/10/06).
  * This database stores Bikram Sambat date strings (AGENTS.md: never parse them
@@ -180,23 +187,70 @@ ok(rows.length === 3, '3 rows', rows.length);
 ok(rows.every(x => near(x.opening, INITIAL) && near(x.closing, INITIAL)),
     'opening = closing = initial stock 100 on every day', rows.map(x => [x.opening, x.closing]));
 
-// ── TC-10 — negative stock: value returned + warning flag ────────────────
-console.log('\n── TC-10 negative stock (allow + warn) ──');
+// ── TC-10 — over-sales: closing capped at zero, shortfall reported ───────
+console.log('\n── TC-10 over-sales: cap closing at 0 + report shortfall ──');
 sell(D[4], 2000);   // way beyond available stock
 r = stmt(D[0], D[5]);
 rows = rowsOf(r);
-ok(r.negative_days > 0, 'statement reports negative days', r.negative_days);
-ok(rows[4].is_negative_stock === true && rows[4].closing < 0, '10/05 flagged is_negative_stock with a negative value',
-    { close: rows[4].closing, flag: rows[4].is_negative_stock });
-ok(rows[5].is_negative_stock === true && near(rows[5].closing, rows[4].closing),
-    '10/06 carries the negative forward and is also flagged', rows[5].closing);
-ok(rows[0].is_negative_stock === false, 'earlier days are not flagged');
+ok(r.shortfall_days > 0 && r.shortfall_total > 0, 'statement reports shortfall days + total',
+    { days: r.shortfall_days, total: r.shortfall_total });
+ok(rows[4].is_shortfall === true && near(rows[4].closing, 0) && rows[4].closing >= 0,
+    '10/05 closes at 0 (never negative) and is flagged as a shortfall day',
+    { close: rows[4].closing, flag: rows[4].is_shortfall });
+ok(near(rows[4].shortfall, 900), '10/05 shortfall = the 900 the stock could not cover', rows[4].shortfall);
+ok(rows[4].identity_ok !== false
+    && near(rows[4].opening + rows[4].collection + rows[4].purchase - rows[4].sales + rows[4].shortfall, rows[4].closing),
+    '10/05 identity: opening + in − out + shortfall = closing',
+    { open: rows[4].opening, in: rows[4].collection + rows[4].purchase, out: rows[4].sales, short: rows[4].shortfall, close: rows[4].closing });
+ok(rows[5].is_shortfall === false && near(rows[5].opening, 0) && near(rows[5].closing, 0),
+    '10/06 carries the zero forward (no negative opening anywhere)',
+    rows[5] && { open: rows[5].opening, close: rows[5].closing });
+ok(rows[0].is_shortfall === false, 'earlier days are not flagged');
+ok(rows.every(x => x.closing >= 0), 'no closing anywhere in the statement is negative',
+    rows.map(x => x.closing));
+
+// ── TC-11 — the operator's cover rule ────────────────────────────────────
+// Sales deduct from yesterday's closing first; the excess deducts from
+// today's purchase; anything still uncovered becomes the day's shortfall —
+// and a later range opens at the floored chain, never at a negative.
+console.log('\n── TC-11 sales deduct from yesterday\'s closing, excess from today\'s purchase ──');
+db.prepare('DELETE FROM stock_movements WHERE product_id = ? AND type = ? AND date = ? AND outward_qty = 2000').run(pid, 'sale', D[4]);
+ok(near(rowsOf(stmt(D[0], D[5]))[5].closing, 1100), 'chain restored to 1100 after removing the over-sale');
+
+// A. sales exceed yesterday's closing by 100 → today's purchase (200) covers it.
+purchase(D[5], 200);
+sell(D[5], 1200);
+rows = rowsOf(stmt(D[5], D[5]));
+ok(rows.length === 1 && near(rows[0].opening, 1100) && near(rows[0].sales, 1200)
+    && near(rows[0].purchase, 200) && near(rows[0].closing, 100) && near(rows[0].shortfall, 0)
+    && rows[0].is_shortfall === false,
+    '1100 − 1200 + 200 = 100: the 100 beyond yesterday\'s closing comes out of today\'s purchase, no shortfall',
+    rows[0] && { open: rows[0].opening, sal: rows[0].sales, pur: rows[0].purchase, close: rows[0].closing, short: rows[0].shortfall });
+
+// B. purchase cannot cover the excess → the uncovered part is the shortfall.
+db.prepare('DELETE FROM stock_movements WHERE product_id = ? AND type = ? AND date = ? AND outward_qty = 1200').run(pid, 'sale', D[5]);
+sell(D[5], 1500);
+rows = rowsOf(stmt(D[5], D[5]));
+ok(rows.length === 1 && near(rows[0].opening, 1100) && near(rows[0].closing, 0)
+    && near(rows[0].shortfall, 200) && rows[0].is_shortfall === true,
+    '1100 − 1500 + 200 < 0 → closing 0, shortfall 200 (the part neither stock nor purchase covered)',
+    rows[0] && { close: rows[0].closing, short: rows[0].shortfall });
+
+// C. a later range opens at the floored chain — never at a negative balance.
+// (A product with no movement at all in the range is hidden by the
+// presentation filter, so give the range one entry to observe the opening.)
+collect('2083-07-02', 50);
+rows = rowsOf(stmt('2083-07-01', '2083-07-03'));
+ok(rows.length === 3 && near(rows[0].opening, 0) && rows[0].opening >= 0
+    && near(rows[1].opening, 0) && near(rows[1].collection, 50) && near(rows[1].closing, 50),
+    'a range after the short day opens at 0 (floored chain), not at −200',
+    rows.map(x => [x.date, x.opening, x.closing]));
 
 db.close();
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 if (fail) {
-    console.log('❌ DAILY STOCK STATEMENT — TC-01…TC-10 not fully satisfied');
+    console.log('❌ DAILY STOCK STATEMENT — TC-01…TC-11 not fully satisfied');
     process.exit(1);
 }
-console.log('✅ DAILY STOCK STATEMENT — TC-01…TC-10 all passed');
+console.log('✅ DAILY STOCK STATEMENT — TC-01…TC-11 all passed');

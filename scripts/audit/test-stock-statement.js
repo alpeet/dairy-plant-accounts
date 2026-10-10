@@ -265,7 +265,7 @@ console.log('\nH. req 17 — Excel export reconciles with the application');
 
     const stmt = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Statement'], { header: 1 });
     ok(JSON.stringify(stmt[0]) === JSON.stringify(['Date', 'Reference', 'Party', 'Product', 'Opening', 'Sales/Issues',
-        'Remaining', 'Collection/Purchase', 'Production', 'Production Consumption', 'Wastage', 'Other IN', 'Other OUT', 'Closing']),
+        'Remaining', 'Collection/Purchase', 'Production', 'Production Consumption', 'Wastage', 'Other IN', 'Other OUT', 'Shortfall', 'Closing']),
         'stock statement columns exactly as specified', stmt[0]);
     const led = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Ledger'], { header: 1 });
     ok(JSON.stringify(led[0]) === JSON.stringify(['Date', 'Reference No.', 'Party', 'Product', 'Transaction Type',
@@ -275,18 +275,22 @@ console.log('\nH. req 17 — Excel export reconciles with the application');
     // Cross-check the row arithmetic on every exported statement row.
     let badRow = 0;
     for (const row of stmt.slice(1)) {
-        const [, , , , opening, sales, remaining, coll, prod2, cons, wastage, otherIn, otherOut, closing] = row;
-        if (!near(opening - sales, remaining)) badRow++;
-        if (!near(remaining + coll + prod2 - cons - wastage + otherIn - otherOut, closing)) badRow++;
+        const [, , , , opening, sales, remaining, coll, prod2, cons, wastage, otherIn, otherOut, shortfall, closing] = row;
+        // Remaining = what is physically on hand after sales (never negative).
+        const wantRemaining = Math.max(0, Math.round((Number(opening) - Number(sales)) * 100) / 100);
+        if (!near(wantRemaining, remaining)) badRow++;
+        // Opening − Sales + In − Out + Shortfall = Closing (exact identity).
+        if (!near(opening - sales + coll + prod2 - cons - wastage + otherIn - otherOut + (shortfall || 0), closing)) badRow++;
+        if (closing < -0.005) badRow++;   // a closing is never negative
     }
-    ok(badRow === 0, 'every exported row satisfies Opening − Sales = Remaining and Remaining + IN − OUT = Closing', badRow);
+    ok(badRow === 0, 'every exported row satisfies Opening − Sales + In − Out + Shortfall = Closing and never closes negative', badRow);
 
     // Carry-forward across days is present in the export.
     const rawRows = stmt.slice(1).filter(r => r[3] === 'Raw Milk');
     ok(rawRows.length >= 3, 'raw milk has one exported row per day', rawRows.length);
-    ok(near(rawRows[0][13], 295) && near(rawRows[1][4], 295),
-        'exported day 2 opening = day 1 closing (automatic carry-forward)', [rawRows[0][13], rawRows[1][4]]);
-    ok(near(rawRows[rawRows.length - 1][13], 205), 'last exported closing = engine closing', rawRows[rawRows.length - 1][13]);
+    ok(near(rawRows[0][14], 295) && near(rawRows[1][4], 295),
+        'exported day 2 opening = day 1 closing (automatic carry-forward)', [rawRows[0][14], rawRows[1][4]]);
+    ok(near(rawRows[rawRows.length - 1][14], 205), 'last exported closing = engine closing', rawRows[rawRows.length - 1][14]);
 
     const exportedRawParties = stmt.slice(1).filter(r => r[3] === 'Raw Milk').map(r => String(r[2]));
     ok(exportedRawParties.some(s => s.includes('Ram Bahadur')) && exportedRawParties.some(s => s.includes('Production / Internal')),
@@ -305,7 +309,7 @@ console.log('\nI. presentation — all-zero products are hidden, non-zero kept')
     ok(stmt.slice(1).some(r => r[3] === 'Raw Milk'), 'a product with movement is present');
 
     // dailyFlowRows is the exported shape of one product's day-by-day flow.
-    const days = dailyFlowRows(one(pRaw, '', ''));
+    const days = dailyFlowRows(one(pRaw, '', ''), { db, from_date: '' });
     ok(days.length === 4 && days[0].opening === 0 && near(days[days.length - 1].closing, 205),
         'daily flow rows carry the balance across every day', days.map(d => [d.date, d.opening, d.closing]));
 }
