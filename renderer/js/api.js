@@ -269,6 +269,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getManagementDashboard: (params) => apiPost('/dairy/dashboard', params || {}),
         getDailyClosing: (params) => apiPost('/dairy/daily-closing', params || {}),
         getDailyStockStatement: (params) => apiPost('/dairy/daily-stock-statement', params || {}),
+        getMilkMonthReconciliation: (params) => apiPost('/dairy/milk-month-reconciliation', params || {}),
         getSaleTraceability: (params) => apiPost('/dairy/sale-traceability', params || {}),
         getBatchTraceability: (params) => apiPost('/dairy/batch-traceability', params || {}),
 

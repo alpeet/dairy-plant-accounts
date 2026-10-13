@@ -1745,6 +1745,11 @@ app.post('/api/dairy/daily-stock-statement', (req, res) => {
     res.json(safeRun(() => ops.getDailyStockStatement(db, req.body || {})));
 });
 
+// Month-end milk reconciliation (one month: collected / produced / sold vs closing).
+app.post('/api/dairy/milk-month-reconciliation', (req, res) => {
+    res.json(safeRun(() => ops.getMilkMonthReconciliation(db, req.body || {})));
+});
+
 app.post('/api/dairy/sale-traceability', (req, res) => {
     res.json(safeRun(() => ops.getSaleTraceability(db, req.body || {})));
 });

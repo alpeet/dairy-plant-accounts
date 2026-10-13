@@ -18,7 +18,7 @@
  * TC-15 covers the OPERATOR'S REPORT RULE on top of that detailed chain — the
  * five figures the Stock Statement's Day by Day report shows:
  *
- *   Yesterday's Closing − Today's Total Sales + Today's Total Purchase
+ *   Yesterday's Closing + Today's Total Purchase − Today's Total Sales
  *                      = Today's Closing
  *
  * with all three milk types combined into ONE stock and no production,
@@ -399,10 +399,11 @@ ok(!!ledMilk && ledMilk.is_milk_total === true && Array.isArray(ledMilk.members)
 db2.close();
 
 // ── TC-15 — the operator's report rule (the five-figure report) ───────────
-//   Yesterday's Closing − Today's Total Sales + Today's Total Purchase = Today's Closing
-// with Cow + Buffalo + Mix as ONE stock, no production/consumption/wastage
-// term, and the operator's own worked examples asserted to the rupee/litre.
-console.log('\n── TC-15 report rule: Yesterday\'s Closing − Total Sales + Total Purchase = Closing ──');
+//   Yesterday's Closing + Today's Total Purchase − Today's Total Sales = Today's Closing
+// (purchase before sales, the operator's column order) with Cow + Buffalo + Mix
+// as ONE stock, no production/consumption/wastage term, and the operator's own
+// worked examples asserted to the paisa/litre.
+console.log('\n── TC-15 report rule: Yesterday\'s Closing + Total Purchase − Total Sales = Closing ──');
 const dir3 = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-report-'));
 const db3 = initDatabase(dir3, 'test.db');
 const mk3 = (name) => Number(db3.prepare(

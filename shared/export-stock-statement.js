@@ -13,11 +13,12 @@
  * drift apart.
  *
  * Sheets:
- *   Stock_Statement — THE OPERATOR'S REPORT, the five columns only:
- *       Date | Product | Yesterday's Closing Stock | Today's Total Sales |
- *       Today's Total Purchase | Today's Closing Stock
+ *   Stock_Statement — THE OPERATOR'S REPORT, the five columns only, in the
+ *     operator's own order (purchase BEFORE sales):
+ *       Date | Product | Yesterday's Closing Stock | Today's Total Purchase |
+ *       Today's Total Sales | Today's Closing Stock
  *     with the period's totals under each product.
- *     Yesterday's Closing − Today's Total Sales + Today's Total Purchase =
+ *     Yesterday's Closing + Today's Total Purchase − Today's Total Sales =
  *     Today's Closing, and today's closing is tomorrow's opening. Milk
  *     (Buffalo + Cow + Mix) is ONE combined stock: the three types' sales and
  *     purchases are added together and only one combined closing is reported
@@ -27,22 +28,27 @@
  *   Stock_Ledger — every movement with its source (req 1 / 14):
  *       Date | Reference No. | Party | Product | Transaction Type |
  *       Opening | IN | OUT | Closing | Unit Cost | Value
+ *   Milk_Reconciliation — the month-end milk summary for `opts.month` (BS
+ *     'YYYY-MM'): collected + produced + Other IN against sold + used + wasted,
+ *     the closing, and the litres with no collection or production behind them.
+ *     Same engine (`getMilkMonthReconciliation`) as the screen's Milk Month-End
+ *     view, so the workbook's flag matches the app's.
  *
  * Usage:
  *   const { exportStockStatementExcel } = require('./shared/export-stock-statement');
- *   exportStockStatementExcel(db, '/tmp/stock.xlsx', { from_date, to_date });
+ *   exportStockStatementExcel(db, '/tmp/stock.xlsx', { from_date, to_date, month });
  */
 
 const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
 
-const { getStockLedger, getDailyStockStatement, round2 } = require('./operations/dairy_costing');
+const { getStockLedger, getDailyStockStatement, getMilkMonthReconciliation, round2 } = require('./operations/dairy_costing');
 
 const STATEMENT_HEADERS = [
     'Date', 'Product',
-    "Yesterday's Closing Stock", "Today's Total Sales",
-    "Today's Total Purchase", "Today's Closing Stock"
+    "Yesterday's Closing Stock", "Today's Total Purchase",
+    "Today's Total Sales", "Today's Closing Stock"
 ];
 
 const LEDGER_HEADERS = [
@@ -86,7 +92,7 @@ function buildStockStatementWorkbook(db, opts = {}) {
         for (const r of rows) {
             const opening = round2(r.opening), sales = round2(r.sales);
             const purchase = round2(r.purchase), closing = round2(r.closing);
-            statementAoa.push([r.date, p.product_name, opening, sales, purchase, closing]);
+            statementAoa.push([r.date, p.product_name, opening, purchase, sales, closing]);
             // The one identity this report asserts, checked on every row.
             if (Math.abs(round2(opening - sales + purchase) - closing) > 0.02) {
                 mismatches.push({ product: p.product_name, date: r.date, opening, sales, purchase, closing });
@@ -99,7 +105,7 @@ function buildStockStatementWorkbook(db, opts = {}) {
         const totalSales = round2(rows.reduce((s, r) => s + (Number(r.sales) || 0), 0));
         const totalPurchase = round2(rows.reduce((s, r) => s + (Number(r.purchase) || 0), 0));
         const lastClosing = round2(rows[rows.length - 1].closing);
-        statementAoa.push(['', `TOTAL — ${p.product_name}`, firstOpening, totalSales, totalPurchase, lastClosing]);
+        statementAoa.push(['', `TOTAL — ${p.product_name}`, firstOpening, totalPurchase, totalSales, lastClosing]);
         if (Math.abs(round2(firstOpening - totalSales + totalPurchase) - lastClosing) > 0.02
             || Math.abs(lastClosing - round2(report.closing)) > 0.02) {
             mismatches.push({ product: p.product_name, total: true, firstOpening, totalSales, totalPurchase, lastClosing, engine_closing: round2(report.closing) });
@@ -127,20 +133,68 @@ function buildStockStatementWorkbook(db, opts = {}) {
         }
     }
 
+    // ── Milk_Reconciliation — the month-end milk summary (one month) ──
+    // Same engine, same ledger as the screen's Milk Month-End view: what the
+    // combined milk stock collected and produced against what it sold, mixed
+    // and wasted, and the litres nothing explains. `opts.month` picks the BS
+    // month ('YYYY-MM'); without it the newest month with milk movements.
+    const recon = getMilkMonthReconciliation(db, { month: opts.month });
+    const reconAoa = [
+        ['Milk — Month-End Reconciliation', ''],
+        ['Month', `${recon.month_label || recon.month} (${recon.month})`],
+        ['Combined stock', recon.milk_products.map(p => p.product_name).join(' + ')],
+        ['Period', `${recon.from_date} → ${recon.to_date} (${recon.days} days)`],
+        [],
+        ['Particulars', `Quantity (${recon.unit})`],
+        ["Opening stock — yesterday's closing carried in", recon.opening],
+        ['(+) Collected — milk collections + milk purchases', recon.collected],
+        ['(+) Produced — production output', recon.produced],
+        ['(+) Other IN', recon.other_in],
+        ['= Total available', recon.available],
+        ['(−) Sold', recon.sold],
+        ['(−) Used in production / mixing', recon.used],
+        ['(−) Wasted', recon.wastage],
+        ['(−) Other OUT', recon.other_out],
+        ['= Closing stock (book)', recon.closing],
+        ['Unexplained volume — no collection or production behind it', recon.unexplained],
+        [],
+        [recon.balanced
+            ? 'Reconciled — every litre is covered by the month\'s opening stock, collections, purchases and production.'
+            : `FLAG: ${recon.unexplained} L left stock (sold / used / wasted) with no collection or production behind it.`]
+    ];
+    if (!recon.balanced) {
+        reconAoa.push(['Uncovered on', recon.shortfall_days.map(d => `${d.date} (${d.litres})`).join(', ')]);
+    }
+
     const wsStatement = XLSX.utils.aoa_to_sheet(statementAoa);
     wsStatement['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
     const wsLedger = XLSX.utils.aoa_to_sheet(ledgerAoa);
     wsLedger['!cols'] = [{ wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 20 }, { wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
 
+    const wsRecon = XLSX.utils.aoa_to_sheet(reconAoa);
+    wsRecon['!cols'] = [{ wch: 52 }, { wch: 16 }];
+
+    // The reconciliation's own integrity: the flag must be the chain's own
+    // shortfall, otherwise the month cannot be called explained.
+    if (!recon.identity_ok) {
+        mismatches.push({ milk_reconciliation: true, month: recon.month, unexplained: recon.unexplained, shortfall: recon.shortfall_days });
+    }
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsStatement, 'Stock_Statement');
     XLSX.utils.book_append_sheet(wb, wsLedger, 'Stock_Ledger');
+    XLSX.utils.book_append_sheet(wb, wsRecon, 'Milk_Reconciliation');
 
     return {
         workbook: wb,
         products: statementProducts,
         statementRows: statementAoa.length - 1,
         ledgerRows: ledgerAoa.length - 1,
+        milkReconciliation: {
+            month: recon.month, month_label: recon.month_label,
+            collected: recon.collected, produced: recon.produced, sold: recon.sold,
+            closing: recon.closing, unexplained: recon.unexplained, balanced: recon.balanced
+        },
         mismatches
     };
 }
@@ -161,6 +215,7 @@ function exportStockStatementExcel(db, outputPath, opts = {}) {
             products: built.products,
             statementRows: built.statementRows,
             ledgerRows: built.ledgerRows,
+            milkReconciliation: built.milkReconciliation,
             mismatches: built.mismatches,
             reconciled: built.mismatches.length === 0
         };

@@ -1298,6 +1298,11 @@ authHandle('db:dairy:daily-stock-statement', async (event, params = {}) => {
     return safeRun(() => ops.getDailyStockStatement(db, params));
 });
 
+// Month-end milk reconciliation (one month: collected / produced / sold vs closing).
+authHandle('db:dairy:milk-month-reconciliation', async (event, params = {}) => {
+    return safeRun(() => ops.getMilkMonthReconciliation(db, params));
+});
+
 authHandle('db:dairy:sale-traceability', async (event, params = {}) => {
     return safeRun(() => ops.getSaleTraceability(db, params));
 });

@@ -536,7 +536,7 @@ async function printReceivablePayable() {
 // ============================================================
 // Period + views state. The period comes from the SHARED date layer
 // (getDatePreset) — never hardcoded; 'custom' is the From/To pair.
-let _ssState = { preset: 'today', from: '', to: '', view: 'daily', category: '', search: '', product_id: '' };
+let _ssState = { preset: 'today', from: '', to: '', view: 'daily', category: '', search: '', product_id: '', month: '' };
 
 /** Local 2-dp rounding for summary figures (currency precision). */
 function round2ui(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -600,6 +600,7 @@ function _ssFilterBar(data) {
             <button type="button" class="btn btn-sm ${_ssState.view === 'movement' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('movement')">📈 Stock Movement</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'daily' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('daily')">📅 Day by Day</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'flow' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('flow')">📋 Period Flow</button>
+            <button type="button" class="btn btn-sm ${_ssState.view === 'reconcile' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('reconcile')">🧾 Milk Month-End</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'summary' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('summary')">📊 Stock Summary</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'detail' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('detail')">🧾 Detailed Ledger</button>
             <button type="button" class="btn btn-sm ${_ssState.view === 'valuation' ? 'btn-primary' : 'btn-secondary'}" onclick="ssSetView('valuation')">💰 Current Valuation</button>
@@ -936,11 +937,12 @@ function _ssDailyView(daily, periodLabel) {
     const MAX_ROWS = 400;
     const q = v => formatNumber(round2ui(v));
 
-    // ONE simple statement per product, exactly the operator's five columns:
-    //   Date | Yesterday's Closing Stock | Today's Total Sales |
-    //   Today's Total Purchase | Today's Closing Stock
-    // closing = yesterday's closing − today's total sales + today's total
-    // purchase (the engine's `report` chain — no floor, no shortfall, no
+    // ONE simple statement per product, exactly the operator's five columns,
+    // in the operator's own order (purchase BEFORE sales):
+    //   Date | Yesterday's Closing Stock | Today's Total Purchase |
+    //   Today's Total Sales | Today's Closing Stock
+    // closing = yesterday's closing + today's total purchase − today's total
+    // sales (the engine's `report` chain — no floor, no shortfall, no
     // production term; the detailed ledger keeps those, on its own view).
     // Milk (Buffalo + Cow + Mix) is ONE section, chained as one combined stock.
     const sections = shown.map(p => {
@@ -965,8 +967,8 @@ function _ssDailyView(daily, periodLabel) {
                 <thead><tr>
                     <th>Date</th>
                     <th class="text-right">Yesterday's Closing Stock ${u}</th>
-                    <th class="text-right">Today's Total Sales ${u}</th>
                     <th class="text-right">Today's Total Purchase ${u}</th>
+                    <th class="text-right">Today's Total Sales ${u}</th>
                     <th class="text-right">Today's Closing Stock ${u}</th>
                 </tr></thead>
                 <tbody>
@@ -975,8 +977,8 @@ function _ssDailyView(daily, periodLabel) {
                     return `<tr${r.has_data ? '' : ' style="opacity:.55;font-style:italic"'}>
                         <td>${formatDate(r.date)}</td>
                         <td class="text-right">${q(r.opening)}</td>
-                        <td class="text-right">${r.has_data ? q(r.sales) : dash}</td>
                         <td class="text-right">${r.has_data ? q(r.purchase) : dash}</td>
+                        <td class="text-right">${r.has_data ? q(r.sales) : dash}</td>
                         <td class="text-right" style="font-weight:700;${r.closing < -0.005 ? 'color:var(--danger)' : ''}">${q(r.closing)}</td>
                     </tr>`;
                 }).join('')}
@@ -984,9 +986,9 @@ function _ssDailyView(daily, periodLabel) {
                 <tfoot><tr style="font-weight:700;background:rgba(0,0,0,0.04)">
                     <td>TOTAL (${rs.length} day(s))</td>
                     <td class="text-right" title="The period's first Yesterday's Closing Stock">${q(firstOpening)}</td>
-                    <td class="text-right">${q(totalSales)}</td>
                     <td class="text-right">${q(totalPurchase)}</td>
-                    <td class="text-right" style="${lastClosing < -0.005 ? 'color:var(--danger)' : ''}" title="Period opening − total sales + total purchase">${q(lastClosing)}</td>
+                    <td class="text-right">${q(totalSales)}</td>
+                    <td class="text-right" style="${lastClosing < -0.005 ? 'color:var(--danger)' : ''}" title="Period opening + total purchase − total sales">${q(lastClosing)}</td>
                 </tr></tfoot>
             </table>
         </div>
@@ -1007,11 +1009,112 @@ function _ssDailyView(daily, periodLabel) {
         </div>
         <div class="form-group" style="flex:1"><label>&nbsp;</label>
             <div style="font-size:12px;color:var(--text-light);padding-top:6px">
-                ${escapeHtml(periodLabel)} — one row per day. <strong>Yesterday's Closing Stock − Today's Total Sales + Today's Total Purchase = Today's Closing Stock</strong>, and today's closing becomes tomorrow's opening. Milk (Buffalo + Cow + Mix) is <strong>one combined stock</strong>: all three types' sales and purchases are added together into a single closing balance. Every figure comes from actual saved transactions; the bottom row shows the period's totals (the period's opening − total sales + total purchase = the final closing). Production, mixing and wastage are deliberately not part of this statement — open <em>Detailed Ledger</em> for those movements.
+                ${escapeHtml(periodLabel)} — one row per day. <strong>Yesterday's Closing Stock + Today's Total Purchase − Today's Total Sales = Today's Closing Stock</strong>, and today's closing is automatically carried forward as the next day's opening. Milk (Buffalo + Cow + Mix) is <strong>one combined stock</strong>: all three types' purchases are added into one total purchase, all three types' sales into one total sales, and there is only ONE closing balance — never a separate closing for Cow, Buffalo or Mix. Every figure comes from actual saved transactions (the same purchase or sale is never counted twice); the bottom row shows the period's totals (the period's opening + total purchase − total sales = the final closing). Production, wastage and adjustments are deliberately not part of this statement — open <em>Detailed Ledger</em> for those movements.
             </div>
         </div>
     </div>
     ${sections}`;
+}
+
+// ──────────────────────────────────────────────────────────────
+// Month-end MILK reconciliation — one month, one summary
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * What the combined milk stock (Buffalo + Cow + Mix as ONE stock) received in a
+ * whole month against what it gave out, and the litres nothing explains.
+ *
+ * Every figure comes from the engine (`getMilkMonthReconciliation`, i.e. the
+ * very chain the Stock Statement shows) — nothing is re-added on screen, and
+ * the flag IS the daily chain's own shortfall, so this summary can never
+ * disagree with the statement.
+ */
+function _ssReconcileView(rec) {
+    if (!rec) return '<div style="text-align:center;padding:40px;color:var(--text-light)">Loading the milk reconciliation…</div>';
+    if (!Array.isArray(rec.milk_products) || !rec.milk_products.length) {
+        return '<div style="text-align:center;padding:40px;color:var(--text-light)">No milk product in the books — nothing to reconcile.</div>';
+    }
+    const q = v => formatNumber(round2ui(v));
+    const unit = escapeHtml(rec.unit || '');
+    const u = `(${unit})`;
+    const months = (rec.months || []).length ? rec.months : [rec.month];
+    // The engine's own combined name ("Milk Total (Buffalo+Cow+Mix)") — a
+    // dormant seeded twin joins the numbers but never the name.
+    const types = (rec.product_name && rec.product_name !== 'Milk Total')
+        ? rec.product_name
+        : rec.milk_products.map(p => p.product_name).join(' + ');
+    const days = rec.shortfall_days || [];
+
+    // Particulars table: every in/out bucket, then the closing and the flag.
+    const row = (label, value, opts = {}) => `
+        <tr${opts.line ? ` style="border-top:1px solid var(--border, #dfe6ee)"` : ''}>
+            <td${opts.indent ? ' style="padding-left:26px"' : ''}>${label}</td>
+            <td class="text-right"${opts.bold ? ' style="font-weight:700"' : ''}>${value}</td>
+        </tr>`;
+    const inRow = (label, v) => row('(+) ' + label, q(v), { indent: true });
+    const outRow = (label, v) => row('(−) ' + label, q(v), { indent: true });
+
+    const flag = rec.balanced
+        ? `<div style="border:1px solid var(--success);background:rgba(25,135,84,.07);color:var(--success);padding:9px 12px;border-radius:6px;font-size:12.5px;line-height:1.6;margin-bottom:12px">
+               ✅ <strong>Reconciled.</strong> Every litre is accounted for: ${escapeHtml(rec.month_label || rec.month)}'s sales, mixing issues and wastage are fully covered by its opening stock, collections, purchases and production.
+           </div>`
+        : `<div style="border:1px solid var(--danger);background:rgba(220,53,69,.08);color:var(--danger);padding:10px 12px;border-radius:6px;font-size:12.5px;line-height:1.7;margin-bottom:12px">
+               ⚠ <strong>${q(rec.unexplained)} ${unit} has no explanation in ${escapeHtml(rec.month_label || rec.month)}.</strong>
+               The month gave out more milk (sold, used in mixing, wasted) than it took in: the movements imply a closing of ${q(rec.closing_movements)} ${unit} and stock cannot go below zero.
+               ${days.length ? `<br>Uncovered on ${days.length} day(s): ${days.slice(0, 10).map(d => `${escapeHtml(formatDate(d.date))} (${q(d.litres)})`).join(', ')}${days.length > 10 ? ` … and ${days.length - 10} more` : ''}.` : ''}
+               <br>Record the missing milk collection / purchase for those days (Milk Collection or Purchase), or correct the sale, mixing or wastage entry.
+           </div>`;
+
+    return `
+    <div class="filter-bar">
+        <div class="form-group">
+            <label>Month</label>
+            <select class="form-control" id="ssReconMonth" onchange="_ssState.month=this.value;showStockStatement()">
+                ${months.map(ym => `<option value="${escapeHtml(ym)}" ${rec.month === ym ? 'selected' : ''}>${escapeHtml(getMonthName(ym))} (${escapeHtml(ym)})</option>`).join('')}
+            </select>
+        </div>
+        <div class="form-group" style="flex:1"><label>&nbsp;</label>
+            <div style="font-size:12px;color:var(--text-light);padding-top:6px">
+                <strong>${escapeHtml(types)}</strong> as <strong>one combined stock</strong> — ${rec.days} day(s), ${escapeHtml(rec.from_date)} → ${escapeHtml(rec.to_date)}.
+                What the stock collected and produced is compared with what it sold, mixed and wasted; the litres left over at the end are flagged below.
+            </div>
+        </div>
+    </div>
+    <div class="summary-cards" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
+        <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">⬇ Collected ${u}</span><span class="value" style="font-size:20px">${q(rec.collected)}</span><span class="sub">collections + purchases</span></div>
+        <div class="summary-card card-info" style="margin:0;padding:12px"><span class="label">🏭 Produced ${u}</span><span class="value" style="font-size:20px">${q(rec.produced)}</span><span class="sub">production output</span></div>
+        <div class="summary-card card-danger" style="margin:0;padding:12px"><span class="label">⬆ Sold ${u}</span><span class="value" style="font-size:20px">${q(rec.sold)}</span><span class="sub">this month</span></div>
+        <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">📦 Closing Stock ${u}</span><span class="value" style="font-size:20px">${q(rec.closing)}</span><span class="sub">carried into next month</span></div>
+        <div class="summary-card ${rec.balanced ? 'card-success' : 'card-warning'}" style="margin:0;padding:12px"><span class="label">❓ Unexplained ${u}</span><span class="value" style="font-size:20px">${rec.balanced ? '0.00 ✓' : q(rec.unexplained)}</span><span class="sub">${rec.balanced ? 'fully explained' : 'no collection/production behind it'}</span></div>
+    </div>
+    ${flag}
+    <div class="table-container">
+        <table>
+            <thead><tr><th>Particulars</th><th class="text-right">Quantity ${u}</th></tr></thead>
+            <tbody>
+                ${row("Opening stock — yesterday's closing carried in", q(rec.opening))}
+                ${row('(+) Collected — milk collections + milk purchases', q(rec.collected), { indent: true })}
+                ${inRow('Produced — production output', rec.produced)}
+                ${inRow('Other IN', rec.other_in)}
+                ${row('= Total available', q(rec.available), { bold: true, line: true })}
+                ${outRow('Sold', rec.sold)}
+                ${outRow('Used in production / mixing', rec.used)}
+                ${outRow('Wasted', rec.wastage)}
+                ${outRow('Other OUT', rec.other_out)}
+                ${row('= Closing stock (book)', q(rec.closing), { bold: true, line: true })}
+                ${row('Unexplained volume — no collection or production behind it',
+                    rec.balanced ? '0.00 ✓' : `<span style="color:var(--danger);font-weight:700">${q(rec.unexplained)}</span>`,
+                    { line: true })}
+            </tbody>
+        </table>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-light);line-height:1.6">
+        Closing = Opening + Collected + Produced + Other IN − Sold − Used − Wasted − Other OUT.
+        Produced and Used can both carry the plant's own milk-to-milk mixing (e.g. Cow + Buffalo → Mix Milk): they are shown in full and the pair cancels out in the closing.
+        <strong>Unexplained</strong> is the part of that equation the books cannot cover: milk that left stock (sold, mixed or wasted) with no collection, purchase or production behind it.
+        Every figure comes from the same movement ledger as the Stock Statement — nothing is re-entered here — and the flag is the daily chain's own shortfall, so the two can never disagree.
+        Open <em>Day by Day</em> for the plain per-date statement, or <em>Detailed Ledger</em> for the transactions behind any day.
+    </div>`;
 }
 
 async function showStockStatement() {
@@ -1026,7 +1129,7 @@ async function showStockStatement() {
         _ssState.to = r.to;
     }
 
-    const [ledgerRes, valRes, dailyRes] = await Promise.all([
+    const [ledgerRes, valRes, dailyRes, reconRes] = await Promise.all([
         // group_milk: the ledger-backed views (Stock Summary / Detailed Ledger)
         // show ONE combined milk total — the engine filters first, then groups,
         // exactly like the daily chain does.
@@ -1040,11 +1143,21 @@ async function showStockStatement() {
             from_date: _ssState.from, to_date: _ssState.to,
             category: _ssState.category || undefined, search: _ssState.search || undefined,
             product_id: _ssState.view === 'daily' && _ssState.product_id ? _ssState.product_id : undefined
-        })
+        }),
+        // The month-end milk reconciliation is fetched only for its own view.
+        // No month chosen yet → the month of the period's To date, else the
+        // newest month the milk ledger moves in (the engine decides).
+        (_ssState.view === 'reconcile')
+            ? window.api.getMilkMonthReconciliation({
+                month: _ssState.month || String(_ssState.to || '').slice(0, 7) || undefined
+            })
+            : Promise.resolve({ success: false })
     ]);
     const data = valRes.success ? valRes.data : { items: [], total_value: 0, total_products: 0, total_quantity: 0, categories: [] };
     const ledger = (ledgerRes.success && ledgerRes.data) ? ledgerRes.data : { products: [] };
     const daily = (dailyRes && dailyRes.success && dailyRes.data) ? dailyRes.data : { products: [], shortfall_days: 0, shortfall_total: 0 };
+    const recon = (reconRes && reconRes.success && reconRes.data) ? reconRes.data : null;
+    if (recon && recon.month && !_ssState.month) _ssState.month = recon.month;
     _finLastData.stockStatement = data;
     _finLastData.stockLedger = ledger;
     _finLastData.stockDaily = daily;
@@ -1080,6 +1193,8 @@ async function showStockStatement() {
         viewHtml = _ssMovementView(daily, data, periodLabel);
     } else if (_ssState.view === 'daily') {
         viewHtml = _ssDailyView(daily, periodLabel);
+    } else if (_ssState.view === 'reconcile') {
+        viewHtml = _ssReconcileView(recon);
     } else if (_ssState.view === 'flow') {
         viewHtml = _ssFlowView((daily.products || []).filter(_ssMatches), periodLabel, singleDay);
     } else if (_ssState.view === 'summary') {
@@ -1368,7 +1483,10 @@ async function exportStockStatementPDF() {
 async function ssExportExcel() {
     const payload = {
         from_date: _ssState.from, to_date: _ssState.to,
-        category: _ssState.category || '', search: _ssState.search || ''
+        category: _ssState.category || '', search: _ssState.search || '',
+        // The workbook's Milk_Reconciliation sheet follows the month the
+        // operator is looking at ('' → the engine's newest month).
+        month: (_ssState.view === 'reconcile' && _ssState.month) || ''
     };
     try {
         if (window.api && typeof window.api.exportStockStatement === 'function') {

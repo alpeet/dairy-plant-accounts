@@ -187,6 +187,7 @@ contextBridge.exposeInMainWorld('api', {
     getManagementDashboard: (params) => ipcRenderer.invoke('db:dairy:dashboard', params),
     getDailyClosing: (params) => ipcRenderer.invoke('db:dairy:daily-closing', params),
     getDailyStockStatement: (params) => ipcRenderer.invoke('db:dairy:daily-stock-statement', params),
+    getMilkMonthReconciliation: (params) => ipcRenderer.invoke('db:dairy:milk-month-reconciliation', params),
     getSaleTraceability: (params) => ipcRenderer.invoke('db:dairy:sale-traceability', params),
     getBatchTraceability: (params) => ipcRenderer.invoke('db:dairy:batch-traceability', params),
 

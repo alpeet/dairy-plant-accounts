@@ -265,27 +265,28 @@ console.log('\nH. req 17 — Excel export reconciles with the application report
     ok(wb.SheetNames.includes('Stock_Statement') && wb.SheetNames.includes('Stock_Ledger'),
         'workbook has Stock_Statement + Stock_Ledger sheets', wb.SheetNames);
 
-    // The statement sheet IS the operator's report — the five columns only.
+    // The statement sheet IS the operator's report — the five columns only,
+    // in the operator's own order: purchase BEFORE sales.
     const stmt = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Statement'], { header: 1 });
     ok(JSON.stringify(stmt[0]) === JSON.stringify(['Date', 'Product', "Yesterday's Closing Stock",
-        "Today's Total Sales", "Today's Total Purchase", "Today's Closing Stock"]),
-        'stock statement columns: the five-figure report (+ the product it belongs to)', stmt[0]);
+        "Today's Total Purchase", "Today's Total Sales", "Today's Closing Stock"]),
+        'stock statement columns: the five-figure report, purchase before sales (+ the product it belongs to)', stmt[0]);
     const led = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Ledger'], { header: 1 });
     ok(JSON.stringify(led[0]) === JSON.stringify(['Date', 'Reference No.', 'Party', 'Product', 'Transaction Type',
         'Opening', 'IN', 'OUT', 'Closing', 'Unit Cost', 'Value']),
         'stock ledger columns exactly as specified', led[0]);
 
-    // Every exported day row: Yesterday's Closing − Total Sales + Total Purchase = Closing.
+    // Every exported day row: Yesterday's Closing + Total Purchase − Total Sales = Closing.
     let badRow = 0, dayRows = 0;
     for (const row of stmt.slice(1)) {
-        const [, product, opening, sales, purchase, closing] = row;
+        const [, product, opening, purchase, sales, closing] = row;
         if (!String(product || '').startsWith('TOTAL')) {
             dayRows++;
-            const want = Math.round((excelNum(opening) - excelNum(sales) + excelNum(purchase)) * 100) / 100;
+            const want = Math.round((excelNum(opening) + excelNum(purchase) - excelNum(sales)) * 100) / 100;
             if (!near(want, excelNum(closing))) badRow++;
         }
     }
-    ok(badRow === 0 && dayRows > 0, 'every exported row satisfies Yesterday Closing − Sales + Purchase = Closing', { badRow, dayRows });
+    ok(badRow === 0 && dayRows > 0, 'every exported row satisfies Yesterday Closing + Purchase − Sales = Closing', { badRow, dayRows });
 
     // Milk (Raw + Pasteurized, both category 'Milk') is ONE combined stock —
     // the same total the screen shows — with the closing carried forward.
@@ -296,16 +297,16 @@ console.log('\nH. req 17 — Excel export reconciles with the application report
     const milkDays = rawRows.filter(r => !String(r[1]).startsWith('TOTAL'));
     ok(milkDays.length >= 3, 'the combined milk total has one exported row per day', rawRows.length);
     ok(milkDays.length >= 3 && near(milkDays[0][5], 1000) && near(milkDays[1][2], 1000),
-        'milk day 1 closing = day 2 opening (combined carry-forward: 950 − 450 + 500 = 1000)',
+        'milk day 1 closing = day 2 opening (combined carry-forward: 950 + 500 − 450 = 1000)',
         milkDays.length >= 3 ? [milkDays[0][5], milkDays[1][2]] : milkDays.length);
     ok(milkDays.length >= 3 && near(milkDays[milkDays.length - 1][5], 910),
         'last exported milk closing = the engine report closing (1000 → 900 → 910)',
         milkDays.length ? milkDays[milkDays.length - 1][5] : null);
     const milkTotalRow = stmt.slice(1).find(r => String(r[1]) === `TOTAL — ${MILK_TOTAL}`);
     // Sales 450 on day 1 + 100 on day 2 − 10 (the returned 40 against the 30 sold) = 540.
-    ok(!!milkTotalRow && near(milkTotalRow[2], 950) && near(milkTotalRow[3], 540)
-        && near(milkTotalRow[4], 500) && near(milkTotalRow[5], 910),
-        'the TOTAL row reads period opening 950 − sales 540 + purchase 500 = closing 910',
+    ok(!!milkTotalRow && near(milkTotalRow[2], 950) && near(milkTotalRow[3], 500)
+        && near(milkTotalRow[4], 540) && near(milkTotalRow[5], 910),
+        'the TOTAL row reads period opening 950 + purchase 500 − sales 540 = closing 910',
         milkTotalRow && milkTotalRow.slice(2));
 
     // The engine's own report chain is what got written — no re-derived numbers.

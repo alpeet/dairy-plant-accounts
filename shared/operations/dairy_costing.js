@@ -1239,8 +1239,10 @@ function groupOpeningBefore(db, productIds, from) {
  * THE OPERATOR'S REPORT RULE (2026-10) — the plain three-figure stock
  * statement, applied to one product or to a group of products as ONE stock:
  *
- *   Yesterday's Closing Stock − Today's Total Sales + Today's Total Purchase
+ *   Yesterday's Closing Stock + Today's Total Purchase − Today's Total Sales
  *                            = Today's Closing Stock
+ *
+ * (the operator's own column order: purchase BEFORE sales).
  *
  * and tomorrow starts from today's closing. Nothing else counts here: no
  * production, no consumption, no wastage, no floor at zero, no shortfall —
@@ -1649,10 +1651,131 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
     };
 }
 
+// ──────────────────────────────────────────────────────────────
+// Month-end MILK reconciliation
+// ──────────────────────────────────────────────────────────────
+
+/** English BS month names, indexed 1–12 (the operator writes Ashoj/Ashadh). */
+const BS_MONTH_NAMES = ['', 'Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin',
+    'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'];
+
+/**
+ * Every BS day of a 'YYYY-MM' month. BS months run 29–32 days, so the length
+ * is walked off the calendar itself (never assumed to be 30/31) and stops the
+ * moment the month prefix changes.
+ */
+function bsMonthDays(month) {
+    const days = [`${month}-01`];
+    for (let i = 0; i < 32; i++) {
+        const next = bsAddDays(days[days.length - 1], 1);
+        if (!next || next === days[days.length - 1]) break;   // calendar miss — stop
+        if (String(next).slice(0, 7) !== String(month)) break;
+        days.push(next);
+    }
+    return days;
+}
+
+/**
+ * THE MONTH-END MILK RECONCILIATION (2026-10)
+ *
+ * One month, one summary: what the milk stock (Buffalo + Cow + Mix as ONE
+ * combined stock) RECEIVED versus what it GAVE OUT, and whether the closing
+ * stock can be explained by those movements.
+ *
+ *   available = carried-in closing + collected + produced + other IN
+ *   out       = sold + used in production/mixing + wasted + other OUT
+ *   unexplained = closing stock − (available − out)
+ *
+ * `unexplained` is the volume that left stock with NO collection or production
+ * behind it — a sale, mixing issue or wastage the books could not cover. It is
+ * exactly the floor the daily chain had to absorb inside the month
+ * (`entry.rows[].shortfall`), so this summary can never disagree with the Stock
+ * Statement; when it is zero the month is fully explained and reconciles to
+ * the paisa.
+ *
+ * Nothing is re-derived here: the month's buckets, its chained opening/closing
+ * and its shortfall come from `getDailyStockStatement` — the same ledger and
+ * the same `flowDelta()` mapping every other stock view uses. Only the milk
+ * products take part (`isMilkGroupProduct`), and they are always reported as
+ * ONE combined stock, never per type.
+ *
+ * @param {object} db
+ * @param {{ month?:string }} opts - 'YYYY-MM' BS month; defaults to the newest
+ *        month the milk ledger has movements in (else the current BS month).
+ */
+function getMilkMonthReconciliation(db, { month } = {}) {
+    const milkProducts = db.prepare('SELECT id, name, unit, category FROM products').all()
+        .filter(isMilkGroupProduct);
+    const ids = milkProducts.map(p => Number(p.id)).filter(Number.isFinite);
+
+    // Every BS month the milk ledger moves in — the picker's options. Pure
+    // string slicing: BS dates must never be parsed with Date/strftime.
+    let months = [];
+    if (ids.length) {
+        const marks = ids.map(() => '?').join(',');
+        months = db.prepare(
+            `SELECT DISTINCT substr(date, 1, 7) AS ym FROM stock_movements
+              WHERE product_id IN (${marks}) AND length(date) >= 7
+              ORDER BY ym DESC`
+        ).all(...ids).map(r => String(r.ym || '')).filter(ym => /^\d{4}-\d{2}$/.test(ym));
+    }
+    const asked = String(month || '').trim().slice(0, 7);
+    const m = /^\d{4}-\d{2}$/.test(asked) ? asked : (months[0] || todayBS().slice(0, 7));
+    if (!months.includes(m)) months = [m, ...months].sort().reverse();
+
+    const days = bsMonthDays(m);
+    const from = days[0], to = days[days.length - 1];
+
+    // The month's combined milk chain — the ONE stock calculation, reused.
+    const daily = getDailyStockStatement(db, { from_date: from, to_date: to, product_id: MILK_TOTAL_ID });
+    const entry = (daily.products || [])[0] || null;
+    const rows = (entry && entry.rows) || [];
+    const sum = (k) => round2(rows.reduce((s, r) => s + num(r[k]), 0));
+
+    const opening = rows.length ? round2(rows[0].opening) : 0;
+    const closing = rows.length ? round2(rows[rows.length - 1].closing) : 0;
+    const collection = sum('collection');
+    const purchase = sum('purchase');
+    const produced = sum('production');
+    const otherIn = sum('other_in');
+    const sold = sum('sales');
+    const used = sum('production_consumption');
+    const wastage = sum('wastage');
+    const otherOut = sum('other_out');
+
+    const collected = round2(collection + purchase);
+    const available = round2(opening + collected + produced + otherIn);
+    const outTotal = round2(sold + used + wastage + otherOut);
+    const closingMovements = round2(available - outTotal);
+    const unexplained = round2(closing - closingMovements);
+    const shortfallDays = rows
+        .filter(r => num(r.shortfall) > 0.005)
+        .map(r => ({ date: r.date, litres: round2(r.shortfall) }));
+
+    return {
+        month: m,
+        month_label: `${BS_MONTH_NAMES[Number(m.slice(5, 7))] || ''} ${m.slice(0, 4)}`.trim(),
+        from_date: from, to_date: to,
+        days: days.length,
+        product_name: entry ? entry.product_name : 'Milk Total',
+        unit: (entry && entry.unit) || (milkProducts[0] && milkProducts[0].unit) || 'liter',
+        milk_products: milkProducts.map(p => ({ product_id: Number(p.id), product_name: p.name, unit: p.unit })),
+        opening, collected, collection, purchase, produced, other_in: otherIn,
+        available, sold, used, wastage, other_out: otherOut, out_total: outTotal,
+        closing, closing_movements: closingMovements,
+        unexplained, balanced: unexplained <= 0.005,
+        // The flag IS the daily chain's own floor absorption — never re-derived.
+        identity_ok: Math.abs(unexplained - sum('shortfall')) < 0.02,
+        shortfall_days: shortfallDays,
+        months
+    };
+}
+
 module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
     MILK_TOTAL_ID, isMilkGroupProduct, milkTotalName, groupMilkProducts,
     groupChainFor, groupOpeningBefore, reportChainFor, reportOpeningBefore,
+    getMilkMonthReconciliation, bsMonthDays,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
     getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,
