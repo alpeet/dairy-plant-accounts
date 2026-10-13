@@ -15,6 +15,15 @@
  * is reported as a red Shortfall figure instead of a negative closing
  * (operator's rule, 2026-10).
  *
+ * TC-15 covers the OPERATOR'S REPORT RULE on top of that detailed chain — the
+ * five figures the Stock Statement's Day by Day report shows:
+ *
+ *   Yesterday's Closing − Today's Total Sales + Today's Total Purchase
+ *                      = Today's Closing
+ *
+ * with all three milk types combined into ONE stock and no production,
+ * consumption or wastage term at all.
+ *
  * NOTE ON DATES: the spec's fixtures are written in AD (2026/10/01 … 2026/10/06).
  * This database stores Bikram Sambat date strings (AGENTS.md: never parse them
  * with Date/strftime — compare and slice strings), so the same six consecutive
@@ -38,6 +47,7 @@ function ok(cond, name, extra) {
     else { fail++; console.log('  ❌ FAIL — ' + name + (extra !== undefined ? '   [got ' + JSON.stringify(extra) + ']' : '')); }
 }
 const near = (a, b, tol = 0.005) => Math.abs((Number(a) || 0) - (Number(b) || 0)) <= tol;
+const round2ui15 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 // ── Fixture (spec §2) — six consecutive days, 10/06 has no records at all ──
 const D = ['2083-06-01', '2083-06-02', '2083-06-03', '2083-06-04', '2083-06-05', '2083-06-06'];
@@ -367,29 +377,102 @@ ok(near(dairy.groupOpeningBefore(db2, [pCow], D[0]), 100),
     'the same replay for Cow alone still shows its own 100 L (per-type chain is untouched)',
     dairy.groupOpeningBefore(db2, [pCow], D[0]));
 
-// ── TC-14 — Today's Stock reads the SAME chain figures the statement shows ──
-// The panel is fed by getStockLedger(group_milk): opening / closing / shortfall
-// must equal the daily statement's own numbers, or the two screens disagree.
-console.log('\n── TC-14 Today\'s Stock panel figures = the statement\'s chain ──');
+// ── TC-14 — Today's Stock reads the SAME report figures the statement shows ──
+// The panel is fed by getStockLedger(group_milk): the report chain's opening and
+// closing must equal the daily report's own numbers, or the two screens disagree.
+console.log('\n── TC-14 Today\'s Stock panel figures = the report\'s own chain ──');
 const ledMilk = (dairy.getStockLedger(db2, { from_date: D[0], to_date: D[2], group_milk: true }).products || [])
     .find(p => p.product_id === dairy.MILK_TOTAL_ID);
 const stmtMilk = ((stmtAll(D[0], D[2]).products) || []).find(p => p.product_id === dairy.MILK_TOTAL_ID);
 ok(!!ledMilk && !!stmtMilk
-    && near(ledMilk.opening_before, stmtMilk.first_opening)
-    && near(ledMilk.chain_closing, stmtMilk.last_closing)
-    && near(ledMilk.chain_shortfall, stmtMilk.shortfall),
-    'the grouped ledger entry matches the statement (opening 0, closing 30, shortfall 10)',
-    ledMilk && { open: ledMilk.opening_before, close: ledMilk.chain_closing, short: ledMilk.chain_shortfall, stmt: stmtMilk && [stmtMilk.first_opening, stmtMilk.last_closing, stmtMilk.shortfall] });
-const rawMilkSum = (dairy.getStockLedger(db2, { from_date: D[0], to_date: D[2] }).products || [])
-    .filter(p => [pBuf, pCow, pMix].includes(p.product_id))
-    .reduce((s, p) => s + (Number(p.closing_qty) || 0), 0);
-ok(rawMilkSum < 0 && !!ledMilk && near(ledMilk.chain_closing, 30),
-    'the raw ledger would show a NEGATIVE milk balance — the panel shows the floored chain instead',
-    { raw_per_type_sum: Math.round(rawMilkSum * 100) / 100, chained: ledMilk && ledMilk.chain_closing });
+    && near(ledMilk.report_opening, stmtMilk.report.opening)
+    && near(ledMilk.report_closing, stmtMilk.report.closing),
+    'the grouped ledger entry carries the same report opening/closing the Day by Day shows',
+    ledMilk && { open: ledMilk.report_opening, close: ledMilk.report_closing, stmt: stmtMilk && [stmtMilk.report.opening, stmtMilk.report.closing] });
+ok(!!stmtMilk && near(stmtMilk.report.rows[0].opening, -400) && near(stmtMilk.report.closing, -380)
+    && near(stmtMilk.report.rows[0].closing, -410),
+    'the report reads the plain rule on this fixture: 100 − 500 = −400 carried in, then −110 + 100 → −410, then −40 + 70 → −380 (the books sold more milk than they collected, so the balance is genuinely negative)',
+    stmtMilk && stmtMilk.report.rows.map(r => [r.opening, r.sales, r.purchase, r.closing]));
 ok(!!ledMilk && ledMilk.is_milk_total === true && Array.isArray(ledMilk.members) && ledMilk.members.length >= 3,
     'the row is the combined milk total (one row, all types)',
     ledMilk && { name: ledMilk.product_name, members: (ledMilk.members || []).length });
 db2.close();
+
+// ── TC-15 — the operator's report rule (the five-figure report) ───────────
+//   Yesterday's Closing − Today's Total Sales + Today's Total Purchase = Today's Closing
+// with Cow + Buffalo + Mix as ONE stock, no production/consumption/wastage
+// term, and the operator's own worked examples asserted to the rupee/litre.
+console.log('\n── TC-15 report rule: Yesterday\'s Closing − Total Sales + Total Purchase = Closing ──');
+const dir3 = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-report-'));
+const db3 = initDatabase(dir3, 'test.db');
+const mk3 = (name) => Number(db3.prepare(
+    "INSERT INTO products (name, unit, category, rate) VALUES (?, 'liter', 'Milk', 80)"
+).run(name).lastInsertRowid);
+const rCow = mk3('Cow Milk');
+const rBuf = mk3('Buffalo Milk');
+const rMix = mk3('Mix Milk');
+const rGhee = Number(db3.prepare(
+    "INSERT INTO products (name, unit, category, rate) VALUES ('Ghee', 'kg', 'Dairy', 1400)"
+).run().lastInsertRowid);
+const mv3 = db3.prepare(`INSERT INTO stock_movements
+    (product_id, date, type, reference_type, reference_id, inward_qty, outward_qty, balance_after, rate, notes)
+    VALUES (?, ?, ?, NULL, NULL, ?, ?, 0, 0, 'tc15')`);
+const R1 = '2083-06-01', R2 = '2083-06-02', R0 = '2083-05-31';
+// Stock carried in from before the report (yesterday's closing = 710.60 L).
+mv3.run(rBuf, R0, 'opening', 710.60, 0);
+// The operator's worked example, all three types on the same day:
+//   sales 100 (Cow) + 150 (Buffalo) + 234 (Mix) = 484
+//   purchases 116.60 (Cow) + 594.00 (Buffalo) + 0 (Mix) = 710.60
+mv3.run(rCow, R1, 'sale', 0, 100);
+mv3.run(rBuf, R1, 'sale', 0, 150);
+mv3.run(rMix, R1, 'sale', 0, 234);
+mv3.run(rCow, R1, 'milk_collection', 116.60, 0);
+mv3.run(rBuf, R1, 'milk_collection', 594.00, 0);
+// Day 2: sales only — it must start from day 1's closing.
+mv3.run(rMix, R2, 'sale', 0, 100);
+// The spec's single-product example: 710.60 − 484 + 500 = 726.60.
+mv3.run(rGhee, R0, 'opening', 710.60, 0);
+mv3.run(rGhee, R1, 'sale', 0, 484);
+mv3.run(rGhee, R1, 'purchase', 500, 0);
+
+const r15 = dairy.getDailyStockStatement(db3, { from_date: R1, to_date: R2 });
+const milk15 = (r15.products || []).find(p => p.product_id === dairy.MILK_TOTAL_ID);
+ok(!!milk15 && milk15.report && milk15.report.rows.length === 2, 'the milk report has one row per day',
+    milk15 && milk15.report && milk15.report.rows.length);
+if (milk15 && milk15.report) {
+    const m1 = milk15.report.rows[0], m2 = milk15.report.rows[1];
+    ok(near(m1.opening, 710.60) && near(m1.sales, 484) && near(m1.purchase, 710.60) && near(m1.closing, 937.20),
+        'day 1: 710.60 − 484 (Cow 100 + Buffalo 150 + Mix 234) + 710.60 (Cow 116.60 + Buffalo 594) = 937.20',
+        { open: m1.opening, sales: m1.sales, purchase: m1.purchase, close: m1.closing });
+    ok(near(m2.opening, 937.20) && near(m2.sales, 100) && near(m2.purchase, 0) && near(m2.closing, 837.20),
+        'day 2 starts from day 1\'s closing: 937.20 − 100 + 0 = 837.20',
+        { open: m2.opening, sales: m2.sales, close: m2.closing });
+    ok(Object.keys(m1).sort().join(',') === 'closing,date,has_data,opening,purchase,sales',
+        'a report row carries the date + the three figures + the closing, nothing else', Object.keys(m1));
+    const totSales = round2ui15(milk15.report.rows.reduce((s, r) => s + r.sales, 0));
+    const totPurchase = round2ui15(milk15.report.rows.reduce((s, r) => s + r.purchase, 0));
+    ok(near(milk15.report.rows[0].opening - totSales + totPurchase, milk15.report.closing),
+        'the bottom totals balance: period opening − total sales + total purchase = final closing',
+        { open: milk15.report.rows[0].opening, totSales, totPurchase, close: milk15.report.closing });
+    ok(near(milk15.report.opening, dairy.reportOpeningBefore(db3, [rCow, rBuf, rMix], R1)),
+        'the report opening is ONE combined replay (yesterday\'s total closing), not a per-type sum',
+        milk15.report.opening);
+}
+ok(!(r15.products || []).some(p => [rCow, rBuf, rMix].includes(p.product_id)),
+    'no separate per-type milk rows — one combined closing for all three types',
+    (r15.products || []).map(p => p.product_name));
+const ghee15 = (r15.products || []).find(p => p.product_id === rGhee);
+ok(!!ghee15 && near(ghee15.report.rows[0].opening, 710.60) && near(ghee15.report.rows[0].sales, 484)
+    && near(ghee15.report.rows[0].purchase, 500) && near(ghee15.report.rows[0].closing, 726.60),
+    'the report works per product too: 710.60 − 484 + 500 = 726.60',
+    ghee15 && ghee15.report.rows[0]);
+// Production is deliberately NOT part of this report — the closing must not move.
+mv3.run(rMix, R2, 'production_output', 500, 0);
+const m2b = (dairy.getDailyStockStatement(db3, { from_date: R1, to_date: R2 }).products || [])
+    .find(p => p.product_id === dairy.MILK_TOTAL_ID).report.rows[1];
+ok(near(m2b.closing, 837.20) && near(m2b.purchase, 0),
+    'a production entry does not enter the report (closing stays 837.20, purchase stays 0)', m2b);
+db3.close();
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 if (fail) {

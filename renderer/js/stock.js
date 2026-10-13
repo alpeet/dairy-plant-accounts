@@ -213,9 +213,9 @@ async function renderStock() {
 // Stock Statement screen — same engine, no second stock calculation.
 //
 // MILK IS ONE ROW (group_milk): Buffalo + Cow + Mix appear as the combined
-// "Milk Total" the statement shows, with the statement's OWN chain figures —
-// floored opening/closing and the red Shortfall — so the panel can never
-// present a negative milk balance that the statement contradicts.
+// "Milk Total" the statement shows, with the report's OWN figures —
+// yesterday's closing − today's total sales + today's total purchases — so the
+// panel can never disagree with the Stock Statement's Day by Day report.
 
 async function renderTodaysStock() {
     const body = document.getElementById('todaysStockBody');
@@ -247,22 +247,25 @@ async function renderTodaysStock() {
     let hidden = 0;
     for (const p of products) {
         const b = p.summary || {};
-        // The combined milk row carries the statement's own chain figures
-        // (floored opening/closing + shortfall); every other row is the raw
-        // ledger period, whose identity holds by construction (residual = Other).
-        const chained = p.chain_closing !== undefined && p.chain_closing !== null;
-        const opening = chained ? r2(p.opening_before || 0) : r2(b.opening || 0);
+        // The combined milk row carries the REPORT's own figures — the same
+        // yesterday's-closing/sales/purchase/closing the Stock Statement's Day
+        // by Day shows (`report_opening`/`report_closing`) — so the panel can
+        // never disagree with the report. Every other row is the raw ledger
+        // period, whose identity holds by construction (residual = Other).
+        const chained = p.report_closing !== undefined && p.report_closing !== null;
+        const opening = chained ? r2(p.report_opening || 0) : r2(b.opening || 0);
         const collection = r2((b.collection_in || 0) + (b.purchase_in || 0));
         const production = r2(b.production_in || 0);
         const sales = r2(b.sales_out || 0);
         const consumption = r2(b.production_out || 0);
         const wastage = r2(b.wastage_out || 0);
         const closing = chained
-            ? r2(p.chain_closing)
+            ? r2(p.report_closing)
             : r2(b.closing !== undefined && b.closing !== null ? b.closing : p.closing_qty);
-        const shortfall = chained ? r2(p.chain_shortfall || 0) : 0;
-        // Residual after the statement's own identity
-        // (Opening + In − Out + Shortfall = Closing) — zero for a clean chain.
+        const shortfall = 0;
+        // Residual after the statement's own identity (Opening + In − Out = Closing):
+        // zero for the report chain (production in/out cancel), and the honest
+        // returns/adjustments residual for a raw ledger row.
         const other = r2((closing - opening) - (collection + production - sales - consumption - wastage) - shortfall);
         const vals = [opening, collection, production, sales, consumption, wastage, shortfall, other, closing];
         if (vals.every(v => Math.abs(v) < 0.005)) { hidden++; continue; }
@@ -325,7 +328,7 @@ async function renderTodaysStock() {
             </table>
         </div>
         <div style="font-size:11px;color:var(--text-light);margin-top:6px">
-            ${rows.length} product(s) shown${hidden ? ` · ${hidden} with zero balance and no activity hidden` : ''} · period ${filt.from ? formatDate(filt.from) : 'start'} → ${filt.to ? formatDate(filt.to) : 'today'}${hasMilkTotal ? ' · Milk (Buffalo + Cow + Mix) is shown as one combined total, exactly as the Stock Statement does' : ''}
+            ${rows.length} product(s) shown${hidden ? ` · ${hidden} with zero balance and no activity hidden` : ''} · period ${filt.from ? formatDate(filt.from) : 'start'} → ${filt.to ? formatDate(filt.to) : 'today'}${hasMilkTotal ? ' · Milk (Buffalo + Cow + Mix) is one combined total — closing = yesterday\u2019s closing − total sales + total purchases/collections, exactly as the Stock Statement\u2019s Day by Day shows' : ''}
         </div>`;
 }
 

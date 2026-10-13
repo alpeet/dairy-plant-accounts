@@ -30,7 +30,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..', '..');
 const { initDatabase } = require(path.join(ROOT, 'shared', 'db'));
 const dairy = require(path.join(ROOT, 'shared', 'operations', 'dairy_costing'));
-const { buildStockStatementWorkbook, dailyFlowRows } = require(path.join(ROOT, 'shared', 'export-stock-statement'));
+const { buildStockStatementWorkbook } = require(path.join(ROOT, 'shared', 'export-stock-statement'));
 const XLSX = require(path.join(ROOT, 'node_modules', 'xlsx'));
 
 let pass = 0, fail = 0;
@@ -39,6 +39,8 @@ function ok(cond, name, extra) {
     else { fail++; console.log('  ❌ FAIL — ' + name + (extra !== undefined ? '   [got ' + JSON.stringify(extra) + ']' : '')); }
 }
 const near = (a, b, tol = 0.005) => Math.abs((Number(a) || 0) - (Number(b) || 0)) <= tol;
+/** Spreadsheet cells can be blank when a day has no sales/purchases. */
+const excelNum = (v) => (v === '' || v === null || v === undefined) ? 0 : Number(v);
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stock-statement-'));
 const db = initDatabase(dir, 'test.db');
@@ -250,7 +252,7 @@ console.log('\nG. req 13 — a transaction affects stock exactly once');
     ok(near(raw.summary.sales_out, 350), 'the sales invoice created the sale OUT once', raw.summary.sales_out);
 }
 
-console.log('\nH. req 17 — Excel export reconciles with the application');
+console.log('\nH. req 17 — Excel export reconciles with the application report');
 {
     const built = buildStockStatementWorkbook(db, { from_date: TODAY, to_date: DAY3 });
     ok(built.mismatches.length === 0, 'no product mismatches between the workbook and the engine', built.mismatches);
@@ -263,50 +265,63 @@ console.log('\nH. req 17 — Excel export reconciles with the application');
     ok(wb.SheetNames.includes('Stock_Statement') && wb.SheetNames.includes('Stock_Ledger'),
         'workbook has Stock_Statement + Stock_Ledger sheets', wb.SheetNames);
 
+    // The statement sheet IS the operator's report — the five columns only.
     const stmt = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Statement'], { header: 1 });
-    ok(JSON.stringify(stmt[0]) === JSON.stringify(['Date', 'Reference', 'Party', 'Product', 'Opening', 'Sales/Issues',
-        'Remaining', 'Collection/Purchase', 'Production', 'Production Consumption', 'Wastage', 'Other IN', 'Other OUT', 'Shortfall', 'Closing']),
-        'stock statement columns exactly as specified', stmt[0]);
+    ok(JSON.stringify(stmt[0]) === JSON.stringify(['Date', 'Product', "Yesterday's Closing Stock",
+        "Today's Total Sales", "Today's Total Purchase", "Today's Closing Stock"]),
+        'stock statement columns: the five-figure report (+ the product it belongs to)', stmt[0]);
     const led = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Ledger'], { header: 1 });
     ok(JSON.stringify(led[0]) === JSON.stringify(['Date', 'Reference No.', 'Party', 'Product', 'Transaction Type',
         'Opening', 'IN', 'OUT', 'Closing', 'Unit Cost', 'Value']),
         'stock ledger columns exactly as specified', led[0]);
 
-    // Cross-check the row arithmetic on every exported statement row.
-    let badRow = 0;
+    // Every exported day row: Yesterday's Closing − Total Sales + Total Purchase = Closing.
+    let badRow = 0, dayRows = 0;
     for (const row of stmt.slice(1)) {
-        const [, , , , opening, sales, remaining, coll, prod2, cons, wastage, otherIn, otherOut, shortfall, closing] = row;
-        // Remaining = what is physically on hand after sales (never negative).
-        const wantRemaining = Math.max(0, Math.round((Number(opening) - Number(sales)) * 100) / 100);
-        if (!near(wantRemaining, remaining)) badRow++;
-        // Opening − Sales + In − Out + Shortfall = Closing (exact identity).
-        if (!near(opening - sales + coll + prod2 - cons - wastage + otherIn - otherOut + (shortfall || 0), closing)) badRow++;
-        if (closing < -0.005) badRow++;   // a closing is never negative
+        const [, product, opening, sales, purchase, closing] = row;
+        if (!String(product || '').startsWith('TOTAL')) {
+            dayRows++;
+            const want = Math.round((excelNum(opening) - excelNum(sales) + excelNum(purchase)) * 100) / 100;
+            if (!near(want, excelNum(closing))) badRow++;
+        }
     }
-    ok(badRow === 0, 'every exported row satisfies Opening − Sales + In − Out + Shortfall = Closing and never closes negative', badRow);
+    ok(badRow === 0 && dayRows > 0, 'every exported row satisfies Yesterday Closing − Sales + Purchase = Closing', { badRow, dayRows });
 
-    // Milk (Raw + Pasteurized, both category 'Milk') is ONE combined product —
-    // the same total the screen shows — with the per-day chain carried forward.
+    // Milk (Raw + Pasteurized, both category 'Milk') is ONE combined stock —
+    // the same total the screen shows — with the closing carried forward.
     const MILK_TOTAL = 'Milk Total (Pasteurized+Raw)';
-    ok(!stmt.slice(1).some(r => r[3] === 'Raw Milk'),
+    ok(!stmt.slice(1).some(r => r[1] === 'Raw Milk' || r[1] === 'Pasteurized Milk'),
         'per-type milk rows are gone from the statement sheet (combined, never duplicated)');
-    const rawRows = stmt.slice(1).filter(r => r[3] === MILK_TOTAL);
-    ok(rawRows.length >= 3, 'the combined milk total has one exported row per day', rawRows.length);
-    ok(rawRows.length >= 3 && near(rawRows[0][14], 895) && near(rawRows[1][4], 895),
-        'exported day 2 opening = day 1 closing (automatic carry-forward, combined total)',
-        rawRows.length >= 3 ? [rawRows[0][14], rawRows[1][4]] : rawRows.length);
-    ok(rawRows.length >= 3 && near(rawRows[rawRows.length - 1][14], 805),
-        'last exported closing = engine closing (950 → 895 → 795 → 805)',
-        rawRows.length ? rawRows[rawRows.length - 1][14] : null);
+    const rawRows = stmt.slice(1).filter(r => r[1] === MILK_TOTAL);
+    const milkDays = rawRows.filter(r => !String(r[1]).startsWith('TOTAL'));
+    ok(milkDays.length >= 3, 'the combined milk total has one exported row per day', rawRows.length);
+    ok(milkDays.length >= 3 && near(milkDays[0][5], 1000) && near(milkDays[1][2], 1000),
+        'milk day 1 closing = day 2 opening (combined carry-forward: 950 − 450 + 500 = 1000)',
+        milkDays.length >= 3 ? [milkDays[0][5], milkDays[1][2]] : milkDays.length);
+    ok(milkDays.length >= 3 && near(milkDays[milkDays.length - 1][5], 910),
+        'last exported milk closing = the engine report closing (1000 → 900 → 910)',
+        milkDays.length ? milkDays[milkDays.length - 1][5] : null);
+    const milkTotalRow = stmt.slice(1).find(r => String(r[1]) === `TOTAL — ${MILK_TOTAL}`);
+    // Sales 450 on day 1 + 100 on day 2 − 10 (the returned 40 against the 30 sold) = 540.
+    ok(!!milkTotalRow && near(milkTotalRow[2], 950) && near(milkTotalRow[3], 540)
+        && near(milkTotalRow[4], 500) && near(milkTotalRow[5], 910),
+        'the TOTAL row reads period opening 950 − sales 540 + purchase 500 = closing 910',
+        milkTotalRow && milkTotalRow.slice(2));
 
-    // The movement-level Stock_Ledger sheet still names the actual type.
+    // The engine's own report chain is what got written — no re-derived numbers.
+    const dailyMilk = (dairy.getDailyStockStatement(db, { from_date: TODAY, to_date: DAY3 }).products || [])
+        .find(p => p.product_id === dairy.MILK_TOTAL_ID);
+    ok(!!dailyMilk && dailyMilk.report.rows.every((r, i) => near(r.closing, milkDays[i] && milkDays[i][5])),
+        'exported closings equal the Day by Day report closings, day for day',
+        { engine: dailyMilk && dailyMilk.report.rows.map(r => r.closing), excel: milkDays.map(r => r[5]) });
+
+    // The detailed transaction ledger is a separate sheet and keeps the parties.
     const ledRows = XLSX.utils.sheet_to_json(wb.Sheets['Stock_Ledger'], { header: 1 });
     ok(ledRows.slice(1).some(r => r[3] === 'Raw Milk') && ledRows.slice(1).some(r => r[3] === 'Pasteurized Milk'),
         'the Stock_Ledger sheet keeps each milk type on its own movements');
-
-    const exportedRawParties = rawRows.map(r => String(r[2]));
-    ok(exportedRawParties.some(s => s.includes('Ram Bahadur')) && exportedRawParties.some(s => s.includes('Production / Internal')),
-        'exported statement names its parties/sources', exportedRawParties.slice(0, 3));
+    const ledParties = ledRows.slice(1).map(r => String(r[2]));
+    ok(ledParties.some(s => s.includes('Ram Bahadur')) && ledParties.some(s => s.includes('Production / Internal')),
+        'the detailed ledger sheet still names every party/source', ledParties.slice(0, 3));
 }
 
 console.log('\nI. presentation — all-zero products are hidden, non-zero kept');
@@ -317,13 +332,18 @@ console.log('\nI. presentation — all-zero products are hidden, non-zero kept')
         'a product with no movement has an all-zero flow row');
     const built = buildStockStatementWorkbook(db, { from_date: TODAY, to_date: TODAY });
     const stmt = XLSX.utils.sheet_to_json(built.workbook.Sheets['Stock_Statement'], { header: 1 });
-    ok(!stmt.slice(1).some(r => r[3] === 'Empty Thing'), 'the empty product is omitted from the export');
-    ok(stmt.slice(1).some(r => r[3] === 'Milk Total (Pasteurized+Raw)'), 'a product with movement is present (the combined milk total)');
+    ok(!stmt.slice(1).some(r => r[1] === 'Empty Thing'), 'the empty product is omitted from the export');
+    ok(stmt.slice(1).some(r => r[1] === 'Milk Total (Pasteurized+Raw)'), 'a product with movement is present (the combined milk total)');
 
-    // dailyFlowRows is the exported shape of one product's day-by-day flow.
-    const days = dailyFlowRows(one(pRaw, '', ''), { db, from_date: '' });
-    ok(days.length === 4 && days[0].opening === 0 && near(days[days.length - 1].closing, 205),
-        'daily flow rows carry the balance across every day', days.map(d => [d.date, d.opening, d.closing]));
+    // The report rule, asked for one product directly: yesterday's closing 750
+    // (the carried-in opening entry) − sales 440 + collections 500 = 810 —
+    // production (600) and wastage (5) are deliberately NOT part of it.
+    const repRaw = dairy.reportChainFor(db, [pRaw], '', '');
+    ok(near(repRaw.opening, 750) && near(repRaw.closing, 810),
+        'reportChainFor: 750 opening − 440 sales + 500 purchase = 810', repRaw);
+    const repMid = dairy.reportChainFor(db, [pRaw], TOMORROW, TOMORROW);
+    ok(near(repMid.opening, 900) && near(repMid.closing, 800),
+        'a single-day range opens at yesterday\'s closing (900) and closes at 800', repMid);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

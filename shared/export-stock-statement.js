@@ -5,25 +5,25 @@
  * logical structure the operator reads on screen, and the Excel report must
  * reconcile EXACTLY with the application report.
  *
- * There is no second stock calculation here.  Every figure comes from
- * `getStockLedger()` (the authoritative lot/quantity engine in
- * `shared/operations/dairy_costing.js`), and the movement → column mapping is
- * the shared `flowDelta()` — the same function the live statement uses, so the
- * two can never drift apart.
+ * There is no second stock calculation here.  The statement sheet is built
+ * from `getDailyStockStatement()` — the very chain the Day by Day report shows
+ * — and the ledger sheet from `getStockLedger()`, the authoritative quantity
+ * engine in `shared/operations/dairy_costing.js`, with the shared
+ * `flowDelta()` movement → column mapping, so screen and workbook can never
+ * drift apart.
  *
  * Sheets:
- *   Stock_Statement — one row per product per day, the operator's daily flow:
- *       Date | Reference | Party | Product | Opening | Sales/Issues |
- *       Remaining | Collection/Purchase | Production | Production Consumption |
- *       Other | Shortfall | Closing
- *     Milk (Buffalo + Cow + Mix) is ONE combined product — the same total the
- *     screen shows — so sales deduct from yesterday's TOTAL milk closing.
- *     Opening on the first day is the stock immediately BEFORE the period;
- *     each following day carries the previous closing forward automatically
- *     (req 11). The closing NEVER goes below zero: a day deducts only what the
- *     stock actually has (sales take yesterday's closing first, the excess
- *     takes today's purchase) and whatever neither covers is the red Shortfall
- *     column — the same floor rule the live statement applies.
+ *   Stock_Statement — THE OPERATOR'S REPORT, the five columns only:
+ *       Date | Product | Yesterday's Closing Stock | Today's Total Sales |
+ *       Today's Total Purchase | Today's Closing Stock
+ *     with the period's totals under each product.
+ *     Yesterday's Closing − Today's Total Sales + Today's Total Purchase =
+ *     Today's Closing, and today's closing is tomorrow's opening. Milk
+ *     (Buffalo + Cow + Mix) is ONE combined stock: the three types' sales and
+ *     purchases are added together and only one combined closing is reported
+ *     (never a per-type balance, never the same purchase or sale twice).
+ *     Production, mixing and wastage are deliberately NOT part of this
+ *     statement — they live in the ledger sheet below.
  *   Stock_Ledger — every movement with its source (req 1 / 14):
  *       Date | Reference No. | Party | Product | Transaction Type |
  *       Opening | IN | OUT | Closing | Unit Cost | Value
@@ -37,96 +37,12 @@ const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
 
-const { getStockLedger, getDailyStockStatement, stockOpeningBefore, flowDelta, round2 } = require('./operations/dairy_costing');
-
-/**
- * Flatten a product's movement rows into per-day flow rows, carrying the
- * balance forward day by day.  First day's opening = stock before the period,
- * replayed with the statement's own floor rule when `ctx = { db, from_date }`
- * is supplied (so the export opens exactly where the live statement does);
- * without ctx the ledger's raw opening is used.
- *
- * Per day: `remaining` is floored at 0 (sales deduct from yesterday's closing
- * first, the excess takes today's in-flows), the closing is floored at 0 and
- * whatever stock could not cover becomes that day's `shortfall` — so every row
- * satisfies `Opening − Sales + In − Out + Shortfall = Closing` exactly.
- */
-function dailyFlowRows(product, ctx) {
-    const byDate = new Map();
-    for (const r of (product.rows || [])) {
-        if (!byDate.has(r.date)) {
-            byDate.set(r.date, {
-                date: r.date,
-                refs: new Set(), parties: new Set(),
-                sales_issues: 0, collection_purchase: 0, production: 0,
-                production_consumption: 0, wastage: 0, other_in: 0, other_out: 0
-            });
-        }
-        const day = byDate.get(r.date);
-        const fd = flowDelta(r);
-        day[fd.column] = round2(day[fd.column] + fd.qty);
-        if (r.reference_no) day.refs.add(String(r.reference_no));
-        if (r.party) day.parties.add(String(r.party));
-    }
-    const days = [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    let balance;
-    if (ctx && ctx.db) {
-        // The combined milk total carries its summed member openings
-        // (`opening_before`); a normal product replays its own history.
-        balance = product.opening_before != null
-            ? round2(product.opening_before)
-            : stockOpeningBefore(ctx.db, product.product_id, ctx.from_date || '');
-    } else {
-        balance = round2(product.opening_qty || 0);
-    }
-    const out = [];
-    for (const day of days) {
-        const opening = balance;
-        // What is physically on hand after yesterday's closing absorbs today's
-        // sales — never negative; the excess comes out of today's in-flows.
-        const remaining = Math.max(0, round2(opening - day.sales_issues));
-        const net = round2(
-            opening + day.collection_purchase + day.production
-            - day.production_consumption - day.wastage + day.other_in - day.other_out
-            - day.sales_issues
-        );
-        const shortfall = net < 0 ? round2(-net) : 0;
-        const computed = net < 0 ? 0 : net;
-        out.push({
-            date: day.date,
-            reference: summarise(day.refs),
-            party: summarise(day.parties),
-            product: product.product_name,
-            unit: product.unit,
-            opening,
-            sales_issues: round2(day.sales_issues),
-            remaining,
-            collection_purchase: round2(day.collection_purchase),
-            production: round2(day.production),
-            production_consumption: round2(day.production_consumption),
-            wastage: round2(day.wastage),
-            other_in: round2(day.other_in),
-            other_out: round2(day.other_out),
-            shortfall,
-            closing: computed
-        });
-        balance = computed;
-    }
-    return out;
-}
-
-/** Join a day's sources for the summary row without dumping hundreds of refs. */
-function summarise(set) {
-    const list = [...set];
-    if (!list.length) return '';
-    if (list.length <= 3) return list.join(', ');
-    return `${list.slice(0, 3).join(', ')} +${list.length - 3} more`;
-}
+const { getStockLedger, getDailyStockStatement, round2 } = require('./operations/dairy_costing');
 
 const STATEMENT_HEADERS = [
-    'Date', 'Reference', 'Party', 'Product',
-    'Opening', 'Sales/Issues', 'Remaining', 'Collection/Purchase',
-    'Production', 'Production Consumption', 'Wastage', 'Other IN', 'Other OUT', 'Shortfall', 'Closing'
+    'Date', 'Product',
+    "Yesterday's Closing Stock", "Today's Total Sales",
+    "Today's Total Purchase", "Today's Closing Stock"
 ];
 
 const LEDGER_HEADERS = [
@@ -136,11 +52,11 @@ const LEDGER_HEADERS = [
 
 /**
  * Build (but do not write) the workbook for a period.
- * @returns {{ sheets: object, statementRows: number, ledgerRows: number, mismatches: Array }}
+ * @returns {{ workbook: object, products: number, statementRows: number, ledgerRows: number, mismatches: Array }}
  */
 function buildStockStatementWorkbook(db, opts = {}) {
     const { from_date = '', to_date = '', category = '', search = '' } = opts;
-    // category/search + the combined milk grouping happen INSIDE the ledger
+    // category/search + the combined milk grouping happen INSIDE the engines
     // (filter first, then group) — the workbook then sees exactly the product
     // set the on-screen statement shows, so the two can never drift apart.
     const ledger = getStockLedger(db, {
@@ -148,29 +64,52 @@ function buildStockStatementWorkbook(db, opts = {}) {
         category: category || undefined, search: search || undefined,
         group_milk: true
     });
-    const products = (ledger.products || []).filter(p =>
-        // Only products with movement in the period or a non-zero opening.
-        (p.rows || []).length > 0 || round2(p.opening_qty || 0) !== 0);
+    const dailyStmt = getDailyStockStatement(db, { from_date, to_date, category, search });
 
     const statementAoa = [STATEMENT_HEADERS];
     const ledgerAoa = [LEDGER_HEADERS];
     const mismatches = [];
 
-    // The live statement's capped chain — the export must reproduce it exactly.
-    const dailyStmt = getDailyStockStatement(db, { from_date, to_date, category, search });
-    const dailyByPid = new Map((dailyStmt.products || []).map(d => [String(d.product_id), d]));
+    // ── Stock_Statement — the report, exactly as the Day by Day view shows it ──
+    let statementProducts = 0;
+    for (const p of (dailyStmt.products || [])) {
+        const report = p.report || {};
+        const rows = report.rows || [];
+        if (!rows.length) continue;
+        const nz = (v) => Math.abs(Number(v) || 0) >= 0.005;
+        // A product with nothing to say (no movement, zero opening and a zero
+        // closing on every day) is left out — same presentation filter as the
+        // screen and the ledger sheet.
+        if (!rows.some(r => nz(r.sales) || nz(r.purchase) || nz(r.opening) || nz(r.closing))) continue;
+        statementProducts++;
 
-    for (const p of products) {
-        const days = dailyFlowRows(p, { db, from_date });
-        for (const row of days) {
-            statementAoa.push([
-                row.date, row.reference, row.party, row.product,
-                row.opening, row.sales_issues, row.remaining, row.collection_purchase,
-                row.production, row.production_consumption, row.wastage, row.other_in,
-                row.other_out, row.shortfall, row.closing
-            ]);
+        for (const r of rows) {
+            const opening = round2(r.opening), sales = round2(r.sales);
+            const purchase = round2(r.purchase), closing = round2(r.closing);
+            statementAoa.push([r.date, p.product_name, opening, sales, purchase, closing]);
+            // The one identity this report asserts, checked on every row.
+            if (Math.abs(round2(opening - sales + purchase) - closing) > 0.02) {
+                mismatches.push({ product: p.product_name, date: r.date, opening, sales, purchase, closing });
+            }
         }
-        // Movement-level ledger with the running balance and open reference.
+        // The period's totals, mirroring the on-screen TOTAL row: the first
+        // opening, the summed sales and purchases, and the final closing —
+        // period opening − total sales + total purchase = final closing.
+        const firstOpening = round2(rows[0].opening);
+        const totalSales = round2(rows.reduce((s, r) => s + (Number(r.sales) || 0), 0));
+        const totalPurchase = round2(rows.reduce((s, r) => s + (Number(r.purchase) || 0), 0));
+        const lastClosing = round2(rows[rows.length - 1].closing);
+        statementAoa.push(['', `TOTAL — ${p.product_name}`, firstOpening, totalSales, totalPurchase, lastClosing]);
+        if (Math.abs(round2(firstOpening - totalSales + totalPurchase) - lastClosing) > 0.02
+            || Math.abs(lastClosing - round2(report.closing)) > 0.02) {
+            mismatches.push({ product: p.product_name, total: true, firstOpening, totalSales, totalPurchase, lastClosing, engine_closing: round2(report.closing) });
+        }
+    }
+
+    // ── Stock_Ledger — the detailed transaction ledger (every movement) ──
+    const ledgerProducts = (ledger.products || []).filter(p =>
+        (p.rows || []).length > 0 || round2(p.opening_qty || 0) !== 0);
+    for (const p of ledgerProducts) {
         let running = round2(p.opening_qty || 0);
         for (const r of (p.rows || [])) {
             const inQty = round2(r.inward_qty || 0), outQty = round2(r.outward_qty || 0);
@@ -186,33 +125,10 @@ function buildStockStatementWorkbook(db, opts = {}) {
         if ((p.rows || []).length && Math.abs(running - round2(p.closing_qty || 0)) > 0.02) {
             mismatches.push({ product: p.product_name, ledger_closing: running, engine_closing: round2(p.closing_qty || 0) });
         }
-        // The statement sheet must equal the DAILY ENGINE (capped chain): two
-        // independent implementations of the same floor rule must agree, no row
-        // may ever close negative, and every row's identity must hold.
-        if (days.length) {
-            const dp = dailyByPid.get(String(p.product_id));
-            const engineClose = dp ? round2(dp.last_closing) : null;
-            const last = days[days.length - 1];
-            if (engineClose === null || Math.abs(last.closing - engineClose) > 0.02) {
-                mismatches.push({ product: p.product_name, statement_closing: last.closing, engine_closing: engineClose });
-            }
-            for (const row of days) {
-                const net = round2(row.opening + row.collection_purchase + row.production + row.other_in
-                    - row.production_consumption - row.wastage - row.other_out - row.sales_issues);
-                const wantClose = net < 0 ? 0 : net;
-                const wantShort = net < 0 ? round2(-net) : 0;
-                if (row.closing < -0.001
-                    || Math.abs(row.closing - wantClose) > 0.02
-                    || Math.abs(row.shortfall - wantShort) > 0.02) {
-                    mismatches.push({ product: p.product_name, date: row.date, statement_closing: row.closing, shortfall: row.shortfall, engine_closing: wantClose });
-                    break;
-                }
-            }
-        }
     }
 
     const wsStatement = XLSX.utils.aoa_to_sheet(statementAoa);
-    wsStatement['!cols'] = STATEMENT_HEADERS.map((h, i) => ({ wch: i === 2 ? 24 : (i === 3 ? 20 : 14) }));
+    wsStatement['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
     const wsLedger = XLSX.utils.aoa_to_sheet(ledgerAoa);
     wsLedger['!cols'] = [{ wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 20 }, { wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
 
@@ -222,7 +138,7 @@ function buildStockStatementWorkbook(db, opts = {}) {
 
     return {
         workbook: wb,
-        products: products.length,
+        products: statementProducts,
         statementRows: statementAoa.length - 1,
         ledgerRows: ledgerAoa.length - 1,
         mismatches
@@ -253,4 +169,4 @@ function exportStockStatementExcel(db, outputPath, opts = {}) {
     }
 }
 
-module.exports = { exportStockStatementExcel, buildStockStatementWorkbook, dailyFlowRows };
+module.exports = { exportStockStatementExcel, buildStockStatementWorkbook };

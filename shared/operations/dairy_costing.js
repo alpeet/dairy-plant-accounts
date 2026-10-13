@@ -1235,6 +1235,89 @@ function groupOpeningBefore(db, productIds, from) {
     return groupChainFor(db, productIds, from, null).opening;
 }
 
+/**
+ * THE OPERATOR'S REPORT RULE (2026-10) — the plain three-figure stock
+ * statement, applied to one product or to a group of products as ONE stock:
+ *
+ *   Yesterday's Closing Stock − Today's Total Sales + Today's Total Purchase
+ *                            = Today's Closing Stock
+ *
+ * and tomorrow starts from today's closing. Nothing else counts here: no
+ * production, no consumption, no wastage, no floor at zero, no shortfall —
+ * the operator asked for exactly these three figures and no extra columns.
+ *
+ * It is NOT a second stock system: it reads the very same `stock_movements`
+ * rows and uses the shared `flowDelta()` mapping, so "purchase" is the
+ * collection/purchase bucket (milk collections + purchases) and "sales" the
+ * sales bucket — the same movement is never counted twice.
+ *
+ * `opening` is the same rule replayed over every movement before `from`
+ * (initial stock of each product + Σ purchase − Σ sales), i.e. literally
+ * yesterday's closing; for Buffalo + Cow + Mix asked together it is ONE
+ * combined balance, never a sum of separately-chained types.
+ *
+ * @returns {{ opening:number, closing:number, byDate:Map<string,{sales:number,purchase:number}> }}
+ */
+function reportChainFor(db, productIds, from, to) {
+    const ids = (productIds || []).map(Number).filter(Number.isFinite);
+    if (!ids.length) return { opening: 0, closing: 0, byDate: new Map() };
+
+    let opening = 0;
+    for (const id of ids) {
+        const hasOpening = !!db.prepare("SELECT 1 FROM stock_movements WHERE product_id = ? AND type = 'opening' LIMIT 1").get(id);
+        const meta = hasOpening ? null : db.prepare('SELECT opening_stock FROM products WHERE id = ?').get(id);
+        const initial = num(meta && meta.opening_stock);
+        if (initial > 0) opening = round2(opening + initial);
+    }
+
+    const start = String(from || '');
+    const end = String(to || '');
+    const marks = ids.map(() => '?').join(',');
+    const moves = end
+        ? db.prepare(`SELECT product_id, date, type, reference_type, inward_qty, outward_qty
+                      FROM stock_movements WHERE product_id IN (${marks}) AND date <= ? ORDER BY date, id`).all(...ids, end)
+        : db.prepare(`SELECT product_id, date, type, reference_type, inward_qty, outward_qty
+                      FROM stock_movements WHERE product_id IN (${marks}) ORDER BY date, id`).all(...ids);
+
+    const byDate = new Map();
+    const day = (d) => {
+        if (!byDate.has(d)) byDate.set(d, { sales: 0, purchase: 0 });
+        return byDate.get(d);
+    };
+    for (const m of moves) {
+        // A stock-seed entry ('opening') is the carried-in balance itself, not
+        // a purchase: it lands in `opening` wherever it is dated, so the report
+        // opens where the books say the stock stood.
+        if (m.type === 'opening') {
+            opening = round2(opening + num(m.inward_qty) - num(m.outward_qty));
+            continue;
+        }
+        const fd = flowDelta(m);
+        const qty = num(fd.qty);
+        const inWindow = start ? m.date >= start : true;
+        if (fd.column === 'collection_purchase') {
+            if (inWindow) { const b = day(m.date); b.purchase = round2(b.purchase + qty); }
+            else opening = round2(opening + qty);
+        } else if (fd.column === 'sales_issues') {
+            if (inWindow) { const b = day(m.date); b.sales = round2(b.sales + qty); }
+            else opening = round2(opening - qty);
+        }
+    }
+
+    let closing = opening;
+    for (const [, b] of byDate) closing = round2(closing - b.sales + b.purchase);
+    return { opening, closing, byDate };
+}
+
+/**
+ * The report rule's opening for a group (yesterday's TOTAL closing) — the
+ * single balance the Stock Statement's Day by Day report and the Today's Stock
+ * panel both start from.
+ */
+function reportOpeningBefore(db, productIds, from) {
+    return reportChainFor(db, productIds, from, null).opening;
+}
+
 /** Build the single merged milk entry from its members (see groupMilkProducts). */
 function mergeMilkEntries(milk, { db = null, from = '', to = '', keepMemberRows = false } = {}) {
     const rows = [];
@@ -1312,6 +1395,13 @@ function mergeMilkEntries(milk, { db = null, from = '', to = '', keepMemberRows 
         entry.opening_before = chain.opening;
         entry.chain_closing = chain.closing;
         entry.chain_shortfall = chain.shortfall;
+        // The operator's plain report rule over the SAME member ids: yesterday's
+        // TOTAL closing − today's TOTAL sales + today's TOTAL purchase. Read by
+        // the Today's Stock panel so it can never disagree with the report.
+        const report = reportChainFor(db, milk.map(p => p.product_id), from || '', to || '');
+        entry.report_opening = report.opening;
+        entry.report_closing = report.closing;
+        entry.report_by_date = report.byDate;
     }
     return entry;
 }
@@ -1319,6 +1409,28 @@ function mergeMilkEntries(milk, { db = null, from = '', to = '', keepMemberRows 
 // ──────────────────────────────────────────────────────────────
 // Daily chained Stock Statement
 // ──────────────────────────────────────────────────────────────
+
+/**
+ * The operator's report rows for one statement product: a row for EVERY day in
+ * the range (a quiet day just carries the closing forward), read straight from
+ * the same ledger buckets the rest of the statement uses.
+ */
+function reportRowsFor(rep, days, hasData) {
+    let balance = round2(rep.opening);
+    const rows = [];
+    for (const day of days) {
+        const b = rep.byDate.get(day) || { sales: 0, purchase: 0 };
+        const opening = balance;
+        const closing = round2(opening - b.sales + b.purchase);
+        rows.push({
+            date: day, opening,
+            sales: round2(b.sales), purchase: round2(b.purchase), closing,
+            has_data: hasData(day)
+        });
+        balance = closing;
+    }
+    return rows;
+}
 
 /**
  * Opening balance for the daily chained statement: the product's initial stock
@@ -1389,7 +1501,10 @@ function stockOpeningBefore(db, productId, from) {
  * MILK IS ONE STOCK (operator's rule, 2026-10): Buffalo + Cow + Mix chain as
  * a single combined total — today's total sales deduct from yesterday's TOTAL
  * closing first, then today's total collection is added, and the closing
- * never goes below zero. The combined entry (product_id = MILK_TOTAL_ID) also
+ * never goes below zero. Alongside that detailed chain every product also
+ * carries `report` — the operator's plain three-figure report (see
+ * reportChainFor), which the Stock Statement's Day by Day view shows. The
+ * combined entry (product_id = MILK_TOTAL_ID) also
  * reports each type's own chain under `members` (one recursive call per type)
  * so the print report can value the closing at each type's rate. The
  * category/search filters run inside getStockLedger BEFORE the milk grouping,
@@ -1501,12 +1616,26 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
             };
         }) : undefined;
 
+        // The operator's report chain for this product — for the combined milk
+        // total it chains the MEMBER products as one stock (one combined closing
+        // for Buffalo + Cow + Mix, never per-type balances).
+        const reportIds = (p.product_id === MILK_TOTAL_ID && Array.isArray(p.members))
+            ? p.members.map(m => m.product_id)
+            : [p.product_id];
+        const rep = reportChainFor(db, reportIds, from, to);
+        const report = {
+            opening: rep.opening,
+            closing: rep.closing,
+            rows: reportRowsFor(rep, days, (d) => byDate.has(d))
+        };
+
         products.push({
             product_id: p.product_id, product_name: p.product_name, unit: p.unit,
             category: p.category, initial_stock: initial,
             first_opening: firstOpening, last_closing: balance,
             shortfall: round2(rows.reduce((s, r) => s + (Number(r.shortfall) || 0), 0)),
             shortfall_days: rows.filter(r => r.is_shortfall).length,
+            report,
             members,
             rows
         });
@@ -1523,7 +1652,7 @@ function getDailyStockStatement(db, { from_date, to_date, product_id, category, 
 module.exports = {
     round2, classifyMilkType, isMilkProductName, classifyInventoryCategory,
     MILK_TOTAL_ID, isMilkGroupProduct, milkTotalName, groupMilkProducts,
-    groupChainFor, groupOpeningBefore,
+    groupChainFor, groupOpeningBefore, reportChainFor, reportOpeningBefore,
     bsAddDays, bsDays,
     getDailyMilkCost, getMilkFlow, getDailySalesRealization, getDailyMilkCostVsSales,
     getProductCostReport, getStockLedger, getInventoryValuation, productLotValue, stockFlowRow, flowDelta,

@@ -536,7 +536,7 @@ async function printReceivablePayable() {
 // ============================================================
 // Period + views state. The period comes from the SHARED date layer
 // (getDatePreset) — never hardcoded; 'custom' is the From/To pair.
-let _ssState = { preset: 'today', from: '', to: '', view: 'movement', category: '', search: '', product_id: '' };
+let _ssState = { preset: 'today', from: '', to: '', view: 'daily', category: '', search: '', product_id: '' };
 
 /** Local 2-dp rounding for summary figures (currency precision). */
 function round2ui(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -933,64 +933,67 @@ function _ssDailyView(daily, periodLabel) {
     }
     const sel = _ssState.product_id ? String(_ssState.product_id) : '';
     const shown = sel ? products.filter(p => String(p.product_id) === sel) : products;
-    const nz = v => Math.abs(v || 0) >= 0.005;
-    const q = v => nz(v) ? formatNumber(round2ui(v)) : '0';
     const MAX_ROWS = 400;
+    const q = v => formatNumber(round2ui(v));
 
+    // ONE simple statement per product, exactly the operator's five columns:
+    //   Date | Yesterday's Closing Stock | Today's Total Sales |
+    //   Today's Total Purchase | Today's Closing Stock
+    // closing = yesterday's closing − today's total sales + today's total
+    // purchase (the engine's `report` chain — no floor, no shortfall, no
+    // production term; the detailed ledger keeps those, on its own view).
+    // Milk (Buffalo + Cow + Mix) is ONE section, chained as one combined stock.
     const sections = shown.map(p => {
-        const rs = p.rows || [];
-        const anyCol = rs.some(r => nz(r.collection));
-        const anyPur = rs.some(r => nz(r.purchase));
-        const anyProd = rs.some(r => nz(r.production) || nz(r.production_consumption));
-        const anyOther = rs.some(r => nz(r.wastage) || nz(r.other_in) || nz(r.other_out));
-        const anyShort = rs.some(r => nz(r.shortfall));
+        const rs = (p.report && p.report.rows) || [];
+        if (!rs.length) return '';
+        const unit = p.unit || '';
         const capped = rs.slice(0, MAX_ROWS);
+        const firstOpening = round2ui(rs[0].opening);
+        const totalSales = round2ui(rs.reduce((s, r) => s + (Number(r.sales) || 0), 0));
+        const totalPurchase = round2ui(rs.reduce((s, r) => s + (Number(r.purchase) || 0), 0));
+        const lastClosing = round2ui(rs[rs.length - 1].closing);
+        const negative = rs.some(r => r.closing < -0.005) || lastClosing < -0.005;
+        const u = `(${escapeHtml(unit)})`;
         return `
         <h3 style="margin:18px 0 8px;font-size:15px">${escapeHtml(p.product_name)}
             <span style="color:var(--text-light);font-weight:400;font-size:12px">
-                (${escapeHtml(p.unit || '')}) — ${rs.length} day(s), opening ${q(rs.length ? rs[0].opening : 0)} → closing ${q(p.last_closing)}${p.shortfall_days ? ` · <span style="color:var(--danger)">${p.shortfall_days} shortfall day(s)</span>` : ''}
+                ${u} — ${rs.length} day(s): yesterday's closing ${q(firstOpening)} → closing ${q(lastClosing)}
             </span>
         </h3>
         <div class="table-container">
             <table>
                 <thead><tr>
                     <th>Date</th>
-                    <th class="text-right">Opening</th>
-                    <th class="text-right">Sales</th>
-                    <th class="text-right">Remaining</th>
-                    ${anyCol ? '<th class="text-right">Collection</th>' : ''}
-                    ${anyPur ? '<th class="text-right">Purchase</th>' : ''}
-                    ${anyProd ? '<th class="text-right">Production</th><th class="text-right">Used in Mixing</th>' : ''}
-                    ${anyOther ? '<th class="text-right">Wastage</th><th class="text-right">Other IN</th><th class="text-right">Other OUT</th>' : ''}
-                    ${anyShort ? '<th class="text-right" style="color:var(--danger)">Shortfall</th>' : ''}
-                    <th class="text-right">Closing</th>
+                    <th class="text-right">Yesterday's Closing Stock ${u}</th>
+                    <th class="text-right">Today's Total Sales ${u}</th>
+                    <th class="text-right">Today's Total Purchase ${u}</th>
+                    <th class="text-right">Today's Closing Stock ${u}</th>
                 </tr></thead>
                 <tbody>
                 ${capped.map(r => {
                     const dash = '<span style="color:var(--text-light)">—</span>';
-                    const cell = v => `<td class="text-right">${r.has_data ? q(v) : dash}</td>`;
-                    // Yesterday's closing absorbs today's sales; what is physically
-                    // left is never allowed to be negative (the deficit comes out
-                    // of today's collection — see the Shortfall column).
-                    const remCell = `<td class="text-right">${r.has_data ? q(Math.max(0, round2ui(r.opening - r.sales))) : dash}</td>`;
-                    const shortCell = `<td class="text-right" style="${nz(r.shortfall) ? 'color:var(--danger);font-weight:600' : 'color:var(--text-light)'}">${r.has_data ? (nz(r.shortfall) ? '- ' + q(r.shortfall) : '—') : dash}</td>`;
                     return `<tr${r.has_data ? '' : ' style="opacity:.55;font-style:italic"'}>
                         <td>${formatDate(r.date)}</td>
                         <td class="text-right">${q(r.opening)}</td>
-                        ${cell(r.sales)}
-                        ${remCell}
-                        ${anyCol ? cell(r.collection) : ''}
-                        ${anyPur ? cell(r.purchase) : ''}
-                        ${anyProd ? cell(r.production) + cell(r.production_consumption) : ''}
-                        ${anyOther ? cell(r.wastage) + cell(r.other_in) + cell(r.other_out) : ''}
-                        ${anyShort ? shortCell : ''}
-                        <td class="text-right" style="font-weight:700">${q(r.closing)}</td>
+                        <td class="text-right">${r.has_data ? q(r.sales) : dash}</td>
+                        <td class="text-right">${r.has_data ? q(r.purchase) : dash}</td>
+                        <td class="text-right" style="font-weight:700;${r.closing < -0.005 ? 'color:var(--danger)' : ''}">${q(r.closing)}</td>
                     </tr>`;
                 }).join('')}
                 </tbody>
+                <tfoot><tr style="font-weight:700;background:rgba(0,0,0,0.04)">
+                    <td>TOTAL (${rs.length} day(s))</td>
+                    <td class="text-right" title="The period's first Yesterday's Closing Stock">${q(firstOpening)}</td>
+                    <td class="text-right">${q(totalSales)}</td>
+                    <td class="text-right">${q(totalPurchase)}</td>
+                    <td class="text-right" style="${lastClosing < -0.005 ? 'color:var(--danger)' : ''}" title="Period opening − total sales + total purchase">${q(lastClosing)}</td>
+                </tr></tfoot>
             </table>
         </div>
-        ${rs.length > capped.length ? `<div style="font-size:12px;color:var(--text-light);margin:6px 0 0">Showing first ${capped.length} of ${rs.length} days — narrow the period.</div>` : ''}`;
+        ${rs.length > capped.length ? `<div style="font-size:12px;color:var(--text-light);margin:6px 0 0">Showing first ${capped.length} of ${rs.length} days — narrow the period.</div>` : ''}
+        ${negative ? `<div style="font-size:11px;color:var(--danger);margin:6px 0 0">
+            ⚠ Closing stock goes below zero on some day(s): the books recorded more sales than purchases (collections) for this stock in the period. Add the missing purchase/collection, or check the Detailed Ledger.
+        </div>` : ''}`;
     }).join('');
 
     return `
@@ -1004,7 +1007,7 @@ function _ssDailyView(daily, periodLabel) {
         </div>
         <div class="form-group" style="flex:1"><label>&nbsp;</label>
             <div style="font-size:12px;color:var(--text-light);padding-top:6px">
-                ${escapeHtml(periodLabel)} — every day in the range gets a row, in total. Read a row left to right: <strong>Opening</strong> (yesterday's total closing) → <strong>Sales</strong> (today's total) → <strong>Remaining</strong> → <strong>Collection</strong> (today's total) → <strong>Closing</strong>. Opening − Sales is never allowed to go below zero: when it would, that deficit is deducted from today's Collection first, and only what the Collection still cannot cover shows in red as <strong>Shortfall</strong> — no figure in this table is ever negative. Closing(N) becomes Opening(N+1); faded rows are days with no records, where the closing simply carries forward.
+                ${escapeHtml(periodLabel)} — one row per day. <strong>Yesterday's Closing Stock − Today's Total Sales + Today's Total Purchase = Today's Closing Stock</strong>, and today's closing becomes tomorrow's opening. Milk (Buffalo + Cow + Mix) is <strong>one combined stock</strong>: all three types' sales and purchases are added together into a single closing balance. Every figure comes from actual saved transactions; the bottom row shows the period's totals (the period's opening − total sales + total purchase = the final closing). Production, mixing and wastage are deliberately not part of this statement — open <em>Detailed Ledger</em> for those movements.
             </div>
         </div>
     </div>
