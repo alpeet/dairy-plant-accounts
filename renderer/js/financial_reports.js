@@ -938,9 +938,10 @@ function _ssDailyView(daily, periodLabel) {
     const q = v => formatNumber(round2ui(v));
 
     // ONE simple statement per product, exactly the operator's five columns,
-    // in the operator's own order (purchase BEFORE sales):
-    //   Date | Yesterday's Closing Stock | Today's Total Purchase |
-    //   Today's Total Sales | Today's Closing Stock
+    // in the operator's own order (purchase BEFORE sales), and the header row
+    // carries the operators so the arithmetic reads off the table itself:
+    //   Date | Yesterday's Closing Stock | + Today's Total Purchase
+    //        = Today's Stock | − Today's Total Sales | = Today's Closing Stock
     // closing = yesterday's closing + today's total purchase − today's total
     // sales (the engine's `report` chain — no floor, no shortfall, no
     // production term; the detailed ledger keeps those, on its own view).
@@ -966,10 +967,10 @@ function _ssDailyView(daily, periodLabel) {
             <table>
                 <thead><tr>
                     <th>Date</th>
-                    <th class="text-right">Yesterday's Closing Stock ${u}</th>
-                    <th class="text-right">Today's Total Purchase ${u}</th>
-                    <th class="text-right">Today's Total Sales ${u}</th>
-                    <th class="text-right">Today's Closing Stock ${u}</th>
+                    <th class="text-right" title="The balance carried in from yesterday = today's opening">Yesterday's Closing Stock ${u}</th>
+                    <th class="text-right" title="Yesterday's Closing Stock + this purchase = Today's Stock">+ Today's Total Purchase ${u} = Today's Stock</th>
+                    <th class="text-right" title="Today's Stock − this sales figure = Today's Closing Stock">− Today's Total Sales ${u}</th>
+                    <th class="text-right" title="Yesterday's Closing Stock + Today's Total Purchase − Today's Total Sales">= Today's Closing Stock ${u}</th>
                 </tr></thead>
                 <tbody>
                 ${capped.map(r => {
@@ -1009,7 +1010,7 @@ function _ssDailyView(daily, periodLabel) {
         </div>
         <div class="form-group" style="flex:1"><label>&nbsp;</label>
             <div style="font-size:12px;color:var(--text-light);padding-top:6px">
-                ${escapeHtml(periodLabel)} — one row per day. <strong>Yesterday's Closing Stock + Today's Total Purchase − Today's Total Sales = Today's Closing Stock</strong>, and today's closing is automatically carried forward as the next day's opening. Milk (Buffalo + Cow + Mix) is <strong>one combined stock</strong>: all three types' purchases are added into one total purchase, all three types' sales into one total sales, and there is only ONE closing balance — never a separate closing for Cow, Buffalo or Mix. Every figure comes from actual saved transactions (the same purchase or sale is never counted twice); the bottom row shows the period's totals (the period's opening + total purchase − total sales = the final closing). Production, wastage and adjustments are deliberately not part of this statement — open <em>Detailed Ledger</em> for those movements.
+                ${escapeHtml(periodLabel)} — one row per day, read the header row left to right as the sum itself: <strong>Yesterday's Closing Stock + Today's Total Purchase = Today's Stock</strong>, then <strong>Today's Stock − Today's Total Sales = Today's Closing Stock</strong> — and today's closing is automatically carried forward as the next day's opening. Milk (Buffalo + Cow + Mix) is <strong>one combined stock</strong>: all three types' purchases are added into one total purchase, all three types' sales into one total sales, and there is only ONE closing balance — never a separate closing for Cow, Buffalo or Mix. Every figure comes from actual saved transactions (the same purchase or sale is never counted twice); the bottom row shows the period's totals (the period's opening + total purchase − total sales = the final closing). Production, wastage and adjustments are deliberately not part of this statement — open <em>Detailed Ledger</em> for those movements.
             </div>
         </div>
     </div>
