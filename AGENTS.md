@@ -53,6 +53,15 @@ server recipe, native-module ABI trap, Excel→app sync, Data Integrity Doctor).
   a logic fix belongs in `shared/operations/` and must be exported from
   `shared/operations/index.js`, then wired into `main.js` (IPC), `server.js` (API),
   `preload.js` and `renderer/js/api.js`.
+- **BS calendar: one source only.** Month lengths live in `shared/bs-calendar.js`
+  (BS 2000–2090). The browser copy `renderer/js/bs-calendar-data.js` is GENERATED
+  by `node scripts/build-bs-calendar.js` — never hand-edit it, never add a second
+  table anywhere. Two tables drifting apart is what made Ashwin 31, 2083 (today)
+  unselectable and shifted every AD→BS conversion by a day.
+- A payment covering future periods (advance rent) is a **prepaid asset**, not an
+  expense: record it through `shared/operations/prepaid_rent.js` and let the monthly
+  recognition derive the expense. Never expense the whole amount in the payment month,
+  and never enter the same payment twice.
 - Money: `shared/operations/accounting.js` is the single source of truth — use its
   `round2` / `CURRENCY_TOLERANCE` / `paymentStatus` and its transaction→account
   mapping instead of ad-hoc arithmetic or float comparisons.
@@ -66,6 +75,28 @@ server recipe, native-module ABI trap, Excel→app sync, Data Integrity Doctor).
   acceptance cases on a fresh database plus the same rules over a copy of the
   migrated database.
 - `node scripts/audit/test-handover-reset.js` — 40 checks, Fresh Start / Handover Reset.
+- `node scripts/audit/test-bs-calendar.js` — 79 checks: every BS month length
+  (2000–2090), every month end, invalid-date rejection, BS↔AD round-trips,
+  month/year navigation, agreement with the workbook's `BS_AD_Lookup` sheet and
+  equality of the generated browser table with the Node table.
+- `node scripts/audit/test-monthly-report.js` — 121 checks on a /tmp copy of the
+  live database: month ends, inclusive last day, income/expense heads vs the
+  registers, milk counted once, advances/loans never in P&L, month-to-month
+  balance continuity, the six-month rent recognition, the Excel sheet matching the
+  engine, and the workbook edit preserving every existing sheet.
 - `node scripts/verify-modules.js` — smoke test of the operation modules
   (2 known failures: `farmer-statement` / `party-statement` need an id argument).
 - `node scripts/audit/integrity-doctor.js <db>` — read-only data diagnostics.
+- `node scripts/audit/test-pdf.js` — Electron-only (`app.whenReady`), cannot run
+  under plain `node`; run it through the Electron runtime instead.
+
+## Monthly Report refresh (app DB → workbook)
+
+- The app's Monthly Report screen and `shared/export-monthly-report.js` share one
+  engine (`shared/operations/monthly_report.js`), so screen and workbook cannot drift.
+- After new transactions, refresh the customer's workbook sheet with
+  `node scripts/audit/add-monthly-report-sheet.js --apply` (dry run without `--apply`).
+  It writes a timestamped `.bak-monthly-report-*` copy first and never touches other
+  sheets. The live DB is found automatically; override with `DB_PATH` / `WORKBOOK_PATH`.
+- Do not open the workbook in Excel while the script runs — Excel would overwrite the
+  new sheet on its next save.

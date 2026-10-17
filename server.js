@@ -1105,6 +1105,28 @@ app.post('/api/reports/profit-loss-by-month', (req, res) => {
     res.json(safeRun(() => ops.getProfitLossByMonth(db, req.body || {})));
 });
 
+// Monthly Report — BS range or month, with month-by-month closing balances.
+app.post('/api/reports/monthly-report', (req, res) => {
+    res.json(safeRun(() => ops.getMonthlyReport(db, req.body || {})));
+});
+
+// Prepaid expenses (advance rent).
+app.post('/api/prepaid-expenses/list', (req, res) => {
+    res.json(safeRun(() => ops.listPrepaidExpenses(db, req.body || {})));
+});
+
+app.post('/api/prepaid-expenses/save', (req, res) => {
+    res.json(safeRun(() => ops.savePrepaidExpense(db, req.body || {}, (req.user && req.user.id) || null)));
+});
+
+app.post('/api/prepaid-expenses/summary', (req, res) => {
+    res.json(safeRun(() => ops.getPrepaidSummary(db, req.body || {})));
+});
+
+app.post('/api/prepaid-expenses/seed-advance-rent', (req, res) => {
+    res.json(safeRun(() => ops.seedAdvanceRent(db, (req.user && req.user.id) || null)));
+});
+
 // Company Ledger — every major financial movement, grouped daily/weekly/
 // monthly/custom, with run-time checks that it agrees with the P&L.
 app.post('/api/reports/company-ledger', (req, res) => {
@@ -2063,6 +2085,30 @@ app.post('/api/db-path', requireRole('staff'), (req, res) => {
 // Export to Daily Account Pro Excel
 const { exportToDailyAccountExcel } = require('./shared/export-daily-account');
 const { exportStockStatementExcel } = require('./shared/export-stock-statement');
+const { exportMonthlyReportExcel } = require('./shared/export-monthly-report');
+
+// POST /api/export/monthly-report — the Monthly Report as a workbook, built by
+// the same engine the screen uses (so both always agree).
+app.post('/api/export/monthly-report', requireAuth, (req, res) => {
+    try {
+        const outputPath = path.join(dbDir, 'Monthly_Report_Export.xlsx');
+        const result = exportMonthlyReportExcel(db, outputPath, req.body || {});
+        if (result.success) {
+            res.download(result.filePath, 'Monthly_Report_Export.xlsx', (err) => {
+                if (err) {
+                    console.error('Monthly report export download error:', err.message);
+                    if (!res.headersSent) {
+                        res.json({ success: false, error: 'Download failed: ' + err.message });
+                    }
+                }
+            });
+        } else {
+            res.json(result);
+        }
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
 
 app.post('/api/export/daily-account', requireAuth, (req, res) => {
     try {

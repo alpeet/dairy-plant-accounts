@@ -31,121 +31,16 @@ const XLSX = require('xlsx');
 const SHEET_DATA_START_ROW = 2;
 
 // ════════════════════════════════════════════════════════════════
-// BS CALENDAR DATA (2080-2090, from renderer/js/nepali-date.js)
+// BS CALENDAR — one authoritative table (shared/bs-calendar.js)
 // ════════════════════════════════════════════════════════════════
-const BS_CALENDAR_DATA = {
-    2080: [30, 32, 31, 31, 30, 29, 30, 29, 30, 30, 30, 30],
-    2081: [31, 32, 31, 31, 31, 30, 29, 30, 29, 30, 29, 30],
-    2082: [31, 32, 32, 31, 31, 30, 29, 29, 30, 30, 29, 30],
-    2083: [31, 32, 32, 31, 31, 30, 29, 30, 29, 30, 29, 30],
-    2084: [31, 32, 31, 31, 31, 30, 29, 30, 29, 30, 30, 29],
-    2085: [31, 32, 31, 32, 31, 30, 29, 29, 30, 29, 30, 30],
-    2086: [31, 32, 31, 32, 31, 30, 29, 30, 29, 30, 29, 30],
-    2087: [31, 31, 32, 31, 31, 30, 29, 30, 29, 30, 29, 30],
-    2088: [31, 32, 31, 32, 31, 30, 29, 29, 30, 30, 29, 30],
-    2089: [31, 32, 31, 32, 31, 30, 29, 30, 29, 30, 29, 30],
-    2090: [31, 32, 31, 32, 31, 30, 30, 29, 30, 29, 30, 29],
-};
-const BS_MONTH_DEFAULT_DAYS = [31, 32, 31, 31, 31, 30, 29, 30, 29, 30, 29, 30];
-
-function getBSDaysInMonth(year, month) {
-    const data = BS_CALENDAR_DATA[year];
-    return data ? data[month - 1] : BS_MONTH_DEFAULT_DAYS[month - 1];
-}
-
-function pad2(n) {
-    return String(n).padStart(2, '0');
-}
-
-/**
- * Convert a BS date string (YYYY-MM-DD) to AD (YYYY-MM-DD).
- * Inverse of adToBS (same anchor: BS 2082-01-01 = AD 2025-04-14).
- *
- * Counts real BS month lengths from the calendar table (2080-2090) and offsets
- * the anchor AD date by that many days. Outside 2080-2090 the fixed default
- * month-length array is used — the same limitation adToBS has.
- *
- * @param {string} bsDateStr - 'YYYY-MM-DD' in Bikram Sambat
- * @returns {string|null} 'YYYY-MM-DD' in AD, or null if unparseable
- */
-function bsToAD(bsDateStr) {
-    if (!bsDateStr || typeof bsDateStr !== 'string') return null;
-    const parts = bsDateStr.split('-').map(p => parseInt(p, 10));
-    if (parts.length !== 3 || parts.some(isNaN)) return null;
-    const [bsYear, bsMonth, bsDay] = parts;
-
-    // Total BS days from 2080-01-01 up to (not including) the target date.
-    // Anchor (2082-01-01) is computed through the same walk, so both sides use
-    // identical month-length data and the difference is exact.
-    const bsDayNumber = (year, month, day) => {
-        let total = 0;
-        for (let y = 2080; y < year; y++) {
-            for (let m = 1; m <= 12; m++) total += getBSDaysInMonth(y, m);
-        }
-        for (let m = 1; m < month; m++) total += getBSDaysInMonth(year, m);
-        return total + day - 1; // day-of-month, 0-based
-    };
-
-    const anchorBS = bsDayNumber(2082, 1, 1);            // = 0 at BS 2082-01-01
-    const targetBS = bsDayNumber(bsYear, bsMonth, bsDay);
-    const anchorAD = new Date(2025, 3, 14);              // April 14, 2025
-    const result = new Date(anchorAD.getTime() + (targetBS - anchorBS) * 86400000);
-    if (isNaN(result.getTime())) return null;
-    return `${result.getFullYear()}-${pad2(result.getMonth() + 1)}-${pad2(result.getDate())}`;
-}
-
-/**
- * Convert an AD date string (YYYY-MM-DD) to BS (YYYY-MM-DD).
- * Reference: BS 2082-01-01 = AD 2025-04-14.
- */
-function adToBS(adDateStr) {
-    if (!adDateStr || typeof adDateStr !== 'string') return null;
-    const parts = adDateStr.split('-');
-    if (parts.length !== 3) return null;
-    const adYear = parseInt(parts[0], 10);
-    const adMonth = parseInt(parts[1], 10);
-    const adDay = parseInt(parts[2], 10);
-    if (isNaN(adYear) || isNaN(adMonth) || isNaN(adDay)) return null;
-
-    const refAD = new Date(2025, 3, 14); // April 14, 2025
-    const targetAD = new Date(adYear, adMonth - 1, adDay);
-    const diffDays = Math.round((targetAD - refAD) / 86400000);
-
-    let bsYear = 2082;
-    let bsMonth = 1;
-    let bsDay = 1;
-    let remaining = diffDays;
-
-    if (remaining >= 0) {
-        while (remaining > 0) {
-            const daysInMonth = getBSDaysInMonth(bsYear, bsMonth);
-            const daysLeft = daysInMonth - bsDay + 1;
-            if (remaining < daysLeft) {
-                bsDay += remaining;
-                remaining = 0;
-            } else {
-                remaining -= daysLeft;
-                bsMonth++;
-                if (bsMonth > 12) { bsYear++; bsMonth = 1; }
-                bsDay = 1;
-            }
-        }
-    } else {
-        while (remaining < 0) {
-            if (bsDay + remaining >= 1) {
-                bsDay += remaining;
-                remaining = 0;
-            } else {
-                remaining += (bsDay - 1);
-                bsMonth--;
-                if (bsMonth < 1) { bsYear--; bsMonth = 12; }
-                bsDay = getBSDaysInMonth(bsYear, bsMonth);
-            }
-        }
-    }
-
-    return `${bsYear}-${pad2(bsMonth)}-${pad2(bsDay)}`;
-}
+// This file used to carry its own 2080-2090 copy and it disagreed with the
+// real calendar (2083 Jestha 32, Ashwin 30, Kartik 29, Mangsir 30, Poush 29),
+// so imported AD dates landed on the wrong BS day after Jestha and BS 2083-06-31
+// (today) could not be represented. Delegating keeps the importer, the web
+// server and the picker on the same day counts.
+const {
+    getBSDaysInMonth, pad2, bsToAD, adToBS, todayBSDate: bsToday
+} = require('./bs-calendar');
 
 /**
  * Convert any Excel date value to a BS date string (YYYY-MM-DD).
@@ -3155,7 +3050,7 @@ function importExcelFile({ excelPath, dbPath, mode, log }) {
 function todayBSDate() {
     const n = new Date();
     const ad = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
-    try { return adToBS(ad) || ad; } catch (e) { return ad; }
+    try { return bsToday() || adToBS(ad) || ad; } catch (e) { return ad; }
 }
 
 module.exports = {

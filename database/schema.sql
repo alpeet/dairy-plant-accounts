@@ -877,3 +877,30 @@ CREATE INDEX IF NOT EXISTS idx_partner_capital_party ON partner_capital(party_id
 CREATE INDEX IF NOT EXISTS idx_parties_route ON parties(route_id);
 CREATE INDEX IF NOT EXISTS idx_cash_deposits_date ON cash_deposits(date);
 CREATE INDEX IF NOT EXISTS idx_cash_deposits_bank ON cash_deposits(bank_name);
+
+-- ============================================================
+-- PREPAID EXPENSES (advance rent)
+-- ============================================================
+-- A payment covering FUTURE periods (e.g. six months' rent paid at once) is an
+-- asset, not an expense. One row per payment; the monthly recognition is
+-- derived (shared/operations/prepaid_rent.js) so the same rent can never be
+-- expensed twice. `start_month` is the first BS month consumed ('YYYY-MM').
+CREATE TABLE IF NOT EXISTS prepaid_expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'Rent',
+    party_id INTEGER DEFAULT NULL,
+    party_name TEXT DEFAULT '',
+    payment_date TEXT NOT NULL,
+    amount REAL NOT NULL DEFAULT 0.0,
+    months INTEGER NOT NULL DEFAULT 1,
+    start_month TEXT NOT NULL,
+    payment_mode TEXT DEFAULT 'cash',
+    reference_no TEXT DEFAULT '',
+    source TEXT DEFAULT 'manual',
+    notes TEXT DEFAULT '',
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (party_id) REFERENCES parties(id)
+);
+CREATE INDEX IF NOT EXISTS idx_prepaid_expenses_date ON prepaid_expenses(payment_date);

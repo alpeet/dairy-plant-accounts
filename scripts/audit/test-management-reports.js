@@ -2,7 +2,7 @@
  * Management Reports — acceptance tests (spec Phases 11–16)
  * =========================================================
  * Two comparable weeks of data (current 2083-07-01…07, previous
- * 2083-06-24…30) then prove:
+ * 2083-06-25…31, the real calendar's previous week) then prove:
  *
  *   - normalizeExpenseCategory maps the five registers onto ONE vocabulary
  *   - Expense Analysis totals = P&L totals (milk / purchases / operating)
@@ -91,7 +91,9 @@ db.prepare("INSERT INTO vehicle_expenses (date, vehicle_name, expense_type, tota
 expense('2083-07-04', 'Income', 'Commission', 'Scrap sale commission', 2000);   // other income
 payments.savePayment(db, { party_id: supplier, date: '2083-07-01', type: 'payment', transaction_type: 'advance', amount: 30000, mode: 'cash', notes: 'Advance' });
 
-// Previous week: 2083-06-24 … 2083-06-30
+// Previous week: 2083-06-25 … 2083-06-31
+// (Ashwin 2083 has 31 days — the real BS calendar, see shared/bs-calendar.js;
+//  the previous 7-day window of 2083-07-01…07-07 therefore ends on Ashwin 31.)
 milkOps.saveMilkCollection(db, {
     collection_no: 'MR-MC-2', date: '2083-06-25', party_id: farmer, milk_type: 'cow',
     quantity_liters: 400, fat_percent: 4.1, snf_percent: 8.2, rate: 75, amount: 30000,
@@ -141,8 +143,8 @@ console.log('\n═══ 3. Board Management Report ═══');
 const board = mgmt.getBoardReport(db, { from_date: '2083-07-01', to_date: '2083-07-07' });
 for (const c of board.checks) check(`3. ${c.name}`, c.ok, { expected: c.expected, actual: c.actual });
 check('3z. all board checks pass', board.all_checks_ok, board.checks.filter(c => !c.ok));
-check('3a. previous period auto-resolved to 2083-06-24 … 06-30',
-    board.previous_period.from_date === '2083-06-24' && board.previous_period.to_date === '2083-06-30', board.previous_period);
+check('3a. previous period auto-resolved to 2083-06-25 … 06-31 (Ashwin has 31 days)',
+    board.previous_period.from_date === '2083-06-25' && board.previous_period.to_date === '2083-06-31', board.previous_period);
 check('3b. revenue: total 100,000 · milk 60,000 · product (ghee) 40,000',
     near(board.revenue.total_sales, 100000) && near(board.revenue.milk_sales, 60000) && near(board.revenue.product_sales, 40000),
     board.revenue);
@@ -173,8 +175,8 @@ check('4h. every indicator carries current + previous numbers', board.indicators
 console.log('\n═══ 5. Weekly management report ═══');
 const wk = mgmt.getManagementReport(db, { period: 'weekly', as_of: '2083-07-07' });
 const cw = wk.current, pw = wk.previous;
-check('5a. week = 2083-07-01 … 07-07, previous = 06-24 … 06-30',
-    cw.from_date === '2083-07-01' && cw.to_date === '2083-07-07' && pw.from_date === '2083-06-24' && pw.to_date === '2083-06-30',
+check('5a. week = 2083-07-01 … 07-07, previous = 06-25 … 06-31 (real Ashwin length)',
+    cw.from_date === '2083-07-01' && cw.to_date === '2083-07-07' && pw.from_date === '2083-06-25' && pw.to_date === '2083-06-31',
     { c: [cw.from_date, cw.to_date], p: [pw.from_date, pw.to_date] });
 check('5b. milk received 500 L · cost 40,000 · avg 80/L',
     near(cw.milk_received_liters, 500) && near(cw.milk_cost, 40000) && near(cw.avg_milk_cost_per_liter, 80), cw);

@@ -92,6 +92,14 @@ const { sendEmail, getSmtpSettings, isValidEmail } = require('./email');
 // ── Financial Reports ──
 const { getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook } = require('./financial_reports');
 
+// ── Monthly Report — period activity + per-month closing balances, income and
+// expense heads, and the reconciliation checks behind every figure.
+const monthlyReport = require('./monthly_report');
+
+// ── Prepaid expenses (advance rent): an unused payment is an asset, and only
+// the month used reaches the P&L.
+const prepaidRent = require('./prepaid_rent');
+
 // ── Company Ledger — one page with every major financial movement, grouped
 // daily / weekly / monthly, proving it agrees with the P&L on every call.
 const { getCompanyLedger } = require('./company_ledger');
@@ -241,6 +249,18 @@ module.exports = {
     // Financial Reports
     getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook,
     getCompanyLedger,
+
+    // Monthly Report (BS range / month) + prepaid expenses
+    getMonthlyReport: monthlyReport.getMonthlyReport,
+    getMonthlyReportBalances: monthlyReport.getBalancesAsOf,
+    getMonthlyReportPeriodActivity: monthlyReport.getPeriodActivity,
+    MONTHLY_REPORT_EXPENSE_HEADS: monthlyReport.EXPENSE_HEADS,
+    MONTHLY_REPORT_INCOME_HEADS: monthlyReport.INCOME_HEADS,
+    listPrepaidExpenses: prepaidRent.listRecords,
+    savePrepaidExpense: prepaidRent.savePrepaidExpense,
+    getPrepaidSummary: prepaidRent.getPrepaidSummary,
+    getPrepaidBalance: prepaidRent.getPrepaidBalance,
+    seedAdvanceRent: prepaidRent.seedAdvanceRent,
     EXPENSE_CATEGORIES, normalizeExpenseCategory,
     getExpenseAnalysis, getBoardReport, getManagementReport,
 

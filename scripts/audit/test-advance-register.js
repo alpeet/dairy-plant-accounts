@@ -87,12 +87,14 @@ const reg2 = getAdvanceRecoveryRegister(db, { as_of: AS_OF });
 const oldLot = reg2.lots.find(l => l.party_id === other);
 check('4a. old advance is open and aged into the 90+ bucket', oldLot && oldLot.due_status === '90+' && oldLot.age_days >= 90, oldLot);
 check('4b. outstanding = 15,000 current + 10,000 old = 25,000', near(reg2.summary.total_outstanding, 25000), reg2.summary.total_outstanding);
-check('4c. current bucket (0–6 days) = 15,000', near(reg2.summary.current, 15000), reg2.summary.current);
-check('4d. overdue (7+ days) = 10,000', near(reg2.summary.overdue, 10000), reg2.summary.overdue);
+// Ashwin 2083 has 31 days (shared/bs-calendar.js), so 2083-06-25 → 2083-07-01
+// is 7 days: the advance is already in the 7+ (overdue) bucket at AS_OF.
+check('4c. current bucket (0–6 days) = 0 (nothing is younger than 7 days at AS_OF)', near(reg2.summary.current, 0), reg2.summary.current);
+check('4d. overdue (7+ days) = 25,000 (15,000 + 10,000)', near(reg2.summary.overdue, 25000), reg2.summary.overdue);
 check('4e. 90+ bucket = 10,000', near(reg2.summary.bucket_90, 10000), reg2.summary.bucket_90);
 check('4f. 30/60 buckets = 10,000 (cumulative from 30 up)', near(reg2.summary.bucket_30, 10000) && near(reg2.summary.bucket_60, 10000),
     { b30: reg2.summary.bucket_30, b60: reg2.summary.bucket_60 });
-check('4g. new advance is current (age < 7 days)', reg2.lots.find(l => l.party_id === emp).due_status === 'current',
+check('4g. new advance aged exactly 7 days → 7+ bucket', reg2.lots.find(l => l.party_id === emp).due_status === '7+' && reg2.lots.find(l => l.party_id === emp).age_days === 7,
     reg2.lots.find(l => l.party_id === emp));
 check('4h. second register still reconciles with the balance', reg2.all_checks_ok, reg2.checks.filter(c => !c.ok));
 check('4i. balance now 25,000', near(ops.getLoanAdvanceBalances(db, { as_of: AS_OF }).advance_receivable, 25000));

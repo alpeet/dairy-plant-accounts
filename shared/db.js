@@ -1039,6 +1039,16 @@ function runMigrations(db) {
         console.log('Migration 33 (payment↔bank link) skipped:', e33.message);
     }
 
+    // Migration 34: prepaid expenses (advance rent). A payment for future use is
+    // an asset — six months of rent must not hit one month's P&L. Additive and
+    // idempotent; existing books are untouched until a record is added.
+    try {
+        const { ensureSchema } = require('./operations/prepaid_rent');
+        ensureSchema(db);
+    } catch (e34) {
+        console.log('Migration 34 (prepaid expenses) skipped:', e34.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

@@ -605,6 +605,7 @@ ipcMain.handle('auth:users:change-password', async (event, { currentPassword, ne
 // ============================================================
 const { exportToDailyAccountExcel } = require('./shared/export-daily-account');
 const { exportStockStatementExcel } = require('./shared/export-stock-statement');
+const { exportMonthlyReportExcel } = require('./shared/export-monthly-report');
 
 authHandle('export:daily-account', async (event, { outputPath } = {}) => {
     if (!db) return { success: false, error: 'Database not ready' };
@@ -618,6 +619,14 @@ authHandle('export:stock-statement', async (event, opts = {}) => {
     if (!db) return { success: false, error: 'Database not ready' };
     const savePath = (opts && opts.outputPath) || path.join(getDbDir(), 'Stock_Statement_Export.xlsx');
     return exportStockStatementExcel(db, savePath, opts || {});
+});
+
+// Monthly Report workbook — the SAME engine the on-screen report uses, so the
+// export and the app always agree.
+authHandle('export:monthly-report', async (event, opts = {}) => {
+    if (!db) return { success: false, error: 'Database not ready' };
+    const savePath = (opts && opts.outputPath) || path.join(getDbDir(), 'Monthly_Report_Export.xlsx');
+    return exportMonthlyReportExcel(db, savePath, opts || {});
 });
 
 // ============================================================
@@ -801,6 +810,29 @@ authHandle('db:reports:profit-loss', async (event, params = {}) => {
 
 authHandle('db:reports:profit-loss-by-month', async (event, params = {}) => {
     return safeRun(() => ops.getProfitLossByMonth(db, params));
+});
+
+// Monthly Report (req 2/3/9/10): one BS range or one BS month → period activity
+// + per-month closing balances that carry forward + reconciliation checks.
+authHandle('db:reports:monthly-report', async (event, params = {}) => {
+    return safeRun(() => ops.getMonthlyReport(db, params));
+});
+
+// Prepaid expenses (advance rent) — an unused payment is an asset.
+authHandle('db:prepaid-expenses:list', async (event, params = {}) => {
+    return safeRun(() => ops.listPrepaidExpenses(db, params));
+});
+
+authHandle('db:prepaid-expenses:save', async (event, data = {}) => {
+    return safeRun(() => ops.savePrepaidExpense(db, data, currentUser && currentUser.id));
+});
+
+authHandle('db:prepaid-expenses:summary', async (event, params = {}) => {
+    return safeRun(() => ops.getPrepaidSummary(db, params));
+});
+
+authHandle('db:prepaid-expenses:seed-advance-rent', async () => {
+    return safeRun(() => ops.seedAdvanceRent(db, currentUser && currentUser.id));
 });
 
 authHandle('db:reports:company-ledger', async (event, params = {}) => {
