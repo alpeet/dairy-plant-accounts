@@ -135,6 +135,104 @@ async function refreshCashCollection() {
 }
 
 // ============================================================
+// Payment Collection Register
+// ============================================================
+async function showPaymentCollectionPage() {
+    const container = document.getElementById('cashContent');
+    const filt = pageFilterInit('payment_collection');
+
+    const todayResult = await window.api.getDailyCashCollection({ from_date: filt.from, to_date: filt.to });
+    const data = todayResult.success ? todayResult.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
+
+    container.innerHTML = `
+        <div class="card-header">
+            <h2>Payment Collection Register</h2>
+            <div class="btn-group">
+                <button class="btn btn-info btn-sm" onclick="printPaymentCollection()">🖨 Print</button>
+                <button class="btn btn-primary btn-sm" onclick="exportPaymentCollectionPDF()">📄 PDF</button>
+            </div>
+        </div>
+        <div class="filter-bar">
+            <div class="form-group">
+                <label>From</label>
+                <input type="date" class="form-control" id="pcFrom" value="${filt.from || ''}">
+            </div>
+            <div class="form-group">
+                <label>To</label>
+                <input type="date" class="form-control" id="pcTo" value="${filt.to || ''}">
+            </div>
+            <div class="form-group">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary btn-sm" onclick="refreshPaymentCollection()">Generate</button>
+            </div>
+        </div>
+        <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
+            <div class="summary-card card-primary" style="margin:0;padding:12px">
+                <span class="label">Total Payments</span>
+                <span class="value" style="font-size:20px">${formatCurrency(data.total_cash_out)}</span>
+                <span class="sub">Cash payments made</span>
+            </div>
+            <div class="summary-card card-danger" style="margin:0;padding:12px">
+                <span class="label">Total Bank/Cheque/UPI</span>
+                <span class="value" style="font-size:20px">${formatCurrency(data.total_cash_in)}</span>
+                <span class="sub">Non-cash method transactions</span>
+            </div>
+            <div class="summary-card card-primary" style="margin:0;padding:12px">
+                <span class="label">Net Cash Position</span>
+                <span class="value" style="font-size:20px">${formatCurrency(data.net_cash)}</span>
+                <span class="sub">${data.net_cash >= 0 ? 'Surplus' : 'Deficit'}</span>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th class="text-right">Party</th>
+                        <th class="text-right">Ref No</th>
+                        <th class="text-right">Amount</th>
+                        <th class="text-right">Mode</th>
+                        <th class="text-right">Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.days.map(d => `
+                        <tr>
+                            <td>${formatDate(d.date)}</td>
+                            <td class="text-right">${d.party_names && d.party_names.length > 0 ? d.party_names.join(', ') : '—'}</td>
+                            <td class="text-right">${d.ref_no || '—'}</td>
+                            <td class="text-right" style="color:var(--danger)">${formatCurrency(d.total_cash_out)}</td>
+                            <td class="text-right">${d.payment_mode || '—'}</td>
+                            <td class="text-right">${d.notes || '—'}</td>
+                        </tr>
+                    `).join('')}
+                    ${data.days.length === 0 ? '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-light)">No payments for this period</td></tr>' : ''}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td><strong>Total</strong></td>
+                        <td><strong>—</strong></td>
+                        <td><strong>—</strong></td>
+                        <td class="text-right"><strong>${formatCurrency(data.total_cash_out)}</strong></td>
+                        <td><strong>—</strong></td>
+                        <td><strong>—</strong></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    `;
+}
+
+async function refreshPaymentCollection() {
+    // Store first, then re-render from the stored range (never re-preset).
+    pageFilterSet('payment_collection', {
+        from: document.getElementById('pcFrom')?.value || '',
+        to: document.getElementById('pcTo')?.value || ''
+    });
+    await showPaymentCollectionPage();
+}
+
+// ============================================================
 // Denomination Count
 // ============================================================
 async function showDenominationCount() {
@@ -473,11 +571,52 @@ async function exportDenominationPDF() {
     await window.api.printToPDF({ html });
 }
 
+// ============================================================
+// Print / PDF for Payment Collection
+// ============================================================
+async function printPaymentCollection() {
+    const from = document.getElementById('pcFrom')?.value || '';
+    const to = document.getElementById('pcTo')?.value || '';
+    const result = await window.api.getDailyCashCollection({ from_date: from, to_date: to });
+    if (!result.success) return;
+    const data = result.data;
+    const settings = await getSettingsCached();
+
+    const html = `
+        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>Payment Collection Register</h2><p>Period: ${from || 'Start'} to ${to || 'Today'}</p></div>
+        <div class="value-cards">
+            <div class="value-card"><div class="value-label">Total Payments</div><div class="value-number">${formatCurrency(data.total_cash_out)}</div></div>
+            <div class="value-card"><div class="value-label">Total Non-Cash</div><div class="value-number">${formatCurrency(data.total_cash_in)}</div></div>
+            <div class="value-card"><div class="value-label">Net Cash</div><div class="value-number">${formatCurrency(data.net_cash)}</div></div>
+        </div>
+        <table><thead><tr><th>Date</th><th class="text-right">Party</th><th class="text-right">Ref No</th><th class="text-right">Amount</th><th class="text-right">Mode</th><th class="text-right">Notes</th></tr></thead>
+        <tbody>${data.days.map(d => `<tr><td>${formatDate(d.date)}</td><td class="text-right">${d.party_names && d.party_names.length > 0 ? d.party_names.join(', ') : '—'}</td><td class="text-right">${d.ref_no || '—'}</td><td class="text-right">${formatCurrency(d.total_cash_out)}</td><td class="text-right">${d.payment_mode || '—'}</td><td class="text-right">${d.notes || '—'}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td><strong>Total</strong></td><td></td><td></td><td class="text-right"><strong>${formatCurrency(data.total_cash_out)}</strong></td><td></td><td></td></tr></tfoot></table>
+        <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
+    `;
+    printHTML(html);
+}
+
+async function exportPaymentCollectionPDF() {
+    const from = document.getElementById('pcFrom')?.value || '';
+    const to = document.getElementById('pcTo')?.value || '';
+    const result = await window.api.getDailyCashCollection({ from_date: from, to_date: to });
+    if (!result.success) return;
+    const data = result.data;
+    const settings = await getSettingsCached();
+
+    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Payment Collection Register</h2><p>${from} to ${to}</p>
+        <p>Total Payments: ${formatCurrency(data.total_cash_out)} | Non-Cash: ${formatCurrency(data.total_cash_in)} | Net: ${formatCurrency(data.net_cash)}</p>
+        <div class="footer"><div>Generated: ${new Date().toLocaleDateString('en-IN')}</div></div>`;
+    await window.api.printToPDF({ html });
+}
+
 // Globals
 window.renderCash = renderCash;
 window.showCashCollection = showCashCollection;
-window.showDenominationCount = showDenominationCount;
+window.showPaymentCollectionPage = showPaymentCollectionPage;
 window.refreshCashCollection = refreshCashCollection;
+window.refreshPaymentCollection = refreshPaymentCollection;
 window.refreshDenomination = refreshDenomination;
 window.showAddDenomination = showAddDenomination;
 window.saveDenominationEntry = saveDenominationEntry;
@@ -488,3 +627,5 @@ window.printCashCollection = printCashCollection;
 window.exportCashCollectionPDF = exportCashCollectionPDF;
 window.printDenomination = printDenomination;
 window.exportDenominationPDF = exportDenominationPDF;
+window.printPaymentCollection = printPaymentCollection;
+window.exportPaymentCollectionPDF = exportPaymentCollectionPDF;

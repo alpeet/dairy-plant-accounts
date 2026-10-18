@@ -1,6 +1,6 @@
 {
   "name": "prarambha-account-stock",
-  "version": "1.4.36",
+  "version": "1.4.39",
   "description": "Prarambha Account & Stock Management (Desktop + Web)",
   "homepage": "https://github.com/alpeet/dairy-plant-accounts",
   "main": "main.js",
@@ -19,6 +19,7 @@
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
     "verify": "node verify.js",
+    "test:audit": "node scripts/audit/run-all-tests.js",
     "data:export": "node data-exchange.js export",
     "data:import": "node data-exchange.js import",
     "data:export-csv": "node data-exchange.js export --csv",

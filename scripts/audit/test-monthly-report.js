@@ -220,7 +220,17 @@ const ashwinReport = monthly.getMonthlyReport(db, { month: '2083-06' });
 eq(ashwinReport.to_date, '2083-06-31', 'Ashwin 2083 ends on day 31');
 ok(R.summary.prepaid_rent >= 0, 'prepaid rent is reported as a closing balance');
 eq(R.summary.prepaid_rent, prepaid.getPrepaidBalance(db, R.to_date), 'closing prepaid rent matches the prepaid engine');
-ok(!R.months.some(m => m.rent_expense > 0), 'no rent expense is recognised in months before the lease starts');
+// Rent may only appear once the rental period starts (the lease runs from
+// start_month = 2083-07, six months AFTER the first books). Anchoring the check
+// to the real lease start keeps it valid whenever the books grow past it.
+const leaseStart = seeded.record.start_month;
+const preLease = R.months.filter(m => m.month < leaseStart);
+ok(!preLease.some(m => m.rent_expense > 0),
+    `no rent expense is recognised in months before the lease starts (${preLease.length} months checked)`);
+const firstLeaseMonth = R.months.find(m => m.month === leaseStart);
+if (firstLeaseMonth) {
+    ok(firstLeaseMonth.rent_expense > 0, 'the first rental month inside the window recognises rent');
+}
 
 // Rejecting bad input
 let threw = false;
@@ -301,7 +311,31 @@ if (!fs.existsSync(srcWb)) {
     const lost = before.filter(s => !after.includes(s));
     eq(lost.length, 0, `all ${before.length} existing sheets are preserved`, lost.join(', '));
     ok(after.some(s => s.replace(/\s+$/, '') === 'Monthly Report'), 'the new sheet is named "Monthly Report"');
-    eq(after.length, before.length + 1, 'exactly one sheet was added');
+    // If the sheet was already there (the normal state after the first
+    // --apply), inserting must REFRess in place; otherwise it must add one.
+    const hadMR = before.some(s => /^Monthly Report\s*$/.test(s));
+    const expectedOnce = hadMR ? before.length : before.length + 1;
+    eq(after.length, expectedOnce, hadMR
+        ? 'the existing Monthly Report sheet was refreshed in place (no duplicates)'
+        : 'exactly one sheet was added');
+    // Part-level preservation: a SheetJS read/write once destroyed the
+    // workbook's 72 fonts, 296 number formats, its chart, table and printer
+    // settings — prove that cannot happen again.
+    const { readZip, locateSheetPart } = require(path.join(ROOT, 'shared', 'xlsx-parts'));
+    const partA = readZip(fs.readFileSync(res.backupPath));
+    const partB = readZip(fs.readFileSync(workCopy));
+    const mutableParts = new Set([
+        '[Content_Types].xml', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml'
+    ]);
+    // …and the Monthly Report sheet's own part (before and/or after), which is
+    // exactly what this operation is supposed to rewrite.
+    for (const pz of [partA, partB]) {
+        const p = locateSheetPart(pz, 'Monthly Report ');
+        if (p) mutableParts.add(p);
+    }
+    const broken = partA.order.filter(n => !mutableParts.has(n)
+        && (!partB.entries.has(n) || !partA.entries.get(n).data.equals(partB.entries.get(n).data)));
+    eq(broken.length, 0, 'every other zipped part (styles, chart, table, drawings) is byte-identical', broken.join(', '));
     ok(fs.existsSync(res.backupPath), 'a timestamped backup of the workbook was written');
     // Every pre-existing sheet still has its data.
     const stillHasRows = before.every(s => {
@@ -312,7 +346,7 @@ if (!fs.existsSync(srcWb)) {
     // Refreshing must not duplicate the sheet.
     const res2 = exporter.insertMonthlyReportSheet(workCopy, db, { from_date: R.from_date, to_date: R.to_date });
     ok(res2.success, 'the sheet can be refreshed');
-    eq(XLSX.readFile(workCopy).SheetNames.length, before.length + 1, 'refreshing does not add a second Monthly Report sheet');
+    eq(XLSX.readFile(workCopy).SheetNames.length, expectedOnce, 'refreshing does not add a second Monthly Report sheet');
 }
 
 // ──────────────────────────────────────────────────────────────

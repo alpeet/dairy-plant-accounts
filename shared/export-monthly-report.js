@@ -28,6 +28,7 @@ const path = require('path');
 const fs = require('fs');
 
 const monthly = require('./operations/monthly_report');
+const { appendOrReplaceSheet } = require('./xlsx-parts');
 
 // Requested name is "Monthly Report " (the requirement's trailing space).
 // Excel/SheetJS trim trailing whitespace in sheet names, so the stored name is
@@ -211,10 +212,29 @@ function exportMonthlyReportExcel(db, outputPath, opts = {}) {
     }
 }
 
+/** Which SECTION letter each row belongs to (for number formats). */
+function sectionOfRows(rows) {
+    const out = [];
+    let section = '';
+    for (const row of rows) {
+        const first = String((row && row[0]) || '');
+        if (/^SECTION [A-E]/.test(first)) section = first.slice(8, 9);
+        out.push(section);
+    }
+    return out;
+}
+
 /**
  * Insert (or refresh) the "Monthly Report " sheet inside an EXISTING workbook,
  * leaving every other sheet untouched. Writes a `.bak-<timestamp>` copy of the
- * original first, and only replaces the destination after a successful write.
+ * original first.
+ *
+ * The sheet is spliced in at the OOXML **part** level (shared/xlsx-parts.js)
+ * rather than read-and-rewritten with SheetJS: a SheetJS rewrite silently
+ * discards the workbook's fonts/fills/formats, its chart, its table and its
+ * printer settings (72 fonts, 32 fills, 296 formats lost — caught 2026-10-17).
+ * Part-level surgery copies every other zip entry byte for byte, so styles,
+ * formulas and history survive.
  *
  * @param {string} workbookPath  the workbook to modify (in place)
  * @param {object} db
@@ -227,36 +247,34 @@ function insertMonthlyReportSheet(workbookPath, db, opts = {}) {
             return { success: false, error: `Workbook not found: ${workbookPath}` };
         }
         const built = buildMonthlyReportSheet(db, opts);
-        const wb = XLSX.readFile(workbookPath, { cellDates: false, bookVBA: true });
-
-        const existing = wb.SheetNames.find(s => s.replace(/\s+$/, '') === 'Monthly Report');
-        const targetName = existing || SHEET_NAME;
-        wb.Sheets[targetName] = built.sheet;
-        if (!existing) {
-            XLSX.utils.book_append_sheet(wb, built.sheet, targetName);
-        } else {
-            // Refresh in place: replace the sheet object, keep its position.
-            const idx = wb.SheetNames.indexOf(targetName);
-            wb.SheetNames.splice(idx, 1);
-            wb.SheetNames.splice(idx, 0, targetName);
-        }
 
         // Backup the original before writing anything.
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         const backupPath = `${workbookPath}.bak-monthly-report-${stamp}`;
         fs.copyFileSync(workbookPath, backupPath);
 
-        const tmpPath = `${workbookPath}.tmp-monthly-report`;
-        XLSX.writeFile(wb, tmpPath, { bookType: 'xlsx', type: 'file' });
-        fs.renameSync(tmpPath, workbookPath);
+        const section = sectionOfRows(built.rows);
+        const widths = (built.sheet['!cols'] || []).map(c => (c && c.wch) || 12);
+        const res = appendOrReplaceSheet(workbookPath, SHEET_NAME, {
+            aoa: built.rows,
+            columnWidths: widths,
+            freezeRow: 1,
+            autoFilter: 'A1:F1',
+            // Section B col 1 = money, col 2 = document-line counts, col 3 = %;
+            // everywhere else every number is money (same rules as the
+            // standalone export above, so both files format alike).
+            isMoney: (r, c) => !(section[r] === 'B' && c !== 1),
+            isDecimal: (r, c) => section[r] === 'B' && c === 3,
+            isInteger: (r, c) => section[r] === 'B' && c === 2
+        });
 
         return {
             success: true,
             filePath: workbookPath,
             backupPath,
-            sheetName: targetName,
-            created: !existing,
-            sheets: wb.SheetNames,
+            sheetName: res.sheetName ?? SHEET_NAME,
+            created: res.created,
+            sheets: res.sheets,
             period: { from_date: built.report.from_date, to_date: built.report.to_date },
             rows: built.rows.length,
             reconciled: built.report.reconciliation.all_ok,

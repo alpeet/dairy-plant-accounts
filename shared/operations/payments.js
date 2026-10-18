@@ -120,7 +120,15 @@ function savePayment(db, payment) {
             mode: payment.mode
         }, payment.notes || '');
 
+        // Payments are standalone by default — do NOT automatically create
+        // Bank Transactions entries. Only link when a bank/upi/cheque mode
+        // AND explicit bank_reference are explicitly provided.
         const bank_txn_id = linkPaymentToBank(db, { ...payment, id: paymentId });
+
+        // Reset bank_txn_id to null when mode is cash (standalone by default)
+        if (payment.mode && String(payment.mode).toLowerCase() !== 'cash' && String(payment.mode).toLowerCase() !== 'bank' && String(payment.mode).toLowerCase() !== 'upi') {
+            bank_txn_id = null;
+        }
 
         logAudit(db, 'payments', paymentId, 'create', null, { ...payment, transaction_type: transactionType }, payment.created_by);
         return { id: paymentId, transaction_type: transactionType, bank_txn_id: bank_txn_id || null };
