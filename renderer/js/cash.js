@@ -141,8 +141,10 @@ async function showPaymentCollectionPage() {
     const container = document.getElementById('cashContent');
     const filt = pageFilterInit('payment_collection');
 
-    const todayResult = await window.api.getDailyCashCollection({ from_date: filt.from, to_date: filt.to });
-    const data = todayResult.success ? todayResult.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
+    const result = await window.api.getPayments({ from_date: filt.from, to_date: filt.to });
+    const payments = result.success ? result.data : [];
+    const total_out = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
+    const total_in = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
 
     container.innerHTML = `
         <div class="card-header">
@@ -169,18 +171,18 @@ async function showPaymentCollectionPage() {
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px">
                 <span class="label">Total Payments</span>
-                <span class="value" style="font-size:20px">${formatCurrency(data.total_cash_out)}</span>
-                <span class="sub">Cash payments made</span>
+                <span class="value" style="font-size:20px">${formatCurrency(total_out)}</span>
+                <span class="sub">Money paid out</span>
             </div>
-            <div class="summary-card card-danger" style="margin:0;padding:12px">
-                <span class="label">Total Bank/Cheque/UPI</span>
-                <span class="value" style="font-size:20px">${formatCurrency(data.total_cash_in)}</span>
-                <span class="sub">Non-cash method transactions</span>
+            <div class="summary-card card-success" style="margin:0;padding:12px">
+                <span class="label">Total Receipts</span>
+                <span class="value" style="font-size:20px">${formatCurrency(total_in)}</span>
+                <span class="sub">Money received</span>
             </div>
             <div class="summary-card card-primary" style="margin:0;padding:12px">
-                <span class="label">Net Cash Position</span>
-                <span class="value" style="font-size:20px">${formatCurrency(data.net_cash)}</span>
-                <span class="sub">${data.net_cash >= 0 ? 'Surplus' : 'Deficit'}</span>
+                <span class="label">Total Entries</span>
+                <span class="value" style="font-size:20px">${payments.length}</span>
+                <span class="sub">${payments.filter(p => p.transaction_type === 'advance').length} advances</span>
             </div>
         </div>
         <div class="table-container">
@@ -192,28 +194,31 @@ async function showPaymentCollectionPage() {
                         <th class="text-right">Ref No</th>
                         <th class="text-right">Amount</th>
                         <th class="text-right">Mode</th>
+                        <th class="text-right">Type</th>
                         <th class="text-right">Notes</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${data.days.map(d => `
+                    ${payments.map(p => `
                         <tr>
-                            <td>${formatDate(d.date)}</td>
-                            <td class="text-right">${d.party_names && d.party_names.length > 0 ? d.party_names.join(', ') : '—'}</td>
-                            <td class="text-right">${d.ref_no || '—'}</td>
-                            <td class="text-right" style="color:var(--danger)">${formatCurrency(d.total_cash_out)}</td>
-                            <td class="text-right">${d.payment_mode || '—'}</td>
-                            <td class="text-right">${d.notes || '—'}</td>
+                            <td>${formatDate(p.date)}</td>
+                            <td class="text-right">${escapeHtml(p.party_name || '—')}</td>
+                            <td class="text-right">PMT-${p.id}</td>
+                            <td class="text-right" style="color:var(--danger)">${formatCurrency(p.amount)}</td>
+                            <td class="text-right">${p.mode || 'cash'}</td>
+                            <td class="text-right">${p.type || '—'}</td>
+                            <td class="text-right">${escapeHtml(p.notes || '—')}</td>
                         </tr>
                     `).join('')}
-                    ${data.days.length === 0 ? '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text-light)">No payments for this period</td></tr>' : ''}
+                    ${payments.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No payments for this period</td></tr>' : ''}
                 </tbody>
                 <tfoot>
                     <tr>
                         <td><strong>Total</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
-                        <td class="text-right"><strong>${formatCurrency(data.total_cash_out)}</strong></td>
+                        <td class="text-right"><strong>${formatCurrency(total_out + total_in)}</strong></td>
+                        <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
                     </tr>
@@ -224,7 +229,6 @@ async function showPaymentCollectionPage() {
 }
 
 async function refreshPaymentCollection() {
-    // Store first, then re-render from the stored range (never re-preset).
     pageFilterSet('payment_collection', {
         from: document.getElementById('pcFrom')?.value || '',
         to: document.getElementById('pcTo')?.value || ''
@@ -572,26 +576,28 @@ async function exportDenominationPDF() {
 }
 
 // ============================================================
-// Print / PDF for Payment Collection
+// Print / PDF for Payment Register
 // ============================================================
 async function printPaymentCollection() {
     const from = document.getElementById('pcFrom')?.value || '';
     const to = document.getElementById('pcTo')?.value || '';
-    const result = await window.api.getDailyCashCollection({ from_date: from, to_date: to });
+    const result = await window.api.getPayments({ from_date: from, to_date: to });
     if (!result.success) return;
-    const data = result.data;
+    const payments = result.data || [];
+    const total_out = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
+    const total_in = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
     const settings = await getSettingsCached();
 
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>Payment Collection Register</h2><p>Period: ${from || 'Start'} to ${to || 'Today'}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>Payment Register</h2><p>Period: ${from || 'Start'} to ${to || 'Today'}</p></div>
         <div class="value-cards">
-            <div class="value-card"><div class="value-label">Total Payments</div><div class="value-number">${formatCurrency(data.total_cash_out)}</div></div>
-            <div class="value-card"><div class="value-label">Total Non-Cash</div><div class="value-number">${formatCurrency(data.total_cash_in)}</div></div>
-            <div class="value-card"><div class="value-label">Net Cash</div><div class="value-number">${formatCurrency(data.net_cash)}</div></div>
+            <div class="value-card"><div class="value-label">Total Payments</div><div class="value-number">${formatCurrency(total_out)}</div></div>
+            <div class="value-card"><div class="value-label">Total Receipts</div><div class="value-number">${formatCurrency(total_in)}</div></div>
+            <div class="value-card"><div class="value-label">Total Entries</div><div class="value-number">${payments.length}</div></div>
         </div>
-        <table><thead><tr><th>Date</th><th class="text-right">Party</th><th class="text-right">Ref No</th><th class="text-right">Amount</th><th class="text-right">Mode</th><th class="text-right">Notes</th></tr></thead>
-        <tbody>${data.days.map(d => `<tr><td>${formatDate(d.date)}</td><td class="text-right">${d.party_names && d.party_names.length > 0 ? d.party_names.join(', ') : '—'}</td><td class="text-right">${d.ref_no || '—'}</td><td class="text-right">${formatCurrency(d.total_cash_out)}</td><td class="text-right">${d.payment_mode || '—'}</td><td class="text-right">${d.notes || '—'}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td><strong>Total</strong></td><td></td><td></td><td class="text-right"><strong>${formatCurrency(data.total_cash_out)}</strong></td><td></td><td></td></tr></tfoot></table>
+        <table><thead><tr><th>Date</th><th class="text-right">Party</th><th class="text-right">Ref No</th><th class="text-right">Amount</th><th class="text-right">Mode</th><th class="text-right">Type</th><th class="text-right">Notes</th></tr></thead>
+        <tbody>${payments.map(p => `<tr><td>${formatDate(p.date)}</td><td class="text-right">${escapeHtml(p.party_name || '—')}</td><td class="text-right">PMT-${p.id}</td><td class="text-right">${formatCurrency(p.amount)}</td><td class="text-right">${p.mode || 'cash'}</td><td class="text-right">${p.type || '—'}</td><td class="text-right">${escapeHtml(p.notes || '—')}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td><strong>Total</strong></td><td></td><td></td><td class="text-right"><strong>${formatCurrency(total_out + total_in)}</strong></td><td></td><td></td><td></td></tr></tfoot></table>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
     printHTML(html);
@@ -600,13 +606,15 @@ async function printPaymentCollection() {
 async function exportPaymentCollectionPDF() {
     const from = document.getElementById('pcFrom')?.value || '';
     const to = document.getElementById('pcTo')?.value || '';
-    const result = await window.api.getDailyCashCollection({ from_date: from, to_date: to });
+    const result = await window.api.getPayments({ from_date: from, to_date: to });
     if (!result.success) return;
-    const data = result.data;
+    const payments = result.data || [];
+    const total_out = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
+    const total_in = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
     const settings = await getSettingsCached();
 
-    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Payment Collection Register</h2><p>${from} to ${to}</p>
-        <p>Total Payments: ${formatCurrency(data.total_cash_out)} | Non-Cash: ${formatCurrency(data.total_cash_in)} | Net: ${formatCurrency(data.net_cash)}</p>
+    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Payment Register</h2><p>${from} to ${to}</p>
+        <p>Total Payments: ${formatCurrency(total_out)} | Total Receipts: ${formatCurrency(total_in)} | Total: ${formatCurrency(total_out + total_in)}</p>
         <div class="footer"><div>Generated: ${new Date().toLocaleDateString('en-IN')}</div></div>`;
     await window.api.printToPDF({ html });
 }
