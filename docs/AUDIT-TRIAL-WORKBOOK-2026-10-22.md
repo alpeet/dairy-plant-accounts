@@ -57,7 +57,22 @@ and again afterwards. `fullCalcOnLoad="1"` is set so Excel recalculates on open.
 Repair tool: `scripts/audit/repair-workbook-formulas.js` (dry-run by default, `--apply` writes
 the backup first). Log: `data/workbook-formula-repair.json`.
 
-### 1.3 `Collection` has one fewer column than its sibling sheets
+### 1.3 A re-import reported hundreds of phantom "updates"
+
+Running the import twice should change nothing. It reported **741 purchases updated**,
+**24 sales updated** and **2 parties updated** on every run, while writing nothing that
+survived the comparison:
+
+- The purchase/sale change detector built its expected line list from *every* sheet row, but
+  milk lines are stored in `milk_collections` (not `purchase_items`) and OPENING/RENT
+  pseudo-products are skipped — so `itemsDiffer` was true forever for any bill containing one.
+- The party detector compared `type` unconditionally, while the UPDATE only overwrites `type`
+  when the sheet says something other than the `customer` default.
+
+Both comparisons now mirror what is actually written. **A second import reports 0 added and
+0 updated in every module** — verified on the live database.
+
+### 1.4 `Collection` has one fewer column than its sibling sheets
 
 `Collection` has no `Description` column, so `Type` is column 5 (not 6), `Collected` is 7 and
 `Paid` is 8. `Payment` / `Expenses` / `Advance` and `PETTY CASH` have the Description column.
@@ -282,7 +297,7 @@ specified, but it is only as good as the movement data underneath it.
 
 | File | Change |
 |---|---|
-| `shared/excel-import.js` | `importRegisterSheets()`, `postPaymentRegisterRows()`, `REGISTER_SHEET_NAMES`; wired into `runExcelImport` as step 7b; exported |
+| `shared/excel-import.js` | `importRegisterSheets()`, `postPaymentRegisterRows()`, `REGISTER_SHEET_NAMES`; wired into `runExcelImport` as step 7b; exported. Also fixes the purchase/sale item and party `type` change detectors so a re-import is a true no-op |
 | `shared/workbook-path.js` | **new** — resolves `…Professional.xlsx` / `…Professional TRIAL.xlsx` / `$WORKBOOK_PATH` |
 | `scripts/audit/audit-workbook.js` | **new** — read-only inventory of every sheet, formula count, error cells, hidden state |
 | `scripts/audit/repair-workbook-formulas.js` | **new** — the four repairs in §1.2, dry-run by default |

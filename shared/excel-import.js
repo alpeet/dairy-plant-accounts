@@ -528,8 +528,14 @@ function importParties(db, sheetData, opts) {
                     // CHANGE DETECTION: compare the editable fields; write only
                     // when something actually differs (no cosmetic "updated").
                     const cur = db.prepare('SELECT * FROM parties WHERE id = ?').get(existing.id);
+                    // The UPDATE below only overwrites `type` when the sheet says
+                    // something other than the 'customer' default. Comparing type
+                    // unconditionally reported "updated" on every run for any
+                    // supplier/both party the sheet lists as Customer, while the
+                    // write itself changed nothing — a count that never converges.
+                    const typeWouldChange = type !== 'customer' && fieldChanged(cur.type, type);
                     const differs = fieldChanged(cur.phone, phone) || fieldChanged(cur.address, address)
-                        || fieldChanged(cur.type, type) || fieldChanged(cur.opening_balance, openingBal)
+                        || typeWouldChange || fieldChanged(cur.opening_balance, openingBal)
                         || (hasEmailColumn && fieldChanged(cur.email, email));
                     if (!differs) { unchanged++; continue; }
                     if (hasEmailColumn) {
@@ -858,10 +864,15 @@ function importSales(db, sheetData, opts) {
                 // (or item lines) actually differ from the database.
                 const cur = db.prepare('SELECT * FROM sales WHERE id = ?').get(existing.id);
                 const curItems = db.prepare('SELECT product_name, quantity, rate, amount FROM sales_items WHERE sale_id = ? ORDER BY id').all(existing.id);
-                const newItems = rows.map(r => ({
-                    product_name: toStr(r[prodIdx]), quantity: toNum(r[qtyIdx]),
-                    rate: toNum(r[rateIdx]), amount: toNum(r[amtIdx]) || (toNum(r[qtyIdx]) * toNum(r[rateIdx]))
-                }));
+                // Same rule as purchases: only lines whose product resolves are
+                // stored as items (OPENING / RENT pseudo-products are skipped),
+                // so only those may take part in the change comparison.
+                const newItems = rows
+                    .filter(r => resolveProduct(toStr(r[prodIdx]), db, false) != null)
+                    .map(r => ({
+                        product_name: toStr(r[prodIdx]), quantity: toNum(r[qtyIdx]),
+                        rate: toNum(r[rateIdx]), amount: toNum(r[amtIdx]) || (toNum(r[qtyIdx]) * toNum(r[rateIdx]))
+                    }));
                 const itemsDiffer = curItems.length !== newItems.length || curItems.some((ci, ix) =>
                     fieldChanged(ci.product_name, newItems[ix].product_name) ||
                     fieldChanged(ci.quantity, newItems[ix].quantity) ||
@@ -1030,11 +1041,19 @@ function importPurchases(db, sheetData, opts) {
                 // CHANGE DETECTION (mirrors sales): items + head comparison.
                 const cur = db.prepare('SELECT * FROM purchases WHERE id = ?').get(existing.id);
                 const curItems = db.prepare('SELECT product_name, quantity, rate, amount FROM purchase_items WHERE purchase_id = ? ORDER BY id').all(existing.id);
-                const newItems = rows.map(r => ({
-                    product_name: toStr(r[prodIdx]), quantity: toNum(r[qtyIdx]),
-                    rate: toNum(r[rateUnitIdx]) || toNum(r[fixedRateIdx]) || toNum(r[extraIdx]),
-                    amount: toNum(r[amtIdx]) || (toNum(r[qtyIdx]) * (toNum(r[rateUnitIdx]) || toNum(r[fixedRateIdx]) || toNum(r[extraIdx])))
-                }));
+                // Compare against the lines that are ACTUALLY stored as purchase
+                // items: milk lines go to milk_collections and unresolvable
+                // products (OPENING, DISSEL…) are skipped below. Comparing the
+                // raw sheet rows counted them as missing lines on every run, so
+                // any bill with a milk line was rewritten as "updated" forever.
+                const newItems = rows
+                    .filter(r => !(classifyMilkLine(toStr(r[prodIdx])) && toNum(r[qtyIdx]) !== 0))
+                    .filter(r => resolveProduct(toStr(r[prodIdx]), db, false) != null)
+                    .map(r => ({
+                        product_name: toStr(r[prodIdx]), quantity: toNum(r[qtyIdx]),
+                        rate: toNum(r[rateUnitIdx]) || toNum(r[fixedRateIdx]) || toNum(r[extraIdx]),
+                        amount: toNum(r[amtIdx]) || (toNum(r[qtyIdx]) * (toNum(r[rateUnitIdx]) || toNum(r[fixedRateIdx]) || toNum(r[extraIdx])))
+                    }));
                 const itemsDiffer = curItems.length !== newItems.length || curItems.some((ci, ix) =>
                     fieldChanged(ci.product_name, newItems[ix].product_name) ||
                     fieldChanged(ci.quantity, newItems[ix].quantity) ||
