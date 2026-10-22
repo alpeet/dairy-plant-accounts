@@ -1902,6 +1902,115 @@ function importPettyCashSheet(db, data, { log, mode }) {
     return report;
 }
 
+// ════════════════════════════════════════════════════════════════
+// REGISTER SHEETS: Payment / Expenses / Advance
+// ════════════════════════════════════════════════════════════════
+/**
+ * The workbook keeps three registers whose rows share the PETTY CASH column
+ * layout (Date | AD Date | Receipt No | Payee | Against Bill | Description |
+ * Type | Opening Due | Collected | Paid | Mode | Closing Due | Remarks):
+ *
+ *   Payment   → money PAID to a supplier / farmer / staff member
+ *   Expenses  → office expenses paid out of the cash box
+ *   Advance   → advances paid to a party (balance-sheet money-out, not expense)
+ *
+ * Only the `PETTY CASH` sheet used to be read. In Dairy_Accounts_Professional
+ * TRIAL.xlsx the PETTY CASH sheet holds just 31 collection rows while the real
+ * vouchers sit in these three sheets — 89 expense rows, 68 advance rows and 5
+ * payment rows against 62 / 60 / 5 already in `petty_cash`. 35 vouchers were
+ * therefore invisible to every report and never refreshed when the operator
+ * added a row. Feeding all four sheets through the same row logic fixes that and
+ * stays idempotent: identical vouchers in two sheets collapse to one row.
+ *
+ * The Payment sheet additionally lands in the standalone `payments` register
+ * (type='payment'), so it appears in the Payment register and on the party
+ * statement exactly once — and never in Bank Transactions (requirement 5: the
+ * Payment register is standalone; bank rows come only from BANK RECON).
+ */
+const REGISTER_SHEET_NAMES = ['Payment', 'Expenses', 'Advance'];
+
+function importRegisterSheets(db, workbook, { mode, log }) {
+    const results = {};
+    for (const name of REGISTER_SHEET_NAMES) {
+        if (!workbook.SheetNames.includes(name)) { results[name] = absentSheetResult(); continue; }
+        const data = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '' });
+        if (data.length <= 2) { results[name] = absentSheetResult(); continue; }
+
+        log(`\n  📒 Register sheet "${name}"`);
+        const r = importPettyCashSheet(db, data, { mode, log });
+        if (name === 'Payment') r.payment_register = postPaymentRegisterRows(db, data, { mode, log });
+        results[name] = r;
+    }
+    return results;
+}
+
+/**
+ * Payment sheet → `payments` (type='payment') + one party-ledger credit.
+ *
+ * The petty-cash row records the cash leaving the box; this records WHO was
+ * paid and reduces what we owe them, which is what the Payment register and the
+ * party statement read. Both are keyed on party + date + amount, so re-running
+ * the import, or a row duplicated across two sheets, never posts twice.
+ */
+function postPaymentRegisterRows(db, data, { mode, log }) {
+    const report = { added: 0, skipped_dup: 0, ledger_posted: 0, unmatched: [] };
+    const findPay = db.prepare(
+        "SELECT id FROM payments WHERE party_id = ? AND date = ? AND type = 'payment' AND ABS(amount - ?) < 0.005 LIMIT 1"
+    );
+    const insertPay = db.prepare(`
+        INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, notes, created_by)
+        VALUES (?, ?, 'payment', NULL, ?, ?, ?, ?, NULL)
+    `);
+    const findLedger = db.prepare(
+        "SELECT id FROM ledger_entries WHERE party_id = ? AND date = ? AND reference_type = 'payment_made' AND ABS(debit - ?) < 0.005 LIMIT 1"
+    );
+    // Reuse the app's own posting rule so a Payment made here is indistinguishable
+    // from one entered in the Payment screen (payment_made, debit = party).
+    const { postPaymentLedger } = require('./operations/payments');
+
+    const trx = db.transaction(() => {
+        for (let i = 2; i < data.length; i++) {
+            const row = data[i];
+            if (!row) continue;
+            const date = toBSDate(row[0]);
+            if (!date) continue;                       // blank template rows + TOTAL row
+            if (toStr(row[6]) !== 'Payment') continue; // sheet also carries foreign types
+            const payee = toStr(row[3]);
+            const paid = toNum(row[9]);
+            if (!payee || paid <= 0) continue;
+
+            const pid = resolveParty(payee, db, true, 'supplier');
+            if (!pid) { report.unmatched.push(`${date} | ${payee} | ${paid}`); continue; }
+
+            const modeRaw = toStr(row[10]).toLowerCase();
+            const payMode = modeRaw.includes('bank') ? 'bank'
+                : modeRaw.includes('upi') ? 'upi'
+                : modeRaw.includes('cheque') ? 'cheque' : 'cash';
+            const desc = toStr(row[5]);
+            const note = desc ? `Payment: ${desc}` : 'Payment';
+
+            if (findPay.get(pid, date, paid)) { report.skipped_dup++; continue; }
+            const info = insertPay.run(pid, date, paid, payMode, toStr(row[2]) || '', note);
+            report.added++;
+
+            // Party statement: one posting per payment, never a second one.
+            if (mode !== 'fresh' && !findLedger.get(pid, date, paid)) {
+                postPaymentLedger(db, {
+                    id: Number(info.lastInsertRowid), party_id: pid, date,
+                    type: 'payment', amount: paid, mode: payMode, transaction_type: null
+                });
+                report.ledger_posted++;
+            }
+        }
+    });
+    trx();
+
+    log(`  ➡️  Payment register: ${report.added} added, ${report.skipped_dup} already present`
+        + (report.ledger_posted ? `, ${report.ledger_posted} posted to party statements` : '')
+        + (report.unmatched.length ? `, ⚠️ ${report.unmatched.length} without a party match` : ''));
+    return report;
+}
+
 /**
  * BANK RECON sheet → bank_transactions (with party auto-match + ledger posting
  * via the idempotent importBankRows operation).
@@ -2891,6 +3000,10 @@ function runExcelImport(db, excelPath, opts = {}) {
         }
     }
 
+    // 7b. Payment / Expenses / Advance registers — the vouchers that live in
+    // their own sheets instead of PETTY CASH (see importRegisterSheets).
+    results.registers = importRegisterSheets(db, workbook, { mode, log });
+
     // 8. Bank transactions (QR/bank statement rows with auto-match)
     const bankSheetName = workbook.SheetNames.includes('BANK RECON') ? 'BANK RECON' : null;
     if (bankSheetName) {
@@ -3074,6 +3187,9 @@ module.exports = {
     backfillMilkCollectionsFromPurchases,
     deriveProductionBatches,
     importSalaryAdvanceSheet,
+    importRegisterSheets,
+    postPaymentRegisterRows,
+    REGISTER_SHEET_NAMES,
     bsMonthFromRemarks,
     adToBS,
     todayBSDate,

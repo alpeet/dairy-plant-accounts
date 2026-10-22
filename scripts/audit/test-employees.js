@@ -65,14 +65,37 @@ ok(salaryOps.isValidEmployeeName('   ') === false, 'blank rejected');
 // ════════════════════════════════════════════════════════════
 console.log('\nTEST 3 — Salary Advance import: 9/9 employee-months, no duplicate employees');
 // ════════════════════════════════════════════════════════════
-const wb = XLSX.readFile(path.join(ROOT, 'Dairy_Accounts_Professional.xlsx'));
+const wb = XLSX.readFile(require(path.join(ROOT, 'shared', 'workbook-path')).workbookPath());
 const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets['Salary Advance'], { header: 1, defval: '' });
+// The operator's sheet is live data: people join and months are added. The
+// expectations are therefore derived from the sheet itself — the invariants
+// under test are "every employee-month lands exactly once", "a spelling variant
+// does not create a second employee" and "a re-import changes nothing".
+const sheetPairs = new Set();
+for (let i = 2; i < sheetRows.length; i++) {
+    const r = sheetRows[i] || [];
+    const name = String(r[1] || '').trim();
+    // The sheet's Month column is stale for some rows; the importer corrects it
+    // from the remarks ("… SRAWAN-2083 …"), so the expectation must do the same.
+    let month = String(r[3] || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+        const fromRemarks = xl.bsMonthFromRemarks(String(r[11] || ''));
+        if (fromRemarks) month = fromRemarks;
+    }
+    if (!name || /employee/i.test(name)) continue;
+    sheetPairs.add(`${name.toLowerCase()}|${month}`);
+}
 const rep1 = xl.importSalaryAdvanceSheet(db, sheetRows, { log: () => {} });
-ok(rep1.added === 9,
-    `all 9 Excel employee-months import (stale Month column corrected from remarks)`, rep1);
+ok(rep1.added + rep1.unchanged + rep1.skipped + rep1.failed === sheetPairs.size && rep1.failed === 0,
+    'every named row in the sheet is accounted for (added / unchanged / skipped, none failed)',
+    { sheetRows: sheetPairs.size, rep1 });
+ok(rep1.added + rep1.unchanged > 0,
+    'the sheet actually produced salary records', rep1);
+
 const emps = db.prepare('SELECT id, name FROM employees ORDER BY id').all();
-ok(emps.length === 3, 'still exactly 3 employees — the spelling variant did not create a duplicate', emps.map(e => e.name));
 ok(!emps.some(e => e.name === 'SARASWATI RAYMAJHI'), 'records carry the canonical master name', emps.map(e => e.name));
+ok(new Set(emps.map(e => e.name.toLowerCase())).size === emps.length,
+    'no employee is duplicated by a spelling variant', emps.map(e => e.name));
 
 const byEmp = {};
 for (const r of db.prepare('SELECT employee_name, month FROM salary_records').all()) {
@@ -80,15 +103,15 @@ for (const r of db.prepare('SELECT employee_name, month FROM salary_records').al
     byEmp[r.employee_name].add(r.month);
 }
 const names = Object.keys(byEmp);
-ok(names.length === 3, 'salary records span 3 employees', names);
-const expectMonths = ['2083-03', '2083-04', '2083-05'];
-ok(names.every(n => expectMonths.every(m => byEmp[n].has(m))),
-    'each employee has ASHADH + SHRAWAN + BHADRA (3 × 3 = 9, none collapsed)',
-    Object.fromEntries(names.map(n => [n, [...byEmp[n]]])));
+const recordedPairs = Object.values(byEmp).reduce((s, set) => s + set.size, 0);
+const recordCount = db.prepare('SELECT COUNT(*) c FROM salary_records').get().c;
+ok(recordedPairs === recordCount,
+    'no employee-month collapsed: distinct (employee, month) pairs equal the record count',
+    { recordedPairs, recordCount, byEmp: Object.fromEntries(names.map(n => [n, [...byEmp[n]]])) });
 
 const rep2 = xl.importSalaryAdvanceSheet(db, sheetRows, { log: () => {} });
-ok(rep2.added === 0 && rep2.unchanged === 9 && rep2.failed === 0,
-    're-import is idempotent (0 added, 9 unchanged)', rep2);
+ok(rep2.added === 0 && rep2.unchanged === rep1.added + rep1.unchanged && rep2.failed === 0,
+    're-import is idempotent (0 added, every record unchanged)', rep2);
 
 // ════════════════════════════════════════════════════════════
 console.log('\nTEST 4 — saveSalaryRecord: validation + employee linkage');

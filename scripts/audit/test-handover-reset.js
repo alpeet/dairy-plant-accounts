@@ -172,7 +172,7 @@ db2b.pragma('journal_mode = WAL');
 
 // ════════ TEST D — NEW EXCEL IMPORT (no contamination) ════════
 try {
-    const res = excelImport.runExcelImport(db2b, 'Dairy_Accounts_Professional.xlsx', { mode: 'upsert', log: () => {} });
+    const res = excelImport.runExcelImport(db2b, require('../../shared/workbook-path').workbookPath(), { mode: 'upsert', log: () => {} });
     ok(true, `D: Excel import ran after reset (${JSON.stringify(res).slice(0, 120)}…)`);
     const pAfter = db2b.prepare('SELECT COUNT(*) c FROM parties').get().c;
     ok(pAfter > 0, `D: new parties imported (${pAfter})`);

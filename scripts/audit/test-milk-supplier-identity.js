@@ -30,7 +30,7 @@ const { initDatabase } = require(path.join(ROOT, 'shared', 'db'));
 const { runExcelImport, adToBS } = require(path.join(ROOT, 'shared', 'excel-import'));
 const { runIntegrityChecks } = require(path.join(ROOT, 'shared', 'operations', 'integrity'));
 
-const REAL_XLSX = path.join(ROOT, 'Dairy_Accounts_Professional.xlsx');
+const REAL_XLSX = require(path.join(ROOT, 'shared', 'workbook-path')).workbookPath();
 
 let pass = 0, fail = 0;
 function ok(cond, name, extra) {
@@ -65,10 +65,16 @@ console.log('\nA. the 160 L Shree Paroha line');
 {
     const paroha = supplierIdByName(db, 'SHREE PAROHA DAIRY UDHYOG');
     ok(paroha != null, 'SHREE PAROHA DAIRY UDHYOG exists as its own party');
+    // Scoped to the date under test: the workbook carries a second 160 L buffalo
+    // line two days later, which is a separate delivery, not a duplicate.
     const buffalo = paroha ? db.prepare(
-        "SELECT * FROM milk_collections WHERE party_id = ? AND milk_type = 'buffalo' AND quantity_liters = 160"
+        "SELECT * FROM milk_collections WHERE party_id = ? AND milk_type = 'buffalo' AND quantity_liters = 160 AND date = ?"
+    ).all(paroha, EXPECTED_BS) : [];
+    ok(buffalo.length === 1, `exactly one 160 L buffalo collection belongs to Shree Paroha on ${EXPECTED_BS}`, buffalo.length);
+    const sameDay = paroha ? db.prepare(
+        "SELECT date, COUNT(*) n FROM milk_collections WHERE party_id = ? AND quantity_liters = 160 GROUP BY date HAVING n > 1"
     ).all(paroha) : [];
-    ok(buffalo.length === 1, 'exactly one 160 L buffalo collection belongs to Shree Paroha', buffalo.length);
+    ok(sameDay.length === 0, 'no day carries the 160 L buffalo line twice (no duplicate booking)', sameDay);
     const c = buffalo[0];
     if (c) {
         ok(c.date === EXPECTED_BS, `the 160 L is dated ${EXPECTED_BS}`, c.date);
@@ -139,8 +145,8 @@ console.log('\nG. Replace-ALL and Add/Update agree on the supplier identity');
     const db2 = freshDb('fresh');
     runExcelImport(db2, REAL_XLSX, { mode: 'fresh', log: silent });
     const p2 = db2.prepare("SELECT id FROM parties WHERE name = 'SHREE PAROHA DAIRY UDHYOG'").get();
-    const got = p2 ? db2.prepare("SELECT COUNT(*) n FROM milk_collections WHERE party_id = ? AND milk_type='buffalo' AND quantity_liters=160").get(p2.id).n : 0;
-    ok(got === 1, 'fresh import also books the 160 L buffalo on Shree Paroha', got);
+    const got = p2 ? db2.prepare("SELECT COUNT(*) n FROM milk_collections WHERE party_id = ? AND milk_type='buffalo' AND quantity_liters=160 AND date = ?").get(p2.id, EXPECTED_BS).n : 0;
+    ok(got === 1, `fresh import also books the 160 L buffalo on Shree Paroha on ${EXPECTED_BS}`, got);
     const mina2 = db2.prepare("SELECT id FROM parties WHERE name = 'MINA LAMICHHANE 322'").get();
     const wrong2 = mina2 ? db2.prepare("SELECT COUNT(*) n FROM milk_collections WHERE party_id = ? AND quantity_liters=160").get(mina2.id).n : 0;
     ok(wrong2 === 0, 'fresh import does not move it to Mina', wrong2);
