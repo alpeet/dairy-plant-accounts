@@ -10,7 +10,7 @@ async function renderVehicle() {
         <button class="btn btn-success btn-sm" onclick="showAddVehicle()">+ New Expense</button>
     `;
 
-    const filt = pageFilterInit('vehicle');
+    const filt = pageFilterInit('vehicle', { preset: 'all' });
     const result = await window.api.getVehicleExpenses({ from_date: filt.from, to_date: filt.to, vehicle_name: filt.search || undefined });
     const expenses = result.success ? result.data : [];
 

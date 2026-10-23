@@ -10,7 +10,8 @@ async function renderExpenses() {
         <button class="btn btn-success btn-sm" onclick="showAddExpense()">+ New Expense</button>
     `;
 
-    const filt = pageFilterInit('expenses');
+    // Open range by default — a this-month default hid every imported expense.
+    const filt = pageFilterInit('expenses', { preset: 'all' });
     const [listResult, catResult, summaryResult] = await Promise.all([
         window.api.getOtherExpenses({ from_date: filt.from, to_date: filt.to, category: filt.category || undefined }),
         window.api.getExpenseCategories(),

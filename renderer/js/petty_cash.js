@@ -14,7 +14,9 @@ async function renderPettyCash() {
         <button class="btn btn-success btn-sm" onclick="showAddPettyCash()">+ New Entry</button>
     `;
 
-    const preset = getDatePreset('this_month');
+    // Open range by default: the register's vouchers span several BS months and
+    // defaulting to the current month made the whole tab look empty.
+    const preset = getDatePreset('all');
     const filter = pettyCashFilter || { from_date: preset.from, to_date: preset.to };
     const result = await window.api.getPettyCashList(filter);
     const entries = result.success ? result.data : [];
@@ -26,7 +28,7 @@ async function renderPettyCash() {
     container.innerHTML = `
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr">
             <div class="summary-card card-warning" style="margin:0;padding:12px">
-                <span class="label">Total Entries (This Month)</span>
+                <span class="label">Total Entries</span>
                 <span class="value" style="font-size:22px">${s.count}</span>
             </div>
             <div class="summary-card card-danger" style="margin:0;padding:12px">

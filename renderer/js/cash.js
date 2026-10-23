@@ -138,17 +138,31 @@ async function refreshCashCollection() {
 // Payment Collection Register
 // ============================================================
 async function showPaymentCollectionPage() {
-    const container = document.getElementById('cashContent');
-    const filt = pageFilterInit('payment_collection');
+    // The Payment Register has its OWN page section (#page-payment-collection).
+    // It must not write into the Cash page's #cashContent — that container only
+    // exists once the Cash tab has been visited, so the register rendered into
+    // it was invisible (or threw) and the page stayed empty.
+    //
+    // SCOPE: this register shows money PAID OUT only (type = 'payment' | 'advance').
+    // Money received/collected is a Collection, shown on the Payment Collection page.
+    const container = document.getElementById('page-payment-collection');
+    if (!container) return;
+    // Default to all dates so historical payments are visible (payments are sparse).
+    const filt = pageFilterInit('payment_collection', { preset: 'all' });
 
     const result = await window.api.getPayments({ from_date: filt.from, to_date: filt.to });
-    const payments = result.success ? result.data : [];
-    const total_out = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
-    const total_in = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
+    const allRows = result.success ? result.data : [];
+    // Money PAID OUT only — the workbook's `Payment` sheet. Receipts (money IN)
+    // belong to Payment Collection; advances have their own Advance register.
+    const payments = allRows.filter(p => p.type === 'payment');
+    const total_out = payments.reduce((s, p) => s + (p.amount || 0), 0);
+    const total_cash = payments.filter(p => p.mode !== 'bank' && p.mode !== 'cheque' && p.mode !== 'online').reduce((s, p) => s + (p.amount || 0), 0);
+    const total_bank = total_out - total_cash;
+    const partyCount = new Set(payments.map(p => p.party_id || p.party_name)).size;
 
     container.innerHTML = `
         <div class="card-header">
-            <h2>Payment Collection Register</h2>
+            <h2>Payment Register — Money Paid Out</h2>
             <div class="btn-group">
                 <button class="btn btn-info btn-sm" onclick="printPaymentCollection()">🖨 Print</button>
                 <button class="btn btn-primary btn-sm" onclick="exportPaymentCollectionPDF()">📄 PDF</button>
@@ -168,22 +182,31 @@ async function showPaymentCollectionPage() {
                 <button class="btn btn-primary btn-sm" onclick="refreshPaymentCollection()">Generate</button>
             </div>
         </div>
-        <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
-            <div class="summary-card card-primary" style="margin:0;padding:12px">
-                <span class="label">Total Payments</span>
+        <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-bottom:16px">
+            <div class="summary-card card-danger" style="margin:0;padding:12px">
+                <span class="label">Total Paid Out</span>
                 <span class="value" style="font-size:20px">${formatCurrency(total_out)}</span>
-                <span class="sub">Money paid out</span>
+                <span class="sub">${payments.length} payment(s)</span>
+            </div>
+            <div class="summary-card card-primary" style="margin:0;padding:12px">
+                <span class="label">Paid in Cash</span>
+                <span class="value" style="font-size:20px">${formatCurrency(total_cash)}</span>
+                <span class="sub">Cash / mixed mode</span>
+            </div>
+            <div class="summary-card card-warning" style="margin:0;padding:12px">
+                <span class="label">Paid by Bank</span>
+                <span class="value" style="font-size:20px">${formatCurrency(total_bank)}</span>
+                <span class="sub">Cheque / online / bank</span>
             </div>
             <div class="summary-card card-success" style="margin:0;padding:12px">
-                <span class="label">Total Receipts</span>
-                <span class="value" style="font-size:20px">${formatCurrency(total_in)}</span>
-                <span class="sub">Money received</span>
+                <span class="label">Parties Paid</span>
+                <span class="value" style="font-size:20px">${partyCount}</span>
+                <span class="sub">Distinct payees</span>
             </div>
-            <div class="summary-card card-primary" style="margin:0;padding:12px">
-                <span class="label">Total Entries</span>
-                <span class="value" style="font-size:20px">${payments.length}</span>
-                <span class="sub">${payments.filter(p => p.transaction_type === 'advance').length} advances</span>
-            </div>
+        </div>
+        <div style="background:#fff8e1;border-left:4px solid #f0ad4e;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px">
+            <strong>Money paid out only.</strong> Amounts received from parties are on <strong>Payment Collection</strong>;
+            advances given are on the <strong>Advance Register</strong>.
         </div>
         <div class="table-container">
             <table>
@@ -206,18 +229,18 @@ async function showPaymentCollectionPage() {
                             <td class="text-right">PMT-${p.id}</td>
                             <td class="text-right" style="color:var(--danger)">${formatCurrency(p.amount)}</td>
                             <td class="text-right">${p.mode || 'cash'}</td>
-                            <td class="text-right">${p.type || '—'}</td>
+                            <td class="text-right">💸 Payment</td>
                             <td class="text-right">${escapeHtml(p.notes || '—')}</td>
                         </tr>
                     `).join('')}
-                    ${payments.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No payments for this period</td></tr>' : ''}
+                    ${payments.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No payments (money out) for this period</td></tr>' : ''}
                 </tbody>
                 <tfoot>
                     <tr>
                         <td><strong>Total</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
-                        <td class="text-right"><strong>${formatCurrency(total_out + total_in)}</strong></td>
+                        <td class="text-right"><strong>${formatCurrency(total_out)}</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
@@ -583,21 +606,20 @@ async function printPaymentCollection() {
     const to = document.getElementById('pcTo')?.value || '';
     const result = await window.api.getPayments({ from_date: from, to_date: to });
     if (!result.success) return;
-    const payments = result.data || [];
-    const total_out = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
-    const total_in = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
+    // Money PAID OUT only — matches the on-screen Payment Register.
+    const payments = (result.data || []).filter(p => p.type === 'payment');
+    const total_out = payments.reduce((s, p) => s + (p.amount || 0), 0);
     const settings = await getSettingsCached();
 
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>Payment Register</h2><p>Period: ${from || 'Start'} to ${to || 'Today'}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>Payment Register — Money Paid Out</h2><p>Period: ${from || 'Start'} to ${to || 'Today'}</p></div>
         <div class="value-cards">
-            <div class="value-card"><div class="value-label">Total Payments</div><div class="value-number">${formatCurrency(total_out)}</div></div>
-            <div class="value-card"><div class="value-label">Total Receipts</div><div class="value-number">${formatCurrency(total_in)}</div></div>
+            <div class="value-card"><div class="value-label">Total Paid Out</div><div class="value-number">${formatCurrency(total_out)}</div></div>
             <div class="value-card"><div class="value-label">Total Entries</div><div class="value-number">${payments.length}</div></div>
         </div>
         <table><thead><tr><th>Date</th><th class="text-right">Party</th><th class="text-right">Ref No</th><th class="text-right">Amount</th><th class="text-right">Mode</th><th class="text-right">Type</th><th class="text-right">Notes</th></tr></thead>
-        <tbody>${payments.map(p => `<tr><td>${formatDate(p.date)}</td><td class="text-right">${escapeHtml(p.party_name || '—')}</td><td class="text-right">PMT-${p.id}</td><td class="text-right">${formatCurrency(p.amount)}</td><td class="text-right">${p.mode || 'cash'}</td><td class="text-right">${p.type || '—'}</td><td class="text-right">${escapeHtml(p.notes || '—')}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td><strong>Total</strong></td><td></td><td></td><td class="text-right"><strong>${formatCurrency(total_out + total_in)}</strong></td><td></td><td></td><td></td></tr></tfoot></table>
+        <tbody>${payments.map(p => `<tr><td>${formatDate(p.date)}</td><td class="text-right">${escapeHtml(p.party_name || '—')}</td><td class="text-right">PMT-${p.id}</td><td class="text-right">${formatCurrency(p.amount)}</td><td class="text-right">${p.mode || 'cash'}</td><td class="text-right">Payment</td><td class="text-right">${escapeHtml(p.notes || '—')}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td><strong>Total</strong></td><td></td><td></td><td class="text-right"><strong>${formatCurrency(total_out)}</strong></td><td></td><td></td><td></td></tr></tfoot></table>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
     printHTML(html);
@@ -608,13 +630,13 @@ async function exportPaymentCollectionPDF() {
     const to = document.getElementById('pcTo')?.value || '';
     const result = await window.api.getPayments({ from_date: from, to_date: to });
     if (!result.success) return;
-    const payments = result.data || [];
-    const total_out = payments.filter(p => p.type === 'payment').reduce((s, p) => s + (p.amount || 0), 0);
-    const total_in = payments.filter(p => p.type === 'receipt').reduce((s, p) => s + (p.amount || 0), 0);
+    // Money PAID OUT only — matches the on-screen Payment Register.
+    const payments = (result.data || []).filter(p => p.type === 'payment');
+    const total_out = payments.reduce((s, p) => s + (p.amount || 0), 0);
     const settings = await getSettingsCached();
 
-    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Payment Register</h2><p>${from} to ${to}</p>
-        <p>Total Payments: ${formatCurrency(total_out)} | Total Receipts: ${formatCurrency(total_in)} | Total: ${formatCurrency(total_out + total_in)}</p>
+    const html = `<div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Payment Register — Money Paid Out</h2><p>${from} to ${to}</p>
+        <p>Total Paid Out: ${formatCurrency(total_out)} | Entries: ${payments.length}</p>
         <div class="footer"><div>Generated: ${new Date().toLocaleDateString('en-IN')}</div></div>`;
     await window.api.printToPDF({ html });
 }

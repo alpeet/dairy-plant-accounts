@@ -34,7 +34,7 @@ function _mrMonthRange(key) {
     return (window.NepaliDate && NepaliDate.getMonthRange) ? NepaliDate.getMonthRange(key) : null;
 }
 
-function _mrDefaults() {
+function _mrMonthDefaults() {
     const t = _mrToday();
     const thisMonth = String(t).slice(0, 7);
     if (!_mrMonth.month) _mrMonth.month = thisMonth;
@@ -70,12 +70,22 @@ function _mrResolveRange() {
     }
 }
 
+// NOTE: this module shares the page with management_reports.js, which uses the
+// same mrFilters/mrBody/mrTabs ids and mrLoad/mrPrint/mrSetTab globals. Both
+// were loaded together, so the later script silently overwrote the earlier
+// ones and this page could never render. Everything here is namespaced
+// (_mrMonthDefaults/mrMonthlyLoad/mrMonthlyPrint/mrMonthlySetTab) and every
+// element lookup is scoped to #page-monthly-report.
+function _mrEl(id) {
+    return document.querySelector('#page-monthly-report #' + id);
+}
+
 async function renderMonthlyReport() {
-    _mrDefaults();
+    _mrMonthDefaults();
     _mrMonth.data = null;
     document.getElementById('topActions').innerHTML = `
         <button class="btn btn-secondary btn-sm" onclick="mrExportExcel()">📊 Export Excel</button>
-        <button class="btn btn-info btn-sm" onclick="mrPrint()">🖨 Print</button>
+        <button class="btn btn-info btn-sm" onclick="mrMonthlyPrint()">🖨 Print</button>
     `;
     const container = document.getElementById('page-monthly-report');
     container.innerHTML = `
@@ -83,11 +93,11 @@ async function renderMonthlyReport() {
         <div id="mrBody"><div class="loading" style="text-align:center;padding:40px">Loading…</div></div>
     `;
     _mrRenderFilters();
-    await mrLoad();
+    await mrMonthlyLoad();
 }
 
 function _mrRenderFilters() {
-    const hosts = document.getElementById('mrFilters');
+    const hosts = _mrEl('mrFilters');
     if (!hosts) return;
     const t = _mrToday();
     const years = [];
@@ -128,12 +138,12 @@ function _mrRenderFilters() {
         </div></div>
         <div id="mrTabs"></div>
     `;
-    if (typeof refreshBSDateInputs === 'function') refreshBSDateInputs(document.getElementById('mrFilters'));
+    if (typeof refreshBSDateInputs === 'function') refreshBSDateInputs(_mrEl('mrFilters'));
     _mrShowRangeHint();
 }
 
 function _mrShowRangeHint() {
-    const hint = document.getElementById('mrRangeHint');
+    const hint = _mrEl('mrRangeHint');
     if (!hint) return;
     const r = _mrResolveRange();
     const ad = (window.NepaliDate && NepaliDate.bsToAD) ? NepaliDate.bsToAD(r.to_date) : '';
@@ -146,15 +156,15 @@ function mrSetMode(mode) {
 }
 
 function mrPickMonth() {
-    const y = document.getElementById('mrYear').value;
-    const m = document.getElementById('mrMonthSel').value;
+    const y = _mrEl('mrYear').value;
+    const m = _mrEl('mrMonthSel').value;
     _mrMonth.month = `${y}-${m}`;
     _mrShowRangeHint();
 }
 
 function mrApply() {
-    const fromEl = document.getElementById('mrFrom');
-    const toEl = document.getElementById('mrTo');
+    const fromEl = _mrEl('mrFrom');
+    const toEl = _mrEl('mrTo');
     if (_mrMonth.mode === 'range') {
         const check = (window.NepaliDate && NepaliDate.validateRange)
             ? NepaliDate.validateRange(fromEl.value, toEl.value) : { valid: true };
@@ -167,19 +177,19 @@ function mrApply() {
         if (fromEl.value !== _mrMonth.from) setBSDateValue(fromEl, _mrMonth.from);
         if (toEl.value !== _mrMonth.to) setBSDateValue(toEl, _mrMonth.to);
     }
-    mrLoad();
+    mrMonthlyLoad();
 }
 
-function mrSetTab(tab) {
+function mrMonthlySetTab(tab) {
     _mrMonth.tab = tab;
     _mrRenderTabs();
     mrRenderBody();
 }
 
 function _mrRenderTabs() {
-    const tabs = document.getElementById('mrTabs');
+    const tabs = _mrEl('mrTabs');
     if (!tabs) return;
-    const btn = (key, label) => `<button class="btn btn-sm ${_mrMonth.tab === key ? 'btn-primary' : 'btn-secondary'}" onclick="mrSetTab('${key}')">${label}</button>`;
+    const btn = (key, label) => `<button class="btn btn-sm ${_mrMonth.tab === key ? 'btn-primary' : 'btn-secondary'}" onclick="mrMonthlySetTab('${key}')">${label}</button>`;
     tabs.innerHTML = `<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
         ${btn('summary', '📋 Summary')}
         ${btn('income', '💵 Income Heads')}
@@ -189,8 +199,8 @@ function _mrRenderTabs() {
     </div>`;
 }
 
-async function mrLoad() {
-    const body = document.getElementById('mrBody');
+async function mrMonthlyLoad() {
+    const body = _mrEl('mrBody');
     if (!body) return;
     const r = _mrResolveRange();
     body.innerHTML = '<div class="loading" style="text-align:center;padding:40px">Loading…</div>';
@@ -207,7 +217,7 @@ async function mrLoad() {
 
 function mrRenderBody() {
     const data = _mrMonth.data;
-    const body = document.getElementById('mrBody');
+    const body = _mrEl('mrBody');
     if (!body || !data) return;
     if (_mrMonth.tab === 'income') { body.innerHTML = _mrIncomeView(data); return; }
     if (_mrMonth.tab === 'expense') { body.innerHTML = _mrExpenseView(data); return; }
@@ -409,8 +419,8 @@ async function mrExportExcel() {
     }
 }
 
-async function mrPrint() {
-    const body = document.getElementById('mrBody');
+async function mrMonthlyPrint() {
+    const body = _mrEl('mrBody');
     if (!body) return;
     const d = _mrMonth.data;
     const title = d ? `Monthly Report ${d.from_date} → ${d.to_date} (BS)` : 'Monthly Report';

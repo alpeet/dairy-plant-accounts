@@ -13,9 +13,11 @@ async function renderSalary(monthParam) {
 
     // Stored filter (audit req 41): month + search survive re-renders; a
     // refresh never silently drops the employee search or resets the month.
-    const bsToday = today();
     if (monthParam !== undefined) pageFilterSet('salary', { month: monthParam });
-    const filt = pageFilterInit('salary', { month: bsToday.substring(0, 7) });
+    // Open by default (all months): payroll rows live in earlier BS months, so a
+    // current-month default made the register look empty. The month box still
+    // narrows it.
+    const filt = pageFilterInit('salary', { month: '' });
     const defaultMonth = filt.month;
 
     const result = await window.api.getSalaryList({ month: defaultMonth, employee_name: filt.search || undefined });

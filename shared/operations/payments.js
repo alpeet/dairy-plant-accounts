@@ -147,6 +147,9 @@ function normalizeTransactionType(v) {
     if (t === 'loan_received' || t === 'sapati_received') return accounting.TRANSACTION_TYPES.LOAN_RECEIVED;
     if (t === 'loan_repayment' || t === 'repayment' || t === 'loan_paid') return accounting.TRANSACTION_TYPES.LOAN_REPAYMENT;
     if (t === 'advance_adjustment' || t === 'adjustment') return accounting.TRANSACTION_TYPES.ADVANCE_ADJUSTMENT;
+    // A collection is money received against a party's outstanding balance —
+    // an ordinary receivable settlement, never new income.
+    if (t === 'collection' || t === 'receipt') return accounting.TRANSACTION_TYPES.SETTLEMENT;
     if (t === 'settlement' || t === 'other') return t === 'settlement'
         ? accounting.TRANSACTION_TYPES.SETTLEMENT
         : accounting.TRANSACTION_TYPES.OTHER;

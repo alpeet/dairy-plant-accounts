@@ -1647,7 +1647,9 @@ async function showCashCollectionPage() {
         window.api.getPayments({ from_date: preset.from, to_date: preset.to })
     ]);
     const data = collResult.success ? collResult.data : { days: [], total_cash_in: 0, total_cash_out: 0, net_cash: 0 };
-    data.payment_records = payResult.success ? payResult.data || [] : [];
+    // Money RECEIVED/COLLECTED only — the workbook's `Collection` sheet.
+    // Payments paid out live on the Payment Register; advances on the Advance register.
+    data.payment_records = (payResult.success ? payResult.data || [] : []).filter(p => p.type === 'receipt');
 
     const modeIcon = (mode) => {
         const m = PAYMENT_MODES.find(p => p.value === mode);
@@ -1656,7 +1658,7 @@ async function showCashCollectionPage() {
 
     container.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <h2 style="margin:0">💰 Payment Collection Report</h2>
+            <h2 style="margin:0">💰 Payment Collection — Money Received</h2>
             <div class="btn-group">
                 <button class="btn btn-info btn-sm" onclick="printCashCollectionPage()">🖨 Print</button>
                 <button class="btn btn-primary btn-sm" onclick="exportCashCollectionPagePDF()">📄 PDF</button>
@@ -1669,8 +1671,8 @@ async function showCashCollectionPage() {
              onmouseover="this.style.background='linear-gradient(135deg,#bbdefb,#90caf9)';this.style.borderColor='#2196f3';this.style.transform='translateY(-2px)'"
              onmouseout="this.style.background='linear-gradient(135deg,#e3f2fd,#bbdefb)';this.style.borderColor='#64b5f6';this.style.transform='none'">
             <div>
-                <div style="font-size:16px;font-weight:700;color:#1565c0">➕ Record Payment Collection</div>
-                <div style="font-size:13px;color:#1976d2;margin-top:2px">Record incoming/outgoing payments with cash, cheque, online/UPI, or bank transfer</div>
+                <div style="font-size:16px;font-weight:700;color:#1565c0">➕ Record Collection (Money In)</div>
+                <div style="font-size:13px;color:#1976d2;margin-top:2px">Record an amount received from a customer/party — cash, cheque, online/UPI, or bank transfer</div>
             </div>
             <div style="font-size:32px;color:#1976d2">📝</div>
         </div>
@@ -1743,9 +1745,9 @@ async function showCashCollectionPage() {
         <div style="margin-top:24px">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
                 <span style="font-size:16px">💳</span>
-                <h3 style="font-size:15px;font-weight:700;margin:0">Payment Records</h3>
-                <span style="font-size:11px;background:var(--bg);color:var(--text-light);padding:2px 8px;border-radius:4px">${data.payment_records.length} payment(s)</span>
-                <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="showPaymentEntryForm()">+ New Payment / Receipt</button>
+                <h3 style="font-size:15px;font-weight:700;margin:0">Collection Records — Money Received</h3>
+                <span style="font-size:11px;background:var(--bg);color:var(--text-light);padding:2px 8px;border-radius:4px">${data.payment_records.length} receipt(s)</span>
+                <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="showPaymentEntryForm()">+ New Receipt</button>
             </div>
             <div class="table-container">
                 <table>
@@ -1829,7 +1831,8 @@ function applyCashCollectionPage() {
     ]).then(([collResult, payResult]) => {
         if (collResult.success) {
             const data = collResult.data;
-            data.payment_records = payResult.success ? payResult.data || [] : [];
+            // Money received/collected only — matches the on-screen list.
+            data.payment_records = (payResult.success ? payResult.data || [] : []).filter(p => p.type === 'receipt');
             _finLastData.cashCollection = data;
             showCashCollectionPage();
         } else {
@@ -2248,6 +2251,7 @@ async function renderFinancialReports() {
 // decides whether this is a P&L event or a balance-sheet movement.
 // ============================================================
 const PAYMENT_TYPE_TREATMENTS = {
+    collection:        { dir: 'in',  label: '🧾 Collection from Customer', treat: 'Money received — Customer Receivable ↓, no income (the sale is already booked)', pnl: false },
     actual_expense:    { dir: 'out', label: '💰 Actual Expense',      treat: 'P&L expense — reduces profit',          pnl: true },
     advance:           { dir: 'out', label: '📥 Advance Payment',    treat: 'Balance sheet — Advance Receivable ↑, no P&L effect', pnl: false },
     loan_given:        { dir: 'out', label: '🤝 Loan / Sapati Given', treat: 'Balance sheet — Loan Receivable ↑, no P&L effect', pnl: false },
@@ -2270,6 +2274,7 @@ function showPaymentEntryForm() {
                 <div class="form-group">
                     <label>Transaction Type *</label>
                     <select class="form-control" id="payEntryType" onchange="updatePaymentTypeTreatment()">
+                        <option value="collection">🧾 Collection from Customer (money received)</option>
                         <option value="actual_expense">💰 Actual Expense (rent, salary, electricity…)</option>
                         <option value="advance">📥 Advance Payment (to supplier/party)</option>
                         <option value="loan_given">🤝 Loan / Sapati Given</option>
@@ -2367,6 +2372,7 @@ async function submitPaymentEntry() {
     // selector pays money OUT.
     const dir = (PAYMENT_TYPE_TREATMENTS[typeName] || {}).dir === 'in' ? 'in' : 'out';
     const type = dir === 'in' ? 'receipt' : 'payment';
+    // 'collection' is normalised server-side to the settlement type.
 
     const result = await window.api.savePayment({
         party_id: party.id, date, type,

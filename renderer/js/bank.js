@@ -13,7 +13,9 @@ async function renderBank() {
         <button class="btn btn-warning btn-sm" onclick="showBankReviewQueue()">🔍 Needs Review <span id="bankReviewCount" style="margin-left:4px"></span></button>
     `;
 
-    const filt = pageFilterInit('bank');
+    // Open range by default — imported bank history spans earlier BS months and
+    // a this-month default made the register look empty.
+    const filt = pageFilterInit('bank', { preset: 'all' });
     const result = await window.api.getBankList({ from_date: filt.from, to_date: filt.to, search: filt.search || undefined, match_status: filt.status || undefined });
     if (!result.success && typeof showToast === 'function') showToast(result.error, 'error');
     const rows = result.success ? result.data : [];
