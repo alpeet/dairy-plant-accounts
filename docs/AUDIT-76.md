@@ -373,5 +373,7 @@ gross profit; it is a policy decision, not an arithmetic error.
 | `scripts/audit/test-monthly-report.js` | purchase identity includes opening documents |
 | `scripts/audit/run-all-tests.js` | new test registered in the suite |
 
-**Database:** no schema change, no deleted rows. The only writes are the imports
-described in §4 and the two in-place salary corrections.
+**Database:** no schema change. The writes are the imports described in §4, the two
+in-place salary corrections (§2.2), the reference correction on bank row #83 and the
+15 duplicate removals documented in §5.0 — each with its own `audit_log` row and a
+restorable evidence file. No other row was deleted or overwritten.
