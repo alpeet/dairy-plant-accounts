@@ -58,6 +58,8 @@ const MANIFEST = [
     'test-phase26-reconcile.js',
     // imports / round trips
     'test-excel-roundtrip.js',
+    // workbook importer regressions found in Dairy_Accounts_Professional 76
+    'test-workbook-import-76.js',
     'test-bulk-entry.js',
     'test-bank-idempotency.js',
     // reporting & acceptance

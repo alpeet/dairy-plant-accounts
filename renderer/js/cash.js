@@ -160,10 +160,16 @@ async function showPaymentCollectionPage() {
     const total_bank = total_out - total_cash;
     const partyCount = new Set(payments.map(p => p.party_id || p.party_name)).size;
 
+    // The edit/delete modals live with the Payment Collection screen; hand them
+    // this page's rows and tell them to refresh HERE after a change.
+    _finLastData.cashCollection = { payment_records: payments };
+    window._paymentEditReturn = refreshPaymentCollection;
+
     container.innerHTML = `
         <div class="card-header">
             <h2>Payment Register — Money Paid Out</h2>
             <div class="btn-group">
+                <button class="btn btn-success btn-sm" onclick="showPaymentEntryForm('actual_expense')">➕ Record Payment</button>
                 <button class="btn btn-info btn-sm" onclick="printPaymentCollection()">🖨 Print</button>
                 <button class="btn btn-primary btn-sm" onclick="exportPaymentCollectionPDF()">📄 PDF</button>
             </div>
@@ -219,6 +225,7 @@ async function showPaymentCollectionPage() {
                         <th class="text-right">Mode</th>
                         <th class="text-right">Type</th>
                         <th class="text-right">Notes</th>
+                        <th class="actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -229,11 +236,15 @@ async function showPaymentCollectionPage() {
                             <td class="text-right">PMT-${p.id}</td>
                             <td class="text-right" style="color:var(--danger)">${formatCurrency(p.amount)}</td>
                             <td class="text-right">${p.mode || 'cash'}</td>
-                            <td class="text-right">💸 Payment</td>
+                            <td class="text-right">💸 ${escapeHtml(p.transaction_type || 'Payment')}</td>
                             <td class="text-right">${escapeHtml(p.notes || '—')}</td>
+                            <td class="actions">
+                                <button class="btn btn-sm btn-secondary" onclick="editPaymentRecord(${p.id})" title="Edit" style="padding:2px 6px;font-size:11px">✏️</button>
+                                <button class="btn btn-sm btn-danger" onclick="deletePaymentRecord(${p.id})" title="Delete" style="padding:2px 6px;font-size:11px">🗑️</button>
+                            </td>
                         </tr>
                     `).join('')}
-                    ${payments.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No payments (money out) for this period</td></tr>' : ''}
+                    ${payments.length === 0 ? '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-light)">No payments (money out) for this period</td></tr>' : ''}
                 </tbody>
                 <tfoot>
                     <tr>
@@ -241,6 +252,7 @@ async function showPaymentCollectionPage() {
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
                         <td class="text-right"><strong>${formatCurrency(total_out)}</strong></td>
+                        <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>
                         <td><strong>—</strong></td>

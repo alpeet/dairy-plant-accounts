@@ -580,14 +580,44 @@ function importBankRows(db, rows) {
     ensureBankTable(db);
     const report = { read: 0, inserted: 0, skipped_dup: 0, auto_posted: 0, already_in_ledger: 0, review_queue: 0, unmatched: 0, transfers: 0, expenses: 0, errors: [] };
 
-    const existingRefs = new Set(
-        db.prepare("SELECT reference_no FROM bank_transactions WHERE reference_no != ''").all().map(r => r.reference_no)
-    );
-    // Every txn_uid already claimed in the DB — a re-imported statement row
-    // matches its previous uid and is skipped instead of inserted again.
-    const takenUids = new Set(
-        db.prepare('SELECT txn_uid FROM bank_transactions WHERE txn_uid IS NOT NULL').all().map(r => r.txn_uid)
-    );
+    // Existing rows, indexed by uid and by content identity. A reference number
+    // is NOT a unique key: the workbook's Transaction ID column repeats one
+    // value down the whole sheet (Dairy_Accounts_Professional 76 has 31 rows
+    // all called "QR-089"), and a bank charge can legitimately share a
+    // reference with the transfer it belongs to. Skipping on reference alone
+    // silently dropped every row after the first — that is why nothing after
+    // 2083 Ashoj 12 ever appeared.
+    const existingRows = db.prepare(
+        'SELECT id, reference_no, txn_uid, date, counterparty_name, description, debit, credit, bank_account, payment_mode, txn_type FROM bank_transactions'
+    ).all();
+    const takenUids = new Set(existingRows.map(r => r.txn_uid).filter(Boolean));
+    // Transaction identity without the descriptive columns. The bank ACCOUNT and
+    // payment mode are edited between workbook copies (v76 moved 30 statement
+    // rows from "Sushil QR" to "PRARAMBHA"), so they must not be part of the
+    // duplicate test — date + direction + amount + counterparty + description
+    // is the composite key that identifies the transaction itself.
+    const txnKey = (r) => [
+        r.date || '',
+        (r.credit || 0) > 0 ? 'C' : 'D',
+        Math.abs(Number(r.credit || r.debit || 0) || 0).toFixed(2),
+        String(r.counterparty_name || '').replace(/\s+/g, ' ').trim(),
+        String(r.description || '').replace(/\s+/g, ' ').trim()
+    ].join('|');
+    // how many times the DB already holds each transaction identity
+    const dbTxn = new Map();
+    const refUidTxn = new Map();
+    for (const row of existingRows) {
+        const key = txnKey(row);
+        dbTxn.set(key, (dbTxn.get(key) || 0) + 1);
+        if (row.txn_uid && String(row.txn_uid).startsWith('ref:')) refUidTxn.set(row.txn_uid, key);
+    }
+    const fileTxnOcc = new Map();
+    // How many times each reference occurs in this file.
+    const fileRefCount = new Map();
+    for (const r of rows) {
+        const ref = String(r.reference_no || '').trim();
+        if (ref) fileRefCount.set(ref, (fileRefCount.get(ref) || 0) + 1);
+    }
     // Occurrence rank of each content identity *within this file*, so a file
     // legitimately containing two identical no-reference rows still imports
     // both, while re-importing the same file imports neither twice.
@@ -608,11 +638,24 @@ function importBankRows(db, rows) {
             if (!r.date) { report.errors.push({ ref: r.reference_no || '?', reason: 'missing date' }); continue; }
             report.read++;
             const ref = String(r.reference_no || '').trim();
-            if (ref && existingRefs.has(ref)) { report.skipped_dup++; continue; }
             const hash = _rowIdentityKey(r);
             const occ = fileOcc.get(hash) || 0;
             fileOcc.set(hash, occ + 1);
-            const uid = ref ? `ref:${ref}` : `imp:${hash}#${occ}`;
+
+            // Identity of this row. A reference that appears ONCE in the file and
+            // owns its `ref:` uid keeps the plain `ref:<no>` uid, so files
+            // imported before this change stay idempotent. A reference that is
+            // reused (same ref, different transaction) gets a content suffix, so
+            // every genuinely distinct row is imported exactly once.
+            const refIsUnique = !!ref && fileRefCount.get(ref) === 1;
+            const uid = refIsUnique ? `ref:${ref}` : `imp:${hash}#${occ}`;
+            // A reused reference also needs its own content check: the same
+            // transaction can already be stored under `ref:<no>` from an earlier
+            // workbook copy whose bank-account column has since been edited.
+            const key = txnKey(r);
+            const keyOcc = fileTxnOcc.get(key) || 0;
+            fileTxnOcc.set(key, keyOcc + 1);
+            if (!refIsUnique && (dbTxn.get(key) || 0) > keyOcc) { report.skipped_dup++; continue; }
             if (takenUids.has(uid)) { report.skipped_dup++; continue; }
 
             const isCredit = (r.credit || 0) > 0;
@@ -632,8 +675,9 @@ function importBankRows(db, rows) {
                 debit, credit, amount, r.payment_mode || 'QR/Bank', r.bank_account || '',
                 r.txn_type || '', partyId, status, cls, uid);
             const newId = Number(res.lastInsertRowid);
-            if (ref) existingRefs.add(ref);
             takenUids.add(uid);
+            if (refIsUnique) refUidTxn.set(`ref:${ref}`, key);
+            dbTxn.set(key, (dbTxn.get(key) || 0) + 1);
             report.inserted++;
 
             if (nonParty) {

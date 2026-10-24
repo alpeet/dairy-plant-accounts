@@ -744,6 +744,11 @@ function getCashBankPosition(db, opts = {}) {
             cash_deposits_in: cashToBank,
             cash_deposits_count: cashDepositRows.count + unmatchedTransfers.filter(r => (Number(r.credit) || 0) > 0).length,
             payments: round2(paymentRows.reduce((s, r) => s + (Number(r.debit) || 0), 0)),
+            // Bank-mode documents that have NO statement row yet: they are part
+            // of the bank movement, so a reconciliation must add them to the
+            // statement side instead of reporting them as a 3-million gap.
+            receipts_documents: round2(bankReceiptsDoc.total - dupReceipts.reduce((s, r) => s + (Number(r.amount) || 0), 0)),
+            payments_documents: round2(bankPaymentsDoc.total - dupPayments.reduce((s, r) => s + (Number(r.amount) || 0), 0)),
             expenses_paid: bankExpenseOut,
             transfers_out: transferOut,
             total_in: bankIn,
@@ -800,8 +805,19 @@ function getExpenseSummary(db, opts = {}) {
     const petty = db.prepare(
         // Advances are NOT expenses (audit req 25): rows with head 'Advance'
         // are balance-sheet money-out, already carried by their payments row.
+        // A 'Payment' row paid to a named party settles a purchase that COGS
+        // already carries — counting it again double-books the same milk bill.
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
-          WHERE ${RANGE} AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'`
+          WHERE ${RANGE} AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
+            AND NOT ${PETTY_DUPLICATE_SQL}`
+    ).get(...p);
+    const pettySettlements = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
+          WHERE ${RANGE} AND ${PETTY_SETTLEMENT_SQL}`
+    ).get(...p);
+    const pettySalaryDup = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
+          WHERE ${RANGE} AND ${PETTY_SALARY_DUP_SQL}`
     ).get(...p);
     const pettyAdvances = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
@@ -827,14 +843,28 @@ function getExpenseSummary(db, opts = {}) {
             .map(r => `${r.date}|${round2(r.amount)}`)
     );
 
+    // The same office voucher is entered twice in this workbook: once in the
+    // BANK RECON statement ("TIRE PURCHASE" QR-089, 2083-06-02) and once in the
+    // petty-cash register (head "TIRE PURCHASE", payee OFFICE EXPENSES). It is
+    // ONE expense, so the statement copy is not counted again. Matched on date +
+    // amount against a register row whose payee is the pseudo-party OFFICE
+    // EXPENSES — never on amount alone.
+    const registerVouchers = new Set(
+        db.prepare(`SELECT date, amount FROM petty_cash
+                     WHERE ${RANGE} AND UPPER(TRIM(COALESCE(paid_to, ''))) = 'OFFICE EXPENSES'`)
+            .all(...p).map(r => `${r.date}|${round2(r.amount)}`)
+    );
+
     const bankExpenses = listClassifiedBankRows(db, { from_date: from, to_date: to })
         .filter(r => r.is_expense);
     const extraBankExpenses = [];
+    let bankInRegister = 0;
     for (const r of bankExpenses) {
         const amount = round2(Number(r.debit) || 0);
         if (amount <= 0) continue;
         const ref = String(r.reference_no || '').trim();
         if (ref && knownRefs.has(ref)) continue;                    // already recognised by reference
+        if (registerVouchers.has(`${r.date}|${amount}`)) { bankInRegister = round2(bankInRegister + amount); continue; }
         if (!ref && knownAmounts.has(`${r.date}|${amount}`)) continue; // no reference → date + amount
         extraBankExpenses.push({ ...r, amount });
     }
@@ -859,9 +889,14 @@ function getExpenseSummary(db, opts = {}) {
         other_income: round2(otherIncome.total),
         petty_cash: round2(petty.total),
         petty_advances: round2(pettyAdvances.total),
+        petty_settlements: round2(pettySettlements.total),
+        petty_settlement_count: pettySettlements.count,
+        petty_salary_duplicates: round2(pettySalaryDup.total),
+        petty_salary_duplicate_count: pettySalaryDup.count,
         salary: round2(salary.total),
         vehicle_expenses: round2(vehicle.total),
         bank_expenses: bankExpenseTotal,
+        bank_expenses_already_in_register: round2(bankInRegister),
         typed_payment_expenses: round2(typedExpenses.total),
         typed_payment_expense_count: typedExpenses.count,
         bank_expense_rows: extraBankExpenses.map(r => ({
@@ -870,6 +905,57 @@ function getExpenseSummary(db, opts = {}) {
         total_operating_expenses: operating
     };
 }
+
+/**
+ * A petty-cash register row that SETTLES an existing payable instead of
+ * creating a new expense. Two independent proofs, both required to be
+ * transaction-level (never amount alone):
+ *
+ *   1. it is the workbook's `Payment` sheet row (head 'Payment', payee is a
+ *      party, not the pseudo-payee 'OFFICE EXPENSES'), or
+ *   2. the SAME money is already in the Payment register: one `payments` row
+ *      with the same date, the same party NAME and the same amount.
+ *
+ * The purchase (milk supply, diesel) is already in COGS and the payment
+ * already reduces the payable — booking the cash-box row as an expense on top
+ * double-counts the supplier bill. Rows paid to 'OFFICE EXPENSES' carry their
+ * real cost in the description, so they stay expenses.
+ */
+const PETTY_SETTLEMENT_SQL = `(
+    (UPPER(TRIM(COALESCE(petty_cash.expense_head, ''))) = 'PAYMENT'
+     AND UPPER(TRIM(COALESCE(petty_cash.paid_to, ''))) NOT IN ('', 'OFFICE EXPENSES'))
+    OR EXISTS (
+        SELECT 1 FROM payments pm
+          JOIN parties p ON p.id = pm.party_id
+         WHERE pm.date = petty_cash.date
+           AND pm.type = 'payment'
+           AND ABS(pm.amount - petty_cash.amount) < 0.005
+           AND UPPER(TRIM(p.name)) = UPPER(TRIM(COALESCE(petty_cash.paid_to, '')))
+    )
+)`;
+
+/**
+ * A cash-box row that IS a payroll payment already recorded in
+ * `salary_records` ("SARASWATI SALARY SRAWAN-2083" Rs 5,000 on the salary
+ * payment date). Payroll is recognised once, from the payroll register, so the
+ * cash-box copy must not add a second salary expense. Matched on payment date +
+ * amount + the employee's name appearing in the row — never on amount alone.
+ */
+const PETTY_SALARY_DUP_SQL = `EXISTS (
+    SELECT 1 FROM salary_records sr
+     WHERE sr.payment_date = petty_cash.date
+       AND ABS(sr.net_salary - petty_cash.amount) < 0.005
+       AND (UPPER(TRIM(COALESCE(petty_cash.paid_to, ''))) = UPPER(TRIM(sr.employee_name))
+            OR UPPER(COALESCE(petty_cash.expense_head, '') || ' ' || COALESCE(petty_cash.description, ''))
+               LIKE '%' || UPPER(TRIM(sr.employee_name)) || '%'
+            OR UPPER(COALESCE(petty_cash.expense_head, '') || ' ' || COALESCE(petty_cash.description, ''))
+               LIKE '%SALARY%'
+            OR UPPER(COALESCE(petty_cash.expense_head, '') || ' ' || COALESCE(petty_cash.description, ''))
+               LIKE '%SALAY%')
+)`;
+
+/** Every register row whose money is already carried by another module. */
+const PETTY_DUPLICATE_SQL = `(${PETTY_SETTLEMENT_SQL} OR ${PETTY_SALARY_DUP_SQL})`;
 
 // ──────────────────────────────────────────────────────────────
 // Cross-module reconciliation
@@ -1469,6 +1555,8 @@ function normalizeAdvances(db) {
 module.exports = {
     // money
     round2, moneyEq, moneyGte, CURRENCY_TOLERANCE, paymentStatus,
+    // expense classification (shared by the P&L and the Monthly Report)
+    PETTY_SETTLEMENT_SQL, PETTY_SALARY_DUP_SQL, PETTY_DUPLICATE_SQL,
     // accounts
     ACCOUNT, TRANSACTION_TYPES, TRANSACTION_TYPE_VALUES, classifyTransaction, getPaymentPostingRule,
     getLoanAdvanceBalances,

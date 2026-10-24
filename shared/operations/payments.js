@@ -120,18 +120,19 @@ function savePayment(db, payment) {
             mode: payment.mode
         }, payment.notes || '');
 
-        // Payments are standalone by default — do NOT automatically create
-        // Bank Transactions entries. Only link when a bank/upi/cheque mode
-        // AND explicit bank_reference are explicitly provided.
-        const bank_txn_id = linkPaymentToBank(db, { ...payment, id: paymentId });
-
-        // Reset bank_txn_id to null when mode is cash (standalone by default)
-        if (payment.mode && String(payment.mode).toLowerCase() !== 'cash' && String(payment.mode).toLowerCase() !== 'bank' && String(payment.mode).toLowerCase() !== 'upi') {
-            bank_txn_id = null;
-        }
+        // STANDALONE REGISTER (operator rule, 2026-10): recording a payment
+        // never creates or links a Bank Transactions row, whatever its mode or
+        // reference. The bank statement is its own register, filled only from
+        // BANK RECON / the Bank screen. Auto-linking by bank_reference was also
+        // unsafe here: the workbook repeats one reference across dozens of
+        // rows (v76: 31 rows all called "QR-089"), so a reference-only match
+        // attached a payment to an unrelated transaction.
+        // `linkPaymentToBank` stays exported for an explicit, user-initiated
+        // reconciliation outside this save path.
+        const bank_txn_id = null;
 
         logAudit(db, 'payments', paymentId, 'create', null, { ...payment, transaction_type: transactionType }, payment.created_by);
-        return { id: paymentId, transaction_type: transactionType, bank_txn_id: bank_txn_id || null };
+        return { id: paymentId, transaction_type: transactionType, bank_txn_id };
     });
     return trx();
 }

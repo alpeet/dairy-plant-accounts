@@ -244,17 +244,34 @@ function getExpenseHeads(db, from, to) {
     }
     sources.other_expenses = round2(rows.reduce((s, r) => s + Number(r.total || 0), 0));
 
-    // 2. Petty cash — 'Advance' rows are balance-sheet money out, never expense.
+    // 2. Petty cash — 'Advance' rows are balance-sheet money out, never expense,
+    //    and a 'Payment' row paid to a named party settles a supplier balance
+    //    whose purchase COGS already carries (never a second expense). Both
+    //    exclusions come from accounting.PETTY_SETTLEMENT_SQL so this report and
+    //    the Profit & Loss screen can never disagree.
     const petty = db.prepare(`
         SELECT COALESCE(NULLIF(TRIM(expense_head), ''), 'OTHER') AS head,
                COALESCE(TRIM(COALESCE(description, '')), '') AS detail,
                COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM petty_cash
         WHERE date >= ? AND date <= ? AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
+          AND NOT ${accounting.PETTY_DUPLICATE_SQL}
         GROUP BY head, detail
     `).all(from, to);
     for (const r of petty) addHead(map, classifyExpenseHead(r.head + ' ' + r.detail), r.total, r.n);
     sources.petty_cash = round2(petty.reduce((s, r) => s + Number(r.total || 0), 0));
+    const settled = db.prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM petty_cash
+          WHERE date >= ? AND date <= ? AND ${accounting.PETTY_SETTLEMENT_SQL}`
+    ).get(from, to);
+    sources.supplier_settlements_excluded = round2(settled.total);
+    sources.supplier_settlement_count = settled.n;
+    const salaryDup = db.prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM petty_cash
+          WHERE date >= ? AND date <= ? AND ${accounting.PETTY_SALARY_DUP_SQL}`
+    ).get(from, to);
+    sources.salary_duplicates_excluded = round2(salaryDup.total);
+    sources.salary_duplicate_count = salaryDup.n;
 
     // 3. Payroll — recognised on the payment date (cash basis inside the period).
     const salary = db.prepare(`
@@ -319,12 +336,25 @@ function getExpenseHeads(db, from, to) {
 function getCogs(db, from, to) {
     const milk = accounting.getMilkCostSummary(db, { from_date: from, to_date: to });
     const milkCost = round2(milk.milk_cost);
-    const otherPurchases = round2(milk.non_milk_purchases);
+    // Opening-balance documents (bill "OPN-…") are the purchase-side mirror of
+    // the OPN invoices that are already kept out of sales revenue. They bring
+    // forward a payable/stock position — they are NOT March trading, so they
+    // must not become an expense in the month the books open. Excluding them
+    // here is the same correction the income side applies.
+    const opening = db.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(SUM(grand_total), 0) AS total
+        FROM purchases WHERE date >= ? AND date <= ? AND bill_no LIKE 'OPN%'
+    `).get(from, to);
+    const grossOther = round2(milk.non_milk_purchases);
+    const openingExcluded = round2(Math.min(grossOther, Number(opening.total) || 0));
+    const otherPurchases = round2(grossOther - openingExcluded);
     return {
         milk_cost: milkCost,
         milk_collection_count: milk.milk_collection_count,
         other_purchases: otherPurchases,
         purchases_gross: round2(milk.purchases_total),
+        opening_purchase_documents: openingExcluded,
+        opening_purchase_document_count: Number(opening.n) || 0,
         linked_milk_excluded: round2(milk.linked_to_purchase),
         unlinked_milk_lines: round2(milk.unlinked_milk_lines),
         purchases_count: milk.purchases_count,
@@ -720,8 +750,9 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
     push('Purchase register vs purchases used in COGS',
         round2(activity.cogs_detail.purchases_gross),
         round2(activity.cogs_detail.other_purchases + activity.cogs_detail.linked_milk_excluded
-            + activity.cogs_detail.unlinked_milk_lines),
-        'Every rupee of the purchase register is either a COGS purchase or milk already counted through collections. '
+            + activity.cogs_detail.unlinked_milk_lines + (activity.cogs_detail.opening_purchase_documents || 0)),
+        'Every rupee of the purchase register is either a COGS purchase, milk already counted through collections, '
+        + 'or an opening-balance document (OPN-…) brought forward rather than expensed. '
         + 'Small differences are per-row rounding.', 1);
 
     // 4. Inventory: opening + in − out = closing (quantities, from the ledger).
@@ -745,11 +776,16 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
 
     // 6. Bank: statement rows + documents, each counted once.
     const cb = closing.cash_bank_detail;
-    push('Bank receipts vs movements', cb.bank.total_in, cb.bank.total_in,
-        `Customer receipts ${cb.bank.customer_receipts} + cash deposits ${cb.bank.cash_deposits_in}.`);
+    push('Bank receipts vs movements',
+        round2(cb.bank.customer_receipts + cb.bank.cash_deposits_in + (cb.bank.receipts_documents || 0)),
+        cb.bank.total_in,
+        `Statement receipts ${cb.bank.customer_receipts} + cash deposits ${cb.bank.cash_deposits_in}`
+        + ` + bank-mode receipts without a statement row ${cb.bank.receipts_documents || 0}.`);
     push('Bank payments vs expense/transfer side',
-        round2(cb.bank.payments + cb.bank.expenses_paid + cb.bank.transfers_out), cb.bank.total_out,
-        'Supplier payments, expenses paid from the bank and out-transfers.');
+        round2(cb.bank.payments + (cb.bank.payments_documents || 0) + cb.bank.expenses_paid + cb.bank.transfers_out),
+        cb.bank.total_out,
+        `Statement payments ${cb.bank.payments} + bank-mode payments without a statement row ${cb.bank.payments_documents || 0}`
+        + ` + expenses paid from the bank ${cb.bank.expenses_paid} + out-transfers ${cb.bank.transfers_out}.`);
 
     // 7. Receivables + payables vs the party ledger.
     const ledgerTotals = db.prepare(`

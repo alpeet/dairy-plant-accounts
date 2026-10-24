@@ -1640,6 +1640,8 @@ const PAYMENT_MODES = [
 async function showCashCollectionPage() {
     const container = document.getElementById('page-cash-collection');
     document.getElementById('topActions').innerHTML = '';
+    // This screen is the default return target for a payment change.
+    window._paymentEditReturn = null;
     const preset = getDatePreset('this_month');
 
     const [collResult, payResult] = await Promise.all([
@@ -2185,6 +2187,16 @@ async function editPaymentRecord(id) {
 }
 
 /**
+ * Re-render whichever screen the payment was changed from. The Payment
+ * Register sets `window._paymentEditReturn` when it opens the shared edit /
+ * delete modals; otherwise we are on Payment Collection.
+ */
+function refreshAfterPaymentChange() {
+    if (typeof window._paymentEditReturn === 'function') { window._paymentEditReturn(); return; }
+    applyCashCollectionPage();
+}
+
+/**
  * Save the payment record edits.
  */
 async function savePaymentRecordEdit() {
@@ -2206,7 +2218,7 @@ async function savePaymentRecordEdit() {
     if (result.success) {
         closeModal();
         showToast('Payment updated successfully!', 'success');
-        applyCashCollectionPage();
+        refreshAfterPaymentChange();
     } else {
         showToast(result.error || 'Failed to update', 'error');
     }
@@ -2229,7 +2241,7 @@ async function deletePaymentRecord(id) {
     const result = await window.api.deletePayment(id);
     if (result.success) {
         showToast('Payment deleted successfully!', 'success');
-        applyCashCollectionPage();
+        refreshAfterPaymentChange();
     } else {
         showToast(result.error || 'Failed to delete', 'error');
     }
@@ -2261,9 +2273,9 @@ const PAYMENT_TYPE_TREATMENTS = {
     advance_returned:   { dir: 'in',  label: '↩ Advance Returned',   treat: 'Balance sheet — Advance Receivable ↓ (cash came back), no P&L effect', pnl: false }
 };
 
-function showPaymentEntryForm() {
-    const parties = window._finLastData && window._finLastData.payment_records
-        ? [] : []; // parties loaded fresh below
+function showPaymentEntryForm(defaultType) {
+    // `defaultType` lets another screen open the same form on the treatment it
+    // needs (the Payment Register opens it on a money-out expense).
     showModal(`
         <div class="modal-header">
             <h2>💳 New Payment / Receipt</h2>
@@ -2322,7 +2334,7 @@ function showPaymentEntryForm() {
                 </div>
                 <div class="form-group">
                     <label>Bank Reference / Voucher No</label>
-                    <input type="text" class="form-control" id="payEntryBankRef" placeholder="e.g. QR-0912 — creates one linked bank transaction">
+                    <input type="text" class="form-control" id="payEntryBankRef" placeholder="e.g. QR-0912 (stored on the payment; never creates a bank row)">
                 </div>
             </div>
             <div id="payEntryTreatment" style="margin-top:8px;padding:10px 14px;background:var(--bg);border-radius:6px;font-size:13px"></div>
@@ -2332,6 +2344,14 @@ function showPaymentEntryForm() {
             <button class="btn btn-primary" onclick="submitPaymentEntry()">💾 Save</button>
         </div>
     `);
+
+    if (defaultType) {
+        const sel = document.getElementById('payEntryType');
+        if (sel && [...sel.options].some(o => o.value === defaultType)) {
+            sel.value = defaultType;
+            updatePaymentTypeTreatment();
+        }
+    }
 
     // Load parties for the autocomplete
     window.api.getParties({}).then(r => {
@@ -2386,7 +2406,7 @@ async function submitPaymentEntry() {
         closeModal();
         const info = PAYMENT_TYPE_TREATMENTS[typeName];
         showToast(info && !info.pnl ? 'Saved — balance-sheet movement (no P&L effect)' : 'Saved', 'success');
-        applyCashCollectionPage();
+        refreshAfterPaymentChange();
     } else {
         showToast(result.error || 'Failed to save payment', 'error');
     }

@@ -141,9 +141,13 @@ const purchasesGross = db.prepare('SELECT COALESCE(SUM(grand_total),0) t FROM pu
     .get(R.from_date, R.to_date).t;
 near(R.activity.cogs_detail.purchases_gross, purchasesGross, 1.0,
     'the purchase register total is fully accounted for');
+// The full purchase register must still be accounted for, now including the
+// opening-balance documents (bill OPN-…) that are brought forward rather than
+// expensed — the purchase-side mirror of the OPN invoices kept out of revenue.
 near(purchasesGross,
-    R.activity.cogs_detail.other_purchases + R.activity.cogs_detail.linked_milk_excluded + R.activity.cogs_detail.unlinked_milk_lines,
-    1.0, 'purchases split into COGS purchases + milk already counted through collections (no double count)');
+    R.activity.cogs_detail.other_purchases + R.activity.cogs_detail.linked_milk_excluded
+    + R.activity.cogs_detail.unlinked_milk_lines + (R.activity.cogs_detail.opening_purchase_documents || 0),
+    1.0, 'purchases split into COGS purchases + milk already counted through collections + opening documents (no double count)');
 near(R.summary.cogs, R.summary.milk_cost + R.summary.other_purchases, 0.05, 'COGS = milk + non-milk purchases');
 
 // ──────────────────────────────────────────────────────────────

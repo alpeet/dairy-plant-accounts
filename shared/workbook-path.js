@@ -25,6 +25,30 @@ const CANDIDATES = [
     'Dairy_Accounts_Professional_TRIAL.xlsx'
 ];
 
+/**
+ * Any other copy the operator is actually working in — the workbook gets
+ * renamed with a running number ("Dairy_Accounts_Professional 76.xlsx") and the
+ * plain name may not exist at all. Excel's ~$ lock files are ignored.
+ * @returns {string|null} newest matching file in the project root
+ */
+function discoverNumberedWorkbook() {
+    let best = null;
+    let bestTime = -1;
+    let names = [];
+    try { names = fs.readdirSync(ROOT); } catch (e) { return null; }
+    for (const name of names) {
+        if (name.startsWith('~$')) continue;
+        if (!/^Dairy_Accounts_Professional.*\.xlsx$/i.test(name)) continue;
+        const full = path.join(ROOT, name);
+        try {
+            const st = fs.statSync(full);
+            if (!st.isFile() || st.size === 0) continue;
+            if (st.mtimeMs > bestTime) { bestTime = st.mtimeMs; best = full; }
+        } catch (e) { /* unreadable entry — skip */ }
+    }
+    return best;
+}
+
 function workbookPath(explicit) {
     if (explicit) return explicit;
     if (process.env.WORKBOOK_PATH) return process.env.WORKBOOK_PATH;
@@ -32,6 +56,8 @@ function workbookPath(explicit) {
         const full = path.join(ROOT, name);
         if (fs.existsSync(full)) return full;
     }
+    const numbered = discoverNumberedWorkbook();
+    if (numbered) return numbered;
     return path.join(ROOT, CANDIDATES[0]);
 }
 
@@ -40,4 +66,4 @@ function workbookExists(explicit) {
     return fs.existsSync(workbookPath(explicit));
 }
 
-module.exports = { ROOT, CANDIDATES, workbookPath, workbookExists };
+module.exports = { ROOT, CANDIDATES, workbookPath, workbookExists, discoverNumberedWorkbook };

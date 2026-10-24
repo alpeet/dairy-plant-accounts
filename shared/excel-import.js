@@ -2663,6 +2663,20 @@ const _BS_MONTH_NAMES = {
  * month explicitly, so they win whenever present.
  * @returns {string|null} 'YYYY-MM' or null
  */
+/**
+ * '2083-3', '2083/03', '2083-03-31', 2083-03 → '2083-03'. Anything that is not a
+ * real BS year-month is null, so the caller can fall back to another cell.
+ * @returns {string|null}
+ */
+function normalizePayrollMonth(value) {
+    const m = String(value === null || value === undefined ? '' : value).trim()
+        .match(/^(20[89]\d)[\/-](\d{1,2})(?:[\/-]\d{1,2})?$/);
+    if (!m) return null;
+    const monthNo = parseInt(m[2], 10);
+    if (!(monthNo >= 1 && monthNo <= 12)) return null;
+    return `${m[1]}-${pad2(monthNo)}`;
+}
+
 function bsMonthFromRemarks(text) {
     const t = String(text || '').toLowerCase();
     if (!t) return null;
@@ -2730,6 +2744,12 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
     const findExisting = db.prepare(
         'SELECT * FROM salary_records WHERE month=? AND LOWER(employee_name)=LOWER(?) ORDER BY id DESC LIMIT 1'
     );
+    // Second, equally stable key: the same employee paid on the same day. A row
+    // saved earlier under a wrong month (the remarks-override bug) is corrected
+    // in place instead of being duplicated under the right month.
+    const findExistingByPayDate = db.prepare(
+        'SELECT * FROM salary_records WHERE payment_date=? AND LOWER(employee_name)=LOWER(?) ORDER BY id DESC LIMIT 1'
+    );
     const insert = db.prepare(`INSERT INTO salary_records
         (employee_id, employee_name, position, month, basic_salary, allowance, advance, deduction, net_salary, payment_date, payment_mode, remarks, voucher_no)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -2747,10 +2767,18 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
         if (!rawName || !sheetMonth) { if (row.some(x => toStr(x) !== '')) res.skipped++; continue; }
         const pos = cPos >= 0 ? toStr(row[cPos]) : '';
         const remarks = cRemarks >= 0 ? toStr(row[cRemarks]) : '';
-        // Remarks state the real payroll month ("2083 BHADRA SALARY") — the
-        // Month column is stale on re-entered rows; trusting it collapsed 9
-        // employee-months into 4. See bsMonthFromRemarks.
-        const month = bsMonthFromRemarks(remarks) || sheetMonth;
+        // Which cell states the payroll month? The Month column when it holds a
+        // real year-month, because it agrees with the payment date in every
+        // current workbook row (Dairy_Accounts_Professional 76: Month 2083-05 ↔
+        // paid 2083-05-31). Only when the column is blank/invalid do we fall
+        // back to the payment date, and only then to the remarks. Remarks are
+        // LAST because operators copy one remark down a block of rows — the 76
+        // sheet has "2083 SHRAWAN SALARY" on Bhadra rows, and trusting it
+        // collapsed different employee-months into one and dropped 4 records.
+        const month = normalizePayrollMonth(sheetMonth)
+            || normalizePayrollMonth(cPayDate >= 0 ? toBSDate(row[cPayDate]) : null)
+            || bsMonthFromRemarks(remarks)
+            || sheetMonth;
         const emp = findEmp(rawName, cId >= 0 ? row[cId] : '', pos);
         const name = emp.name;                       // canonical master name
         const key = month + '|' + normalize(name);
@@ -2779,13 +2807,17 @@ function importSalaryGenericSheet(db, data, hr, { log }) {
                 payment_mode: mode,
                 remarks
             };
-            const existing = findExisting.get(month, name);
+            const existing = findExisting.get(month, name)
+                || (cand.payment_date ? findExistingByPayDate.get(cand.payment_date, name) : null);
             if (!existing) {
                 insert.run(cand.employee_id, cand.employee_name, cand.position, cand.month,
                     cand.basic_salary, cand.allowance, cand.advance, cand.deduction, cand.net_salary,
                     cand.payment_date, cand.payment_mode, cand.remarks, '');
                 res.added++;
-            } else if (rowDiffers(existing, cand)) {
+            } else if (rowDiffers(existing, { ...cand, month })) {
+                // Month is part of the correction: a record saved under a stale
+                // month is moved to the month the sheet actually states.
+                db.prepare("UPDATE salary_records SET month=? WHERE id=?").run(month, existing.id);
                 update.run(cand.employee_id, cand.position, cand.basic_salary, cand.allowance,
                     cand.advance, cand.deduction, cand.net_salary, cand.payment_date,
                     cand.payment_mode, cand.remarks, existing.id);
