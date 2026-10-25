@@ -66,7 +66,10 @@ ok(salaryOps.isValidEmployeeName('   ') === false, 'blank rejected');
 console.log('\nTEST 3 — Salary Advance import: 9/9 employee-months, no duplicate employees');
 // ════════════════════════════════════════════════════════════
 const wb = XLSX.readFile(require(path.join(ROOT, 'shared', 'workbook-path')).workbookPath());
-const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets['Salary Advance'], { header: 1, defval: '' });
+// The sheet is renamed to "Salary" in some exports of the workbook; the
+// importer accepts either, so the test must read the same sheet it imports.
+const salarySheetName = ['Salary Advance', 'Salary_Advance', 'Salary'].find((n) => wb.SheetNames.includes(n));
+const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[salarySheetName], { header: 1, defval: '' });
 // The operator's sheet is live data: people join and months are added. The
 // expectations are therefore derived from the sheet itself — the invariants
 // under test are "every employee-month lands exactly once", "a spelling variant

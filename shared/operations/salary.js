@@ -145,9 +145,14 @@ function saveEmployee(db, data) {
     return trx();
 }
 
-function deleteEmployee(db, id) {
+function deleteEmployee(db, id, changedBy = null) {
     ensureEmployeesTable(db);
+    const old = db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
     db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(id);
+    // A soft delete is still a destructive action from the operator's point of
+    // view: record it in the audit trail (it was the one delete that silently
+    // skipped the log).
+    if (old) logAudit(db, 'employees', id, 'update', old, { ...old, active: 0, deactivated: true }, changedBy);
     return { id, deactivated: true };
 }
 

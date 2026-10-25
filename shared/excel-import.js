@@ -857,7 +857,22 @@ function importSales(db, sheetData, opts) {
             if (status === 'paid') paidAmount = grandTotal;
             else if (status === 'partial') paidAmount = grandTotal * 0.5;
 
-            const existing = findSale.get(invNo, bsDate, partyId);
+            // Internal-issue documents (rows with no invoice number) get a
+            // position-based synthetic number (INT-<date>-<seq>). The sequence
+            // shifts whenever the sheet gains or loses an earlier orphan group,
+            // so matching on the number inserted a SECOND copy of the same
+            // cream/wastage issue on every such import. Match those on their
+            // real identity instead: date + party + the internal-issue marker.
+            const isInternalIssue = /^INT-/.test(invNo) && /^Internal issue from Excel/.test(remarks);
+            // The number itself is NOT an identity here — a reused number can
+            // belong to another day's issue — so internal rows are matched on
+            // date + party and corrected in place.
+            let existing = isInternalIssue ? null : findSale.get(invNo, bsDate, partyId);
+            if (isInternalIssue) {
+                existing = db.prepare(`SELECT id FROM sales
+                    WHERE date = ? AND party_id = ? AND invoice_no LIKE 'INT-%'
+                    ORDER BY id LIMIT 1`).get(bsDate, partyId);
+            }
             let saleId;
             if (existing) {
                 // CHANGE DETECTION: rewrite the invoice only when its values
@@ -1133,9 +1148,21 @@ function importCollections(db, sheetData, opts) {
     const autoCreate = true;
     log('\n  📋 Importing Collections...');
 
-    const findPayment = db.prepare(`
-        SELECT id FROM payments WHERE party_id = ? AND date = ? AND type = ? AND ABS(amount - ?) < 0.01
-    `);
+    // Identity is a COUNT, not a boolean: the workbook legitimately records two
+    // identical collections from the same customer on the same day (KHANAL
+    // DAIRY, 2083-06-28, receipts 4915 and 4927 — Rs 1,700 each). Matching on
+    // party + date + amount alone silently dropped the second one on every
+    // import. `seen` counts the sheet rows processed for a key, `stored` the
+    // rows already in the database, so row N is inserted only when the sheet
+    // holds more copies than the register does.
+    const paymentKey = (partyId, date, type, amount) =>
+        `${partyId}|${date}|${type}|${Math.round((Number(amount) || 0) * 100)}`;
+    const stored = new Map();
+    for (const r of db.prepare("SELECT party_id, date, type, amount FROM payments WHERE type IN ('receipt','payment')").all()) {
+        const k = paymentKey(r.party_id, r.date, r.type, r.amount);
+        stored.set(k, (stored.get(k) || 0) + 1);
+    }
+    const seen = new Map();
     const insertPayment = db.prepare(`
         INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, reference_id, notes, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1210,11 +1237,13 @@ function importCollections(db, sheetData, opts) {
             const remarksSource = KNOWN_TT.has(rawTransType) ? toStr(row[remarkIdx + 1]) : toStr(row[remarkIdx]);
             const remarks = `${againstBill ? 'Against: ' + againstBill + ' | ' : ''}${remarksSource}`;
 
-            const existing = findPayment.get(partyId, bsDate, payType, amount);
-            if (existing) { unchanged++; continue; }
+            const pKey = paymentKey(partyId, bsDate, payType, amount);
+            seen.set(pKey, (seen.get(pKey) || 0) + 1);
+            if ((stored.get(pKey) || 0) >= seen.get(pKey)) { unchanged++; continue; }
 
             insertPayment.run(partyId, bsDate, payType, transactionType, amount, mode,
                 receiptNo || againstBill, receiptNo || againstBill, remarks, now);
+            stored.set(pKey, (stored.get(pKey) || 0) + 1);
             inserted++;
             if (insertLedger) {
                 insertLedger.run(partyId, bsDate,
@@ -1884,7 +1913,9 @@ function importPettyCashSheet(db, data, { log, mode }) {
         // description (the real detail: DISEL, ELECTRICITY ASHADH-2083, …), with
         // 'Payment' as fallback for blank descriptions so rows still dedupe
         // against legacy head='Payment' rows after Migration 30 (D8).
-        if ((type === 'Payment' || type === 'OFFICE EXPENSES') && paid > 0) {
+        // "PETTY CASH" is the same office-expense voucher typed by hand in the
+        // PETTY CASH sheet (55 rows, all silently dropped before).
+        if ((type === 'Payment' || type === 'OFFICE EXPENSES' || type === 'PETTY CASH') && paid > 0) {
             const head = desc || 'Payment';
             const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|${head.toLowerCase()}|${desc.toLowerCase()}`;
             if (existingPC.has(key)) { report.skipped_dup++; continue; }
@@ -1892,7 +1923,7 @@ function importPettyCashSheet(db, data, { log, mode }) {
             insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, head, desc, paid, customer, payMode, '');
             existingPC.add(key);
             report.payment++;
-            if (type === 'OFFICE EXPENSES') report.office = (report.office || 0) + 1;
+            if (type === 'OFFICE EXPENSES' || type === 'PETTY CASH') report.office = (report.office || 0) + 1;
         } else if (type === 'Advance' && paid > 0) {
             const pid = resolveParty(customer, db, false);
             const pcKey = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|advance|${(desc || 'advance paid').toLowerCase()}`;
@@ -1973,9 +2004,17 @@ function importRegisterSheets(db, workbook, { mode, log }) {
  */
 function postPaymentRegisterRows(db, data, { mode, log }) {
     const report = { added: 0, skipped_dup: 0, ledger_posted: 0, unmatched: [] };
-    const findPay = db.prepare(
-        "SELECT id FROM payments WHERE party_id = ? AND date = ? AND type = 'payment' AND ABS(amount - ?) < 0.005 LIMIT 1"
-    );
+    // Same count-based identity as the Collection importer: the Payment sheet
+    // holds two identical SANA KISAN transfers of Rs 100,000 on 2083-05-09
+    // (the register's closing due moves twice), and a boolean lookup dropped
+    // the second. stored/seen keep that faithful and stay idempotent.
+    const payKey = (partyId, date, amount) => `${partyId}|${date}|${Math.round((Number(amount) || 0) * 100)}`;
+    const stored = new Map();
+    for (const r of db.prepare("SELECT party_id, date, amount FROM payments WHERE type = 'payment'").all()) {
+        const k = payKey(r.party_id, r.date, r.amount);
+        stored.set(k, (stored.get(k) || 0) + 1);
+    }
+    const seen = new Map();
     const insertPay = db.prepare(`
         INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, notes, created_by)
         VALUES (?, ?, 'payment', NULL, ?, ?, ?, ?, NULL)
@@ -2008,8 +2047,11 @@ function postPaymentRegisterRows(db, data, { mode, log }) {
             const desc = toStr(row[5]);
             const note = desc ? `Payment: ${desc}` : 'Payment';
 
-            if (findPay.get(pid, date, paid)) { report.skipped_dup++; continue; }
+            const k = payKey(pid, date, paid);
+            seen.set(k, (seen.get(k) || 0) + 1);
+            if ((stored.get(k) || 0) >= seen.get(k)) { report.skipped_dup++; continue; }
             const info = insertPay.run(pid, date, paid, payMode, toStr(row[2]) || '', note);
+            stored.set(k, (stored.get(k) || 0) + 1);
             report.added++;
 
             // Party statement: one posting per payment, never a second one.
@@ -2095,22 +2137,42 @@ function importCashDemonSheet(db, data, { log }) {
         const date = toBSDate(r[0]);
         if (!date) { if (r.some(x => toStr(x) !== '')) report.undated++; continue; }
 
+        // Columns: 2=1000, 3=500, 4=100, 5=50, 6=20, 7=10, 8=5, 9=2 (COUNTS),
+        // 10=QR/BANK and 11=IC (RUPEE AMOUNTS). The sheet's own "Amount (Rs)"
+        // formula (M) is notes + K + L, so both amounts belong in the total;
+        // leaving IC out understated every day-close by the IC amount
+        // (42 of 116 counts were short).
         const n1000 = parseInt(r[2]) || 0, n500 = parseInt(r[3]) || 0, n100 = parseInt(r[4]) || 0,
             n50 = parseInt(r[5]) || 0, n20 = parseInt(r[6]) || 0, n10 = parseInt(r[7]) || 0,
-            n5 = parseInt(r[8]) || 0, n2 = parseInt(r[9]) || 0, n1 = parseInt(r[10]) || 0,
-            ic = parseInt(r[11]) || 0;
-        const total = n1000 * 1000 + n500 * 500 + n100 * 100 + n50 * 50 + n20 * 20 + n10 * 10 + n5 * 5 + n2 * 2 + n1 * 1;
+            n5 = parseInt(r[8]) || 0, n2 = parseInt(r[9]) || 0,
+            qrBank = toNum(r[10]), ic = toNum(r[11]);
+        const total = n1000 * 1000 + n500 * 500 + n100 * 100 + n50 * 50 + n20 * 20 + n10 * 10 + n5 * 5 + n2 * 2 + qrBank + ic;
         const countedBy = toStr(r[17]);
 
         // The sheet pre-fills one row per day to the end of the fiscal year. A day
         // whose cash was never counted has no denominations at all — importing it
         // would create a phantom day-close record showing a huge short/(over)
         // (its 'Collections (auto)' cell still holds a formula result).
-        if (!(n1000 || n500 || n100 || n50 || n20 || n10 || n5 || n2 || n1 || ic)) {
+        if (!(n1000 || n500 || n100 || n50 || n20 || n10 || n5 || n2 || qrBank || ic)) {
             report.skipped_empty = (report.skipped_empty || 0) + 1;
             continue;
         }
-        if (existing.has(date)) { report.skipped_dup++; continue; }
+        if (existing.has(date)) {
+            // A count already on file is corrected in place when the sheet's
+            // amount changed (the IC column used to be dropped from the total).
+            const cur = db.prepare('SELECT id, total_cash, expected_cash FROM denomination_counts WHERE date = ? ORDER BY id DESC LIMIT 1').get(date);
+            if (cur && Math.abs((Number(cur.total_cash) || 0) - total) > 0.5) {
+                const diff = Math.round((total - (Number(cur.expected_cash) || 0)) * 100) / 100;
+                db.prepare(`UPDATE denomination_counts SET total_cash=?, note_other=?, note_other_value=?,
+                            difference=?, updated_at=datetime('now','localtime') WHERE id=?`)
+                    .run(total, ic > 0 ? 1 : 0, ic, diff, cur.id);
+                report.updated = (report.updated || 0) + 1;
+                report.updated_amount = Math.round(((report.updated_amount || 0) + (total - (Number(cur.total_cash) || 0))) * 100) / 100;
+            } else {
+                report.skipped_dup++;
+            }
+            continue;
+        }
 
         // App's own calculated daily cash-in for this date
         let expected = 0;
@@ -2124,7 +2186,10 @@ function importCashDemonSheet(db, data, { log }) {
         const sheetShort = toNum(r[14]);
         const remarks = sheetShort !== 0 ? `Excel short/(over): ${sheetShort}` : '';
 
-        insert.run(date, n1000, n500, n100, n50, n20, n10, n5, ic, 0, 0, n2, n1,
+        // qrBank is stored as coin_1 (each unit = Rs 1, so it adds its face
+        // amount) and IC as an Other denomination of value IC — exactly how the
+        // app's own saveDenomination() recomputes the same total.
+        insert.run(date, n1000, n500, n100, n50, n20, n10, n5, ic > 0 ? 1 : 0, ic, 0, n2, qrBank,
             total, expected, difference, remarks, countedBy);
         existing.add(date);
         report.imported++;
@@ -3074,12 +3139,19 @@ function runExcelImport(db, excelPath, opts = {}) {
     }
 
     // 10. Salary Advance sheet → persistent salary records (+ employees master)
-    const salarySheetName = workbook.SheetNames.includes('Salary Advance') ? 'Salary Advance' : null;
+    //     The operator's workbook renames this sheet (“Salary Advance” →
+    //     “Salary”) as it is re-exported; taking the first name that exists used
+    //     to skip payroll silently. The layout is detected inside the importer,
+    //     so any of these names is safe.
+    results.salary = absentSheetResult();
+    const salarySheetName = ['Salary Advance', 'Salary_Advance', 'Salary'].find((n) => workbook.SheetNames.includes(n));
     if (salarySheetName) {
         const data = XLSX.utils.sheet_to_json(workbook.Sheets[salarySheetName], { header: 1, defval: '' });
         if (data.length > 4) {
             results.salary = importSalaryAdvanceSheet(db, data, { mode, log });
         }
+    } else {
+        log('  ⚠️  No salary sheet ("Salary Advance" / "Salary") — payroll rows not imported');
     }
 
     // ---- New datasets (all with ADD/UPDATE/UNCHANGED reporting; missing

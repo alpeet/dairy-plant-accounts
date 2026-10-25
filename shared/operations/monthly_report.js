@@ -195,7 +195,11 @@ function getIncomeHeads(db, from, to) {
         WHERE date >= ? AND date <= ? AND category = 'Income'
         GROUP BY head
     `).all(from, to);
-    for (const r of other) addHead(map, classifyIncomeHead(r.head) === 'Other Product Sales' ? 'Other Income' : classifyIncomeHead(r.head), r.total, r.n);
+    let nonInvoiceIncome = 0;
+    for (const r of other) {
+        addHead(map, classifyIncomeHead(r.head) === 'Other Product Sales' ? 'Other Income' : classifyIncomeHead(r.head), r.total, r.n);
+        nonInvoiceIncome += Number(r.total) || 0;
+    }
 
     // Non-sales income rows typed on payments (interest received, rent, etc.).
     const typedIncome = db.prepare(`
@@ -205,6 +209,7 @@ function getIncomeHeads(db, from, to) {
     `).get(from, to);
     if (Number(typedIncome.total) !== 0) {
         addHead(map, 'Other Income', typedIncome.total, typedIncome.n);
+        nonInvoiceIncome += Number(typedIncome.total) || 0;
     }
 
     const heads = headList(map, INCOME_HEADS).map(r => ({
@@ -217,8 +222,12 @@ function getIncomeHeads(db, from, to) {
         heads_total: round2(heads.reduce((s, r) => s + r.amount, 0)),
         item_total: itemTotal,
         unexplained_difference: unexplained,
-        other_income: round2(heads.filter(h => h.head === 'Other Income' || h.head === 'Rent Income')
-            .reduce((s, h) => s + h.amount, 0))
+        // Income that is NOT already inside sales revenue. Invoice-derived
+        // heads (Rent Income from a RENT product line, Other Income from an
+        // ELECTRICITY line, …) are part of `revenue`; adding them again here
+        // double-counted rent income (Rs 8,695.04 in v76) in total income.
+        other_income: round2(nonInvoiceIncome),
+        invoice_income: round2(heads.reduce((s, h) => s + h.amount, 0) - nonInvoiceIncome)
     };
 }
 

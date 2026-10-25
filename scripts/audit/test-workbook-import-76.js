@@ -71,6 +71,30 @@ const paymentRows = [
     ['2083/06/29', '', '', 'MINA LAMICHHANE 322', '', 'PAYMENT FOR MILK SUPPLY UNTIL ASHOJ 15', 'Payment', '', '', 5690, 'Cash', '', ''],
     ['2083/06/30', '', '', 'BASUDEV DAIRY 316', '', '', 'Payment', '', '', 15000, 'Cash', '', '']
 ];
+// v76 renames the payroll sheet from "Salary Advance" to "Salary"; the
+// importer used to skip payroll entirely when that happened.
+const pettyRows = [
+    ['PETTY CASH REGISTER — small daily expense record'],
+    ['Date', 'AD Date', 'Receipt No', 'Customer Name', 'Against Bill', 'Description', 'Type', 'Opening Due', 'Collected', 'Paid', 'Payment Mode', 'Closing Due', 'REMARKS'],
+    ['2083/06/27', '', '', 'OFFICE EXPENSES', '', 'giri store, dipak phone, rikshaw', 'PETTY CASH', '', '', 910, 'Cash', '', ''],
+    ['2083/06/28', '', '', 'OFFICE EXPENSES', '', 'FOODS', 'PETTY CASH', '', '', 200, 'Cash', '', '']
+];
+// Two genuinely identical collections on one day, recorded as two receipts.
+const collectionRows = [
+    ['PRARAMBHA DAIRY — COLLECTION'],
+    ['Date', 'AD Date', 'Receipt No', 'Customer Name', 'Against Bill', 'Type', 'Opening Due', 'Collected', 'Paid', 'Payment Mode', 'Closing Due', 'REMARKS'],
+    ['2083/06/28', '', 4915, 'KHANAL DAIRY', '', 'Collection', '', 1700, '', 'Cash', '', ''],
+    ['2083/06/28', '', 4927, 'KHANAL DAIRY', '', 'Collection', '', 1700, '', 'Cash', '', '']
+];
+// Cash count with the IC column filled: the sheet's Amount = notes + QR + IC.
+const cashDemonRows = [
+    ['CASH DEMONSTRATION — physical cash, collections & deposits'],
+    [],
+    ['Date', 'AD Date', '1000', '500', '100', '50', '20', '10', '5', '2', 'QR/BANK', 'IC', 'Amount (Rs)', 'Collections (auto)', 'Short / (Over)', 'DEPOSITED', '', 'Remarks'],
+    ['2083/06/28', '', 1, 0, 2, 0, 0, 0, 0, 0, 0, 320, 1520, 0, 0, '', '', 'SUSHIL'],
+    ['2083/06/29', '', 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2000, 0, 0, '', '', 'SUSHIL']
+];
+
 const wb = XLSX.utils.book_new();
 // The real sheet keeps two title rows above the header (the importer starts at
 // row 3); pad the fixture the same way so the offsets match the workbook.
@@ -79,8 +103,11 @@ XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
     ['From Date ►', '2083/03/15'],
     ...bankRows
 ]), 'BANK RECON');
-XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(salaryRows), 'Salary Advance');
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(salaryRows), 'Salary');
 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(paymentRows), 'Payment');
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pettyRows), 'PETTY CASH');
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(collectionRows), 'Collection');
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cashDemonRows), 'Cash_Demon');
 XLSX.writeFile(wb, xlsxPath);
 
 // Parties the Payment sheet will resolve (autoCreate is on for that sheet).
@@ -153,6 +180,34 @@ ok(JSON.stringify(db.prepare('SELECT * FROM bank_transactions ORDER BY id').all(
     'no bank row was created or altered by importing payments');
 ok(db.prepare('SELECT COUNT(*) c FROM payments WHERE bank_txn_id IS NOT NULL').get().c === 0,
     'no imported payment carries a bank link');
+
+// ════════════════════════════════════════════════════════════
+console.log('\nTEST 5 — a renamed "Salary" sheet still imports payroll');
+// ════════════════════════════════════════════════════════════
+ok(salaryCount() === 4, 'the payroll sheet was found under its new name', salaryCount());
+
+// ════════════════════════════════════════════════════════════
+console.log('\nTEST 6 — PETTY CASH rows of type "PETTY CASH" reach petty_cash');
+// ════════════════════════════════════════════════════════════
+const petty = db.prepare("SELECT * FROM petty_cash WHERE paid_to = 'OFFICE EXPENSES' AND amount IN (910, 200)").all();
+ok(petty.length === 2, 'both PETTY CASH vouchers imported (they used to be dropped)', petty.length);
+eq(petty.reduce((s, r) => s + r.amount, 0), 1110, 'petty-cash total matches the sheet');
+ok(petty.every((r) => r.expense_head && r.expense_head !== 'Payment'), 'each row keeps its own description as the head');
+
+// ════════════════════════════════════════════════════════════
+console.log('\nTEST 7 — identical same-day collections are kept as two receipts');
+// ════════════════════════════════════════════════════════════
+const khanal = db.prepare(`SELECT y.* FROM payments y JOIN parties p ON p.id = y.party_id
+    WHERE p.name = 'KHANAL DAIRY' AND y.date = '2083-06-28' AND y.type = 'receipt'`).all();
+ok(khanal.length === 2, 'both Rs 1,700 receipts stored (a boolean dedupe kept only one)', khanal.length);
+eq(khanal.reduce((s, r) => s + r.amount, 0), 3400, 'collected total matches the sheet');
+
+// ════════════════════════════════════════════════════════════
+console.log('\nTEST 8 — cash count includes the IC column');
+// ════════════════════════════════════════════════════════════
+const count = db.prepare("SELECT * FROM denomination_counts WHERE date = '2083-06-28'").get();
+ok(!!count, 'the day-close count imported');
+eq(count && count.total_cash, 1520, 'total = 1×1000 + 2×100 notes + Rs 320 IC (it used to omit IC)');
 
 console.log(`\n════════════════════════════════\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
