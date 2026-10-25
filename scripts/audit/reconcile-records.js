@@ -263,8 +263,8 @@ function main() {
         const dbItems = all(`SELECT id, employee_name, month, net_salary amount, payment_date FROM salary_records`)
             .map((r) => ({ key: `${normName(r.employee_name)}|${str(r.month)}`, date: r.payment_date, month: r.month, amount: round2(r.amount), party: normName(r.employee_name) }));
         const rep = compare(src, dbItems, `Salary (${sheetName || 'sheet missing'})`);
-        if (sheetName !== 'Salary Advance') {
-            notes.push(`Salary sheet is named "${sheetName}" — the importer only accepts "Salary Advance", so this sheet is currently skipped.`);
+        if (!['Salary Advance', 'Salary_Advance', 'Salary'].includes(sheetName)) {
+            notes.push(`No payroll sheet found (looked for "Salary Advance", "Salary_Advance", "Salary") — salary rows are not compared.`);
         }
         reports.push(rep);
     }

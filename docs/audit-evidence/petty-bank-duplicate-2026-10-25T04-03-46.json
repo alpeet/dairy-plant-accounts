@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-10-25T04:03:46.634Z",
+  "database": "/Users/sushilgautam/Library/Application Support/prarambha-account-stock/data/dairy-plant.db",
+  "backup": "/Users/sushilgautam/Desktop/6+/dairy-plant-accounts/data/backups/dairy-plant.db.bak-petty-bank-dup-2026-10-25T04-03-46",
+  "reason": "The same Rs 60,089 diesel payment was imported twice: once from the Expenses register (bank date column 2083-05-31) and once from the BANK RECON statement (2083-06-19), because the two workbook rows carry different dates.",
+  "deleted": {
+    "id": 2662,
+    "voucher_no": "PC-0091",
+    "date": "2083-06-19",
+    "expense_head": "ONLINE PAID FOR BHADRA-2083 DISSEL",
+    "description": "ONLINE PAID FOR BHADRA-2083 DISSEL",
+    "amount": 60089,
+    "paid_to": "MUKTESHWOR ENTERPRISES",
+    "approved_by": "",
+    "payment_mode": "bank",
+    "remarks": "",
+    "created_by": null,
+    "created_at": "2026-10-24 12:19:43",
+    "updated_at": "2026-10-24 12:19:43"
+  },
+  "kept": {
+    "id": 2742,
+    "voucher_no": "PC-0171",
+    "date": "2083-05-31",
+    "expense_head": "ONLINE PAID FOR BHADRA-2083 DISSEL",
+    "description": "ONLINE PAID FOR BHADRA-2083 DISSEL",
+    "amount": 60089,
+    "paid_to": "MUKTESHWOR ENTERPRISES",
+    "approved_by": "",
+    "payment_mode": "bank",
+    "remarks": "",
+    "created_by": null,
+    "created_at": "2026-10-25 07:24:15",
+    "updated_at": "2026-10-25 07:24:15"
+  },
+  "bank_transaction": {
+    "id": 115,
+    "date": "2083-06-19",
+    "reference_no": "QR-089",
+    "counterparty_name": "MUKTESHWOR ENTERPRISES",
+    "description": "ONLINE PAID FOR BHADRA-2083 DISSEL",
+    "debit": 60089,
+    "credit": 0,
+    "amount": 60089,
+    "payment_mode": "QR/Bank",
+    "bank_account": "PRARAMBHA",
+    "txn_type": "",
+    "party_id": 35,
+    "match_status": "auto",
+    "ledger_posted": 1,
+    "ledger_entry_id": null,
+    "remarks": "already reflected in ledger (no new posting)",
+    "created_by": null,
+    "created_at": "2026-10-24 10:20:49",
+    "updated_at": "2026-10-24 10:20:49",
+    "accounting_class": "supplier_payment",
+    "txn_uid": "imp:b3dd090415a3b2d1b477#0"
+  },
+  "petty_expense_before": {
+    "n": 152,
+    "total": 3561492.43
+  },
+  "petty_expense_after": {
+    "n": 151,
+    "total": 3501403.43
+  }
+}
