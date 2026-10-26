@@ -115,6 +115,10 @@ function getSale(db, id) {
  * - Checks for negative stock (respects allow_negative_stock setting)
  */
 function saveSale(db, saleData) {
+    // Reject an impossible BS date at the door (e.g. month 00 or 13) — the
+    // stored value would poison every date range that includes it.
+    const dateCheck = require('../bs-calendar').validateBSDate(saleData && saleData.date);
+    if (!dateCheck.valid) throw new Error('Sale date: ' + dateCheck.reason);
     const trx = db.transaction(() => {
         const { id, invoice_no, date, party_id, items: rawItems, subtotal: _subtotal, discount: _discount,
                 discount_percent, tax: _tax, grand_total: _grandTotal, paid_amount: _paidAmount, payment_mode, notes } = saleData;

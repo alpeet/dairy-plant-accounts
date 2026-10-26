@@ -95,6 +95,8 @@ const { getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybo
 // ── Monthly Report — period activity + per-month closing balances, income and
 // expense heads, and the reconciliation checks behind every figure.
 const monthlyReport = require('./monthly_report');
+// ── Monthly Report drill-down: every line traced to the records behind it.
+const reportDrilldown = require('./report_drilldown');
 
 // ── Prepaid expenses (advance rent): an unused payment is an asset, and only
 // the month used reaches the P&L.
@@ -254,6 +256,8 @@ module.exports = {
     getMonthlyReport: monthlyReport.getMonthlyReport,
     getMonthlyReportBalances: monthlyReport.getBalancesAsOf,
     getMonthlyReportPeriodActivity: monthlyReport.getPeriodActivity,
+    getMonthlyReportLine: reportDrilldown.getMonthlyReportLine,
+    getMonthlyReportLines: reportDrilldown.listLines,
     MONTHLY_REPORT_EXPENSE_HEADS: monthlyReport.EXPENSE_HEADS,
     MONTHLY_REPORT_INCOME_HEADS: monthlyReport.INCOME_HEADS,
     listPrepaidExpenses: prepaidRent.listRecords,

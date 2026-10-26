@@ -10,7 +10,7 @@
     <title>Prarambha Account &amp; Stock Management</title>
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="shortcut icon" type="image/png" href="favicon.png">
-    <link rel="stylesheet" href="css/style.css?v=4">
+    <link rel="stylesheet" href="css/style.css?v=6">
 </head>
 <body>
     <div class="app-container">
@@ -93,10 +93,10 @@
                     </ul>
                 </li>
 
-                <!-- ====== OPERATIONS ====== -->
-                <li class="nav-group" data-group="operations">
-                    <div class="nav-group-header" onclick="toggleNavGroup('operations')">
-                        <span class="nav-group-label">Operations</span>
+                <!-- ====== DAILY ENTRY ====== -->
+                <li class="nav-group" data-group="daily-entry">
+                    <div class="nav-group-header" onclick="toggleNavGroup('daily-entry')">
+                        <span class="nav-group-label">Daily Entry</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
@@ -128,17 +128,13 @@
                             <span class="nav-icon">💳</span>
                             <span class="nav-text">Payment Register</span>
                         </li>
-                        <li class="nav-item" data-page="cash-deposit" data-min-role="operator">
-                            <span class="nav-icon">🏦</span>
-                            <span class="nav-text">Cash Deposit</span>
-                        </li>
                     </ul>
                 </li>
 
-                <!-- ====== PRODUCTION ====== -->
+                <!-- ====== MILK PROCESSING ====== -->
                 <li class="nav-group" data-group="production">
                     <div class="nav-group-header" onclick="toggleNavGroup('production')">
-                        <span class="nav-group-label">Production</span>
+                        <span class="nav-group-label">Milk Processing</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
@@ -157,10 +153,10 @@
                     </ul>
                 </li>
 
-                <!-- ====== INVENTORY ====== -->
-                <li class="nav-group" data-group="inventory">
-                    <div class="nav-group-header" onclick="toggleNavGroup('inventory')">
-                        <span class="nav-group-label">Inventory</span>
+                <!-- ====== STOCK & PRODUCTS ====== -->
+                <li class="nav-group" data-group="stock">
+                    <div class="nav-group-header" onclick="toggleNavGroup('stock')">
+                        <span class="nav-group-label">Stock & Products</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
@@ -175,10 +171,10 @@
                     </ul>
                 </li>
 
-                <!-- ====== MASTER DATA ====== -->
-                <li class="nav-group" data-group="master-data">
-                    <div class="nav-group-header" onclick="toggleNavGroup('master-data')">
-                        <span class="nav-group-label">Master Data</span>
+                <!-- ====== PARTIES & MASTERS ====== -->
+                <li class="nav-group" data-group="masters">
+                    <div class="nav-group-header" onclick="toggleNavGroup('masters')">
+                        <span class="nav-group-label">Parties & Masters</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
@@ -201,10 +197,62 @@
                     </ul>
                 </li>
 
-                <!-- ====== ACCOUNTS ====== -->
-                <li class="nav-group" data-group="accounts">
-                    <div class="nav-group-header" onclick="toggleNavGroup('accounts')">
-                        <span class="nav-group-label">Accounts</span>
+                <!-- ====== EXPENSES & PAYROLL ====== -->
+                <li class="nav-group" data-group="expenses-payroll">
+                    <div class="nav-group-header" onclick="toggleNavGroup('expenses-payroll')">
+                        <span class="nav-group-label">Expenses & Payroll</span>
+                        <span class="nav-group-chevron">▾</span>
+                    </div>
+                    <ul class="nav-group-items">
+                        <li class="nav-item" data-page="expenses" data-min-role="operator">
+                            <span class="nav-icon">📋</span>
+                            <span class="nav-text">Other Expenses</span>
+                        </li>
+                        <li class="nav-item" data-page="petty-cash" data-min-role="operator">
+                            <span class="nav-icon">💰</span>
+                            <span class="nav-text">Petty Cash</span>
+                        </li>
+                        <li class="nav-item" data-page="salary" data-min-role="operator">
+                            <span class="nav-icon">👷</span>
+                            <span class="nav-text">Salary</span>
+                        </li>
+                        <li class="nav-item" data-page="vehicle" data-min-role="operator">
+                            <span class="nav-icon">🚛</span>
+                            <span class="nav-text">Vehicle Expenses</span>
+                        </li>
+                    </ul>
+                </li>
+
+                <!-- ====== CASH & BANK ====== -->
+                <li class="nav-group" data-group="cash-bank">
+                    <div class="nav-group-header" onclick="toggleNavGroup('cash-bank')">
+                        <span class="nav-group-label">Cash & Bank</span>
+                        <span class="nav-group-chevron">▾</span>
+                    </div>
+                    <ul class="nav-group-items">
+                        <li class="nav-item" data-page="cash" data-min-role="operator">
+                            <span class="nav-icon">🔢</span>
+                            <span class="nav-text">Cash & Denomination</span>
+                        </li>
+                        <li class="nav-item" data-page="cash-deposit" data-min-role="operator">
+                            <span class="nav-icon">🏦</span>
+                            <span class="nav-text">Cash Deposit</span>
+                        </li>
+                        <li class="nav-item" data-page="bank" data-min-role="operator">
+                            <span class="nav-icon">💳</span>
+                            <span class="nav-text">Bank Transactions</span>
+                        </li>
+                        <li class="nav-item" data-page="pdc" data-min-role="operator">
+                            <span class="nav-icon">🏛</span>
+                            <span class="nav-text">Cheque Register (PDC)</span>
+                        </li>
+                    </ul>
+                </li>
+
+                <!-- ====== LEDGERS & BALANCES ====== -->
+                <li class="nav-group" data-group="ledgers">
+                    <div class="nav-group-header" onclick="toggleNavGroup('ledgers')">
+                        <span class="nav-group-label">Ledgers & Balances</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
@@ -218,7 +266,7 @@
                         </li>
                         <li class="nav-item" data-page="receivable-payable" data-min-role="operator">
                             <span class="nav-icon">💰</span>
-                            <span class="nav-text">Receivable/Payable</span>
+                            <span class="nav-text">Receivable / Payable</span>
                         </li>
                         <li class="nav-item" data-page="farmer-payments" data-min-role="operator">
                             <span class="nav-icon">💵</span>
@@ -228,34 +276,6 @@
                             <span class="nav-icon">⏳</span>
                             <span class="nav-text">Advances</span>
                         </li>
-                        <li class="nav-item" data-page="bank" data-min-role="operator">
-                            <span class="nav-icon">💳</span>
-                            <span class="nav-text">Bank Transactions</span>
-                        </li>
-                        <li class="nav-item" data-page="pdc" data-min-role="operator">
-                            <span class="nav-icon">🏛</span>
-                            <span class="nav-text">Cheque Register (PDC)</span>
-                        </li>
-                        <li class="nav-item" data-page="cash" data-min-role="operator">
-                            <span class="nav-icon">🔢</span>
-                            <span class="nav-text">Cash & Denom</span>
-                        </li>
-                        <li class="nav-item" data-page="petty-cash" data-min-role="operator">
-                            <span class="nav-icon">💰</span>
-                            <span class="nav-text">Petty Cash</span>
-                        </li>
-                        <li class="nav-item" data-page="salary" data-min-role="operator">
-                            <span class="nav-icon">👷</span>
-                            <span class="nav-text">Salary</span>
-                        </li>
-                        <li class="nav-item" data-page="vehicle" data-min-role="operator">
-                            <span class="nav-icon">🚛</span>
-                            <span class="nav-text">Vehicle Exp</span>
-                        </li>
-                        <li class="nav-item" data-page="expenses" data-min-role="operator">
-                            <span class="nav-icon">📋</span>
-                            <span class="nav-text">Expenses</span>
-                        </li>
                         <li class="nav-item" data-page="partner-capital" data-min-role="accountant">
                             <span class="nav-icon">🤝</span>
                             <span class="nav-text">Partner Capital</span>
@@ -263,7 +283,7 @@
                     </ul>
                 </li>
 
-                <!-- ====== REPORTS ====== -->
+                <!-- ====== REPORTS & STATEMENTS ====== -->
                 <li class="nav-group" data-group="reports">
                     <div class="nav-group-header" onclick="toggleNavGroup('reports')">
                         <span class="nav-group-label">Reports & Statements</span>
@@ -293,13 +313,17 @@
                     </ul>
                 </li>
 
-                <!-- ====== ADMIN ====== -->
+                <!-- ====== ADMINISTRATION ====== -->
                 <li class="nav-group" data-group="admin">
                     <div class="nav-group-header" onclick="toggleNavGroup('admin')">
                         <span class="nav-group-label">Administration</span>
                         <span class="nav-group-chevron">▾</span>
                     </div>
                     <ul class="nav-group-items">
+                        <li class="nav-item" data-page="settings" data-min-role="admin">
+                            <span class="nav-icon">⚙️</span>
+                            <span class="nav-text">Settings</span>
+                        </li>
                         <li class="nav-item" data-page="db-tables" data-min-role="staff">
                             <span class="nav-icon">🗃️</span>
                             <span class="nav-text">DB Tables</span>
@@ -312,13 +336,19 @@
                             <span class="nav-icon">📝</span>
                             <span class="nav-text">Audit Log</span>
                         </li>
-                        <li class="nav-item" data-page="settings" data-min-role="admin">
-                            <span class="nav-icon">⚙️</span>
-                            <span class="nav-text">Settings</span>
-                        </li>
+                    </ul>
+                </li>
+
+                <!-- ====== HELP ====== -->
+                <li class="nav-group" data-group="help">
+                    <div class="nav-group-header" onclick="toggleNavGroup('help')">
+                        <span class="nav-group-label">Help</span>
+                        <span class="nav-group-chevron">▾</span>
+                    </div>
+                    <ul class="nav-group-items">
                         <li class="nav-item" data-page="user-manual" data-min-role="staff">
                             <span class="nav-icon">📖</span>
-                            <span class="nav-text">User Manual</span>
+                            <span class="nav-text">User Manual & Glossary</span>
                         </li>
                     </ul>
                 </li>
@@ -507,14 +537,14 @@
     <script src="js/company_ledger.js?v=1"></script>
     <script src="js/advances.js?v=1"></script>
     <script src="js/management_reports.js?v=1"></script>
-    <script src="js/monthly_report.js?v=2"></script>
+    <script src="js/monthly_report.js?v=3"></script>
     <script src="js/cash_deposit.js?v=4"></script>
     <script src="js/bank.js?v=3"></script>
     <script src="js/pdc.js?v=1"></script>
     <script src="js/audit_log.js?v=3"></script>
     <script src="js/integrity.js?v=1"></script>
-    <script src="js/user_manual.js?v=3"></script>
-    <script src="js/settings.js?v=3"></script>
-    <script src="js/app.js?v=3"></script>
+    <script src="js/user_manual.js?v=4"></script>
+    <script src="js/settings.js?v=4"></script>
+    <script src="js/app.js?v=4"></script>
 </body>
 </html>

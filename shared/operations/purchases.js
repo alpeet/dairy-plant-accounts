@@ -10,6 +10,7 @@
 
 const { logAudit } = require('./audit');
 const { round2 } = require('./accounting');
+const bsCalendar = require('../bs-calendar');
 
 /**
  * List purchases with optional filters.
@@ -48,6 +49,10 @@ function getPurchase(db, id) {
  * - Update: reverses old stock/ledger, re-inserts items with new stock/ledger
  */
 function savePurchase(db, purchaseData) {
+    // A BS date must be a real BS date. `2083-00-08` was accepted once and it
+    // made every report whose range started "before" it fail validation.
+    const dateCheck = bsCalendar.validateBSDate(purchaseData && purchaseData.date);
+    if (!dateCheck.valid) throw new Error('Purchase date: ' + dateCheck.reason);
     const trx = db.transaction(() => {
         const { id, bill_no, date, party_id, items: rawItems, subtotal: _subtotal, discount: _discount, tax: _tax,
                 transport_charges: _transport, extra_charges: _extra, grand_total: _grandTotal, paid_amount: _paidAmount,

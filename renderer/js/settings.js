@@ -18,6 +18,7 @@ async function renderSettings() {
 
     const securityCodeCard = buildSecurityCodeCard(settings);
     const dataCleanupCard = buildDataCleanupCard();
+    const dataLocationCard = buildDataLocationCard();
 
     const userManagementCard = hasUserManagement() ? `
         <div class="card" style="max-width:600px;margin-top:20px">
@@ -178,6 +179,7 @@ async function renderSettings() {
         ${securityCodeCard}
 
         ${dataCleanupCard}
+        ${dataLocationCard}
 
         <div class="card" style="max-width:600px;margin-top:20px">
             <div class="card-header">
@@ -288,6 +290,8 @@ async function renderSettings() {
 
     // Show database path
     showDbPath();
+    // Which file this window actually uses (+ any other copy on this machine)
+    loadDataLocation();
     // Load users list
     loadUsersList();
     // Load database table info
@@ -358,6 +362,66 @@ async function submitSecurityCode(hasCode) {
     } else {
         showToast((result && result.error) || 'Could not save the security code.', 'error');
     }
+}
+
+/**
+ * Where the data lives — the answer to "I reset it and the old data came back".
+ * Shows the file this window is using and any other copy of the same book on
+ * this machine (a desktop install, a portable copy, the project folder).
+ */
+function buildDataLocationCard() {
+    return `
+        <div class="card" style="max-width:600px;margin-top:20px">
+            <div class="card-header">
+                <h2>🗄️ Data Location</h2>
+            </div>
+            <div class="settings-section" id="dataLocationBody">
+                <p style="font-size:13px;color:var(--text-light);margin:0">Checking which database this window uses…</p>
+            </div>
+        </div>`;
+}
+
+async function loadDataLocation() {
+    const host = document.getElementById('dataLocationBody');
+    if (!host) return;
+    let info = null;
+    try {
+        info = await window.api.getStorageInfo();
+    } catch (e) { info = { success: false, error: e.message }; }
+    if (!info || !info.success) {
+        host.innerHTML = `<p style="font-size:13px;color:var(--danger)">Could not read the data location: ${
+            escapeHtml((info && info.error) || 'unknown error')}</p>`;
+        return;
+    }
+    const d = info.data || info;
+    const others = d.other_copies || [];
+    host.innerHTML = `
+        <p style="font-size:12px;color:var(--text-light);margin:0 0 8px">
+            Every save, report and Fresh Start in this window uses the file below. Backups are written next to it.
+        </p>
+        <div style="padding:10px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px">
+            <div><strong>Active database</strong> (${escapeHtml(d.mode || 'unknown')} mode)</div>
+            <div style="font-family:var(--font-mono);word-break:break-all;margin-top:4px">${escapeHtml(d.db_path || '')}</div>
+            <div style="color:var(--text-light);margin-top:4px">
+                ${d.exists ? `${formatFileSize(d.size)} · last written ${escapeHtml(String(d.modified || '').replace('T', ' ').slice(0, 19))}` : 'file does not exist yet'}
+            </div>
+        </div>
+        ${others.length ? `
+        <div style="margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px">
+            <strong>⚠️ ${others.length} other copy(ies) of this book exist on this machine.</strong><br>
+            A Fresh Start only clears the <em>active</em> database above. If the app is opened a different way
+            (installed app vs portable vs this development window), it opens one of these instead — which is
+            why cleared data can appear to come back.
+            <ul style="margin:8px 0 0 16px;padding:0">
+                ${others.map(c => `<li style="margin-bottom:4px">
+                    <span style="font-family:var(--font-mono);word-break:break-all">${escapeHtml(c.db_path)}</span><br>
+                    <span style="color:var(--text-light)">${formatFileSize(c.size)} · ${escapeHtml(String(c.modified || '').replace('T', ' ').slice(0, 19))}</span>
+                </li>`).join('')}
+            </ul>
+        </div>` : `<p style="font-size:12px;color:var(--success);margin:10px 0 0">✅ No other copy of the database was found — this window is the only book on this machine.</p>`}
+        <div style="margin-top:10px">
+            <button class="btn btn-secondary btn-sm" onclick="loadDataLocation()">🔄 Refresh</button>
+        </div>`;
 }
 
 function buildDataCleanupCard() {
@@ -510,13 +574,30 @@ async function confirmFreshStartReset() {
     const result = await window.api.performDataCleanup({ adminPassword, securityCode, confirmText, backupPath: backupRef || undefined });
     if (result && result.success) {
         const b = result.data && result.data.backup;
+        const d = (result && result.data) || {};
+        const others = d.other_database_copies || [];
         showModal(`
-            <div class="modal-header"><h2>✅ Fresh Start Completed</h2></div>
+            <div class="modal-header"><h2>✅ Fresh Start Completed — verified empty</h2></div>
             <div class="modal-body">
-                <p style="font-size:13px;margin:0 0 10px">All business data has been cleared. The application is now ready for a new business/client.</p>
+                <p style="font-size:13px;margin:0 0 10px">All business data has been cleared <strong>and the database was re-read to confirm it is empty</strong>. The application is ready for a new business/client.</p>
+                <div style="padding:10px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-size:12px;margin-bottom:12px">
+                    <div><strong>Database cleared:</strong></div>
+                    <div style="font-family:var(--font-mono);word-break:break-all">${escapeHtml(d.database || '')}</div>
+                    <div style="color:var(--text-light);margin-top:4px">
+                        ${d.cleared_tables || 0} business table(s) emptied · ${d.wal_checkpointed ? 'written to disk' : 'checkpoint skipped'} · ${d.verified_empty ? 'verified: 0 rows left' : 'NOT verified'}
+                    </div>
+                </div>
                 ${b ? `<p style="font-size:12px;margin:0 0 6px">💾 Backup used for this reset: <strong>${escapeHtml(b.filename || '')}</strong>${b.size ? ` (${formatFileSize(b.size)})` : ''}</p>` : ''}
+                ${d.log_path ? `<p style="font-size:12px;margin:0 0 6px;color:var(--text-light)">Reset log: <span style="font-family:var(--font-mono);word-break:break-all">${escapeHtml(d.log_path)}</span></p>` : ''}
+                ${others.length ? `<div style="padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px;margin:10px 0">
+                    <strong>⚠️ ${others.length} other copy(ies) of this book still exist:</strong>
+                    <ul style="margin:6px 0 0 16px;padding:0">${others.map(c => `<li style="font-family:var(--font-mono);word-break:break-all">${escapeHtml(c.db_path)}</li>`).join('')}</ul>
+                    Only the database above was cleared. If you open the app a different way (installed vs portable) it will show that other copy's data.
+                </div>` : ''}
                 <p style="font-size:12px;margin:0 0 10px">To undo, use ♻️ Restore Backup and pick that file.</p>
-                <p style="font-size:12px;margin:0"><strong>Next steps:</strong> enter the new company information (Settings → Business Settings), then import the new Excel workbook in “Update Data from Excel”.</p>
+                <p style="font-size:12px;margin:0 0 8px"><strong>Next steps:</strong> enter the new company information (Settings → Business Settings), then either
+                    (a) enter records manually, or (b) import the approved Excel workbook in “Update Data from Excel”.</p>
+                <p style="font-size:12px;margin:0"><strong>Restart proof:</strong> close the app completely, reopen it, and confirm the lists are empty — the reset now verifies the database itself, so a restart can no longer bring the old book back.</p>
             </div>
             <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal(); setTimeout(() => window.location.reload(), 150)">Done — Reload Fresh App</button></div>`);
     } else {

@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('api', {
     getProfitLoss: (opts) => ipcRenderer.invoke('db:reports:profit-loss', opts),
     getProfitLossByMonth: (opts) => ipcRenderer.invoke('db:reports:profit-loss-by-month', opts),
     getMonthlyReport: (opts) => ipcRenderer.invoke('db:reports:monthly-report', opts),
+    getMonthlyReportLine: (opts) => ipcRenderer.invoke('db:reports:monthly-report-line', opts),
     listPrepaidExpenses: (opts) => ipcRenderer.invoke('db:prepaid-expenses:list', opts),
     savePrepaidExpense: (data) => ipcRenderer.invoke('db:prepaid-expenses:save', data),
     getPrepaidSummary: (opts) => ipcRenderer.invoke('db:prepaid-expenses:summary', opts),
@@ -299,6 +300,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Fresh Start / Handover Reset (backup-first workflow)
     getCleanupStatus: () => ipcRenderer.invoke('db:cleanup:status'),
+    getStorageInfo: () => ipcRenderer.invoke('db:storage-info'),
     setSecurityCode: (payload) => ipcRenderer.invoke('db:cleanup:security-code', payload),
     performDataCleanup: (payload) => ipcRenderer.invoke('db:cleanup:perform', payload),
     freshStartBackupSaveAs: () => ipcRenderer.invoke('db:fresh-start:backup-save-as'),

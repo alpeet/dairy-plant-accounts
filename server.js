@@ -169,6 +169,16 @@ try {
     console.log(`     Directory: ${dbDir}`);
     console.log(`     File:      ${dbPath}`);
     console.log(`     Status:    ${dbExists ? '🟢 Existing (data will persist)' : '🆕 New (created fresh)'}`);
+    // A desktop install keeps its own database under the OS user-data folder.
+    // If that copy exists too, say so — a Fresh Start here does not clear it.
+    try {
+        const storage = require('./shared/storage-location');
+        const info = storage.report(storage.describe({ dir: dbDir, mode: 'web' }));
+        if (info.multiple_copies) {
+            console.log('     ⚠️  Other copies of the same book exist:');
+            for (const c of info.other_copies) console.log(`        · ${c.db_path}`);
+        }
+    } catch (e) { /* diagnostics only */ }
     if (dbExists) {
         // Count registered users to confirm persistence
         try {
@@ -1108,6 +1118,17 @@ app.post('/api/reports/profit-loss-by-month', (req, res) => {
 // Monthly Report — BS range or month, with month-by-month closing balances.
 app.post('/api/reports/monthly-report', (req, res) => {
     res.json(safeRun(() => ops.getMonthlyReport(db, req.body || {})));
+});
+
+// Monthly Report drill-down — the source records behind one report line.
+app.post('/api/reports/monthly-report-line', (req, res) => {
+    res.json(safeRun(() => ops.getMonthlyReportLine(db, req.body || {})));
+});
+
+// Where the data actually lives (Settings → Data Location).
+app.post('/api/storage-info', requireAuth, (req, res) => {
+    const storage = require('./shared/storage-location');
+    res.json(safeRun(() => storage.report(storage.describe({ dir: dbDir, mode: 'web' }))));
 });
 
 // Prepaid expenses (advance rent).

@@ -409,6 +409,12 @@ async function renderUserManual() {
                 </div>
             </div>
 
+            <!-- ==================== MODULE GUIDE ==================== -->
+            ${umModuleGuideHtml()}
+
+            <!-- ==================== GLOSSARY ==================== -->
+            ${umGlossaryHtml()}
+
             <!-- Footer -->
             <div style="text-align:center;padding:20px;color:var(--text-light);font-size:12px">
                 Prarambha Account &amp; Stock Management v${appVersion} &middot; User Manual &middot; Generated from the app
@@ -416,6 +422,273 @@ async function renderUserManual() {
         </div>
     `;
 }
+
+// ============================================================
+// Module guide — every menu, explained without accounting jargon
+// ============================================================
+// [group, module, icon, what it is for, when to use it, what you type, dairy example, affects]
+const UM_MODULE_GUIDE = [
+    ['Daily Entry', 'Sales', '💰',
+        'Records a sale: milk, paneer, cream, ghee, curd — anything you sell.',
+        'Every time a customer takes goods, whether they pay now or later.',
+        'Customer, date, product, litres/kg, rate. The amount is calculated. Choose Cash if paid now, Credit if they will pay later.',
+        'Krishna Dairy takes 50 L milk at Rs 62 = Rs 3,100 on credit. Stock goes down 50 L, Krishna owes you Rs 3,100.',
+        'P&L (income) + Balance Sheet (stock down, receivable up)'],
+    ['Daily Entry', 'Purchases', '📦',
+        'Records anything you buy: packing pouches, diesel, chemicals, or milk on a bill.',
+        'When a supplier gives you a bill, or you buy something for the plant.',
+        'Supplier, bill number, date, item, quantity, rate. Payment mode: cash, bank or credit.',
+        'Bought 5,000 pouches for Rs 12,000 on credit. Stock up 5,000, supplier payable Rs 12,000 — not an expense yet.',
+        'P&L (cost of goods) + Balance Sheet (stock up, payable up)'],
+    ['Daily Entry', 'Milk Collection', '🥛',
+        'Records milk bought from farmers, with fat/SNF and the rate paid.',
+        'Every morning and evening collection, per farmer.',
+        'Farmer, shift, litres, fat, SNF, rate (auto or fixed).',
+        'Ram Bahadur brings 20 L at fat 4.2. The app calculates the rate — say Rs 58.40/L = Rs 1,168. That is a milk cost and Ram is owed Rs 1,168.',
+        'P&L (milk procurement cost) + Balance Sheet (farmer payable)'],
+    ['Daily Entry', 'Payment Collection', '💵',
+        'Records money received from a customer against their outstanding balance.',
+        'When a customer pays cash, by bank, or by cheque.',
+        'Customer, amount, date, mode. This is NOT a new sale.',
+        'Krishna pays Rs 2,000 of the Rs 3,100 he owed. His balance becomes Rs 1,100. Income does not change — the sale was already counted.',
+        'Balance Sheet only (cash up, receivable down)'],
+    ['Daily Entry', 'Payment Register', '💳',
+        'Records money paid out: to suppliers, farmers, for rent, loans, advances.',
+        'Whenever money leaves the business by cash, bank or cheque.',
+        'Party, amount, date, mode, and what the payment is for (settlement, expense, advance, loan).',
+        'Paid Rs 12,000 to the pouch supplier by bank. The payable becomes zero. It is not a new expense — the purchase already carried it.',
+        'Balance Sheet (bank down, payable down); an expense only if it is a new cost'],
+    ['Production', 'Production', '🏭',
+        'Turns milk into paneer, cream, ghee or curd and records the output.',
+        'After each batch of processing.',
+        'Input milk and other materials, output product and quantity, wastage.',
+        '300 L milk becomes 60 kg paneer. Milk stock falls 300 L, paneer stock rises 60 kg.',
+        'Balance Sheet (stock changes); costing feeds the P&L'],
+    ['Stock', 'Stock / Stock Statement', '📋',
+        'Shows what you have, what came in, what went out, and what it is worth.',
+        'Any time you need to check stock; at month end for closing stock.',
+        'Opening stock, adjustments, physical counts.',
+        'The register says 120 kg paneer but you count 114 kg — record a 6 kg shortage adjustment so stock matches reality.',
+        'Balance Sheet (inventory value); shortages reach the P&L'],
+    ['Masters', 'Parties', '👥',
+        'The directory of customers, suppliers, farmers and partners, each with a ledger.',
+        'Before recording the first transaction with someone.',
+        'Name, type (customer/supplier/farmer/partner), phone, PAN, opening balance.',
+        'Add “Krishna Dairy” as a customer with an opening balance of Rs 5,000 they already owed.',
+        'Balance Sheet (receivable/payable)'],
+    ['Expenses', 'Other Expenses', '📋',
+        'Records running costs that are not stock purchases.',
+        'Electricity bill, office supplies, repairs, telephone, bank charges.',
+        'Date, category, description, amount, paid to, payment mode.',
+        'Paid Rs 8,500 electricity by bank. This is an expense this month — cash/bank falls and profit falls.',
+        'P&L (operating expense) + Balance Sheet (cash/bank down)'],
+    ['Expenses', 'Petty Cash', '💰',
+        'Small day-to-day cash spending from the office drawer.',
+        'Tea, local transport, small repairs, stationery.',
+        'Date, head, description, amount, paid to.',
+        'Rs 250 for a taxi to the bank. Recorded as a petty cash expense, not as an advance.',
+        'P&L (operating expense)'],
+    ['Expenses', 'Salary', '👷',
+        'Monthly payroll: what each staff member earns and is paid.',
+        'Once a month, when salaries are paid.',
+        'Employee, month, basic salary, allowance, advance recovery, deduction.',
+        'Staff paid Rs 15,000 for Shrawan; Rs 2,000 of an earlier advance is recovered, so Rs 13,000 cash is paid.',
+        'P&L (salary expense) + Balance Sheet (cash down, advance recovered)'],
+    ['Expenses', 'Vehicle Expenses', '🚛',
+        'Running costs of the collection vehicle or tempo.',
+        'Fuel, repairs, maintenance, toll and parking.',
+        'Vehicle, date, expense type, amount.',
+        'Rs 4,000 diesel for the collection van. It is a transport cost of this month.',
+        'P&L (operating expense)'],
+    ['Cash & Bank', 'Cash & Denomination', '🔢',
+        'Counts the notes and coins in the drawer and compares them with the ledger.',
+        'Every day at closing, or at least weekly.',
+        'Number of notes per denomination (500, 100, 50 …). The total is calculated.',
+        'Drawer count is Rs 42,300 but the ledger says Rs 43,100 — the Rs 800 gap is shown as a difference to investigate.',
+        'Balance Sheet (proves the cash figure)'],
+    ['Cash & Bank', 'Cash Deposit', '🏦',
+        'Records cash taken from the drawer and put into the bank.',
+        'When you deposit the day’s collection at the bank.',
+        'Date, deposit slip number, bank, amount.',
+        'Deposited Rs 20,000 at Nabil. Cash falls Rs 20,000, bank rises Rs 20,000. It is a transfer, never income.',
+        'Balance Sheet only'],
+    ['Cash & Bank', 'Bank Transactions', '💳',
+        'The bank statement: every deposit and withdrawal, matched to its document.',
+        'When the statement arrives, or after each bank transaction.',
+        'Date, reference, party, debit/credit, then classify each row.',
+        'The statement shows Rs 12,000 paid to the pouch supplier — matched to the payment already recorded, so it is not counted twice.',
+        'Balance Sheet (bank balance)'],
+    ['Ledgers', 'Company Ledger', '📒',
+        'One list of every money movement of the business, classified.',
+        'To answer “where did the money go?” without opening five screens.',
+        'Nothing — it is read-only. Use the filters.',
+        'Filter to one week and see sales in, milk paid, diesel, salary and bank charges side by side.',
+        'Read-only view (no change)'],
+    ['Ledgers', 'Receivable / Payable', '💰',
+        'Who owes you money and whom you owe, with ageing.',
+        'Weekly, and before month end.',
+        'Nothing — derived from the party ledgers.',
+        'Krishna Dairy owes Rs 1,100 for 12 days; the pouch supplier is owed Rs 12,000.',
+        'Balance Sheet (working capital)'],
+    ['Ledgers', 'Advances', '⏳',
+        'Money given ahead of time, to be recovered later.',
+        'When you give a farmer or staff an advance.',
+        'Party, amount, date, and how it will be recovered.',
+        'Rs 10,000 advance to a farmer is taken back from the next milk payments. It is an asset, not an expense.',
+        'Balance Sheet only (advance receivable)'],
+    ['Reports', 'Profit & Loss', '📊',
+        'Did the business make money in a period? Income minus all costs.',
+        'Monthly and yearly; before taking any business decision.',
+        'Nothing — choose the period.',
+        'Bhadra: sales Rs 9,00,000, milk and purchases Rs 7,50,000, expenses Rs 1,00,000 → profit Rs 50,000.',
+        'P&L'],
+    ['Reports', 'Monthly Report', '🗓',
+        'One report for a BS month: income, costs, profit AND the closing cash, bank, stock, receivable and payable.',
+        'At every month end. Every figure can be clicked to see the records behind it.',
+        'Nothing — choose the month, then click any line to drill down.',
+        'Click “Other Purchases — Rs 1,76,877.78” to see each purchase bill, its supplier, its amount and the total match.',
+        'P&L + Balance Sheet'],
+    ['Reports', 'Statements', '📄',
+        'A printable ledger for one customer, supplier or farmer.',
+        'When a party asks “how much do I owe?” or at settlement.',
+        'Choose the party and the date range.',
+        'Print Krishna Dairy’s statement showing the Rs 3,100 sale and the Rs 2,000 payment, balance Rs 1,100.',
+        'Read-only (uses the party ledger)'],
+    ['Admin', 'Settings', '⚙️',
+        'Company profile, users, backup/restore, Excel import, Fresh Start and Data Location.',
+        'At setup, when adding a user, before/after a big change.',
+        'Business name, address, PAN, currency, paper size; user passwords.',
+        'Before handing the app to a new client: create the backup, run Fresh Start, then check Data Location shows the file you expect.',
+        'Configuration (does not change the accounts)'],
+    ['Admin', 'Data Integrity', '🩺',
+        'Read-only health check of the database.',
+        'When a total looks wrong, or after an import.',
+        'Nothing — run it and read the findings.',
+        'It reports duplicate parties, orphan ledger rows and negative stock so you can fix them at the source.',
+        'Diagnostics only']
+];
+
+function umModuleGuideHtml() {
+    const rows = UM_MODULE_GUIDE.map(([group, module, icon, purpose, when, entry, example, affects]) => `
+        <tr>
+            <td style="font-size:11px;color:var(--text-light);white-space:nowrap">${group}</td>
+            <td style="font-weight:600;white-space:nowrap">${icon} ${module}</td>
+            <td>${purpose}</td>
+            <td>${when}</td>
+            <td>${entry}</td>
+            <td style="font-size:12px;color:#555">${example}</td>
+            <td style="font-size:11px;white-space:nowrap">${affects}</td>
+        </tr>`).join('');
+    return `
+        <div id="um-modules" style="background:var(--bg-white);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:28px;overflow:auto">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                <span style="font-size:24px">🧭</span>
+                <h2 style="font-size:18px;font-weight:700;margin:0">Every Menu Explained — What It Does and When to Use It</h2>
+            </div>
+            <p style="font-size:13px;color:var(--text-light);line-height:1.6;margin:0 0 14px">
+                Each menu, in plain words: what it is for, when to use it, what you type, a real dairy example,
+                and whether it changes the Profit &amp; Loss, the Balance Sheet, or both.
+            </p>
+            <table class="data-table" style="font-size:12.5px;min-width:900px">
+                <thead><tr>
+                    <th>Menu group</th><th>Menu</th><th>What it is for</th><th>When to use it</th>
+                    <th>What you enter</th><th>Dairy example</th><th>Affects</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            <div style="margin-top:16px;padding:14px 18px;background:#fff7ed;border-left:4px solid #f97316;border-radius:8px;font-size:13px;line-height:1.7">
+                <strong>Three rules that prevent most mistakes</strong>
+                <ol style="margin:8px 0 0 18px;padding:0">
+                    <li><strong>An advance is not an expense.</strong> Money given early is still yours until it is used or recovered.</li>
+                    <li><strong>Receiving money is not income.</strong> If the sale was already recorded, the payment only settles the balance.</li>
+                    <li><strong>Putting cash into the bank is not income.</strong> The same money moves from the drawer to the bank — nothing is earned.</li>
+                </ol>
+            </div>
+        </div>`;
+}
+
+// ============================================================
+// Glossary — every accounting word the app uses, EN + नेपाली
+// ============================================================
+// [English, नेपाली, plain-English meaning, dairy example]
+const UM_GLOSSARY = [
+    ['Ledger', 'खाता', 'A page per person or item that lists every amount in and out, so the balance is always known.', 'Krishna Dairy’s ledger shows a Rs 3,100 sale, a Rs 2,000 payment, balance Rs 1,100.'],
+    ['General Ledger', 'मुख्य खाता', 'The main book that collects every account of the business in one place.', 'The Company Ledger screen is this book: sales, milk, diesel, salary, bank charges.'],
+    ['Party Ledger', 'पार्टी खाता', 'The ledger of one customer, supplier or farmer.', 'The farmer Ram Bahadur’s ledger lists each collection and each payment to him.'],
+    ['Supplier Ledger', 'आपूर्तिकर्ताको खाता', 'The ledger of one supplier — what you bought and what you paid.', 'The pouch supplier’s ledger: Rs 12,000 bill, Rs 12,000 paid, balance nil.'],
+    ['Statement', 'विवरण', 'A printable summary of a party’s ledger for a date range, given to them.', 'Hand Krishna Dairy a statement for Shrawan showing Rs 1,100 outstanding.'],
+    ['Trial Balance', 'परीक्षण सन्तुलन', 'A list of all balances to check that total debits equal total credits.', 'Used at year end to prove the books balance before finalising.'],
+    ['Profit & Loss', 'नाफा–नोक्सान विवरण', 'Income minus costs for a period. Answers: did we earn or lose?', 'Bhadra: income Rs 9,00,000 − costs Rs 8,50,000 = profit Rs 50,000.'],
+    ['Balance Sheet', 'वासलात', 'What the business owns, what it owes, and the owner’s capital — on one date.', 'Cash Rs 42,300 + bank Rs 1,80,000 + stock Rs 1,34,970 + receivables − payables.'],
+    ['Income / Revenue', 'आम्दानी', 'Money earned by selling goods or services — not money borrowed or received against a sale.', 'Selling 50 L of milk for Rs 3,100 is income. Collecting an old Rs 3,100 debt is not.'],
+    ['Expense', 'खर्च', 'Money used up to run the business, with nothing of equal value kept.', 'Electricity Rs 8,500 is an expense. Buying a Rs 50,000 chiller is not — it is an asset.'],
+    ['Asset', 'सम्पत्ति', 'Something the business owns that has value.', 'Cash, bank balance, stock, a chiller, money a customer owes you.'],
+    ['Liability', 'दायित्व', 'Something the business owes to others.', 'Unpaid supplier bill, a bank loan, a farmer’s unpaid milk money.'],
+    ['Equity / Capital', 'पुँजी', 'The owner’s share: what was invested plus profit kept in the business.', 'A partner puts Rs 5,00,000 into the dairy — that is capital, not income.'],
+    ['Receivable', 'उठाउन बाँकी रकम', 'Money customers owe you.', 'Krishna Dairy owes Rs 1,100 after his part payment.'],
+    ['Payable', 'तिर्न बाँकी रकम', 'Money you owe suppliers or farmers.', 'The pouch supplier is still owed Rs 12,000.'],
+    ['Advance', 'अग्रिम रकम', 'Money paid or received before the goods or work. It is a balance, not an expense or income.', 'Rs 10,000 given to a farmer in advance is recovered from later milk payments.'],
+    ['Loan Receivable', 'उठाउन बाँकी ऋण', 'A loan the business gave to someone else, to be collected back.', 'Rs 50,000 lent to a neighbouring dairy — it is an asset, not an expense.'],
+    ['Loan Payable', 'तिर्न बाँकी ऋण', 'A loan the business took and must repay.', 'A Rs 5,00,000 bank loan. Repaying the principal is not an expense; only the interest is.'],
+    ['Prepaid Expense', 'अग्रिम भुक्तानी गरिएको खर्च', 'A cost paid before it is used. It stays an asset until the period it belongs to.', 'A year’s insurance paid in one go is spread across the twelve months.'],
+    ['Prepaid Rent', 'अग्रिम भुक्तानी घरभाडा', 'Rent paid in advance for future months.', 'Rs 9,10,000 paid for six months: one month is an expense each month, the rest stays an asset.'],
+    ['Opening Balance', 'सुरुको मौज्दात', 'The balance at the start of the period — the previous closing balance.', 'Cash on 2083-04-01 is whatever the drawer held at the end of 2083-03-30.'],
+    ['Closing Balance', 'अन्तिम मौज्दात', 'The balance at the end of the period, after all movements.', 'Closing stock on 2083-07-30 is what remains after the month’s sales and purchases.'],
+    ['Cash Balance', 'नगद मौज्दात', 'Money physically in the drawer or box.', 'Counted notes and coins at the end of the day: Rs 42,300.'],
+    ['Bank Balance', 'बैंक मौज्दात', 'Money in the bank account according to the books.', 'Deposits minus withdrawals, matched against the bank statement.'],
+    ['Inventory / Stock', 'मौज्दात सामान', 'Goods you hold to sell or to use in production.', 'Paneer 120 kg, pouches 5,000, milk 40 L.'],
+    ['Cost of Goods Sold', 'बिक्री भएका सामानको लागत', 'What the goods you actually sold cost you to buy or make.', 'Milk bought at Rs 58.40/L and sold at Rs 62/L: the Rs 58.40 is the cost of goods sold.'],
+    ['Gross Profit', 'कुल नाफा', 'Sales minus the cost of the goods sold, before running costs.', 'Sales Rs 3,100 − milk cost Rs 2,920 = gross profit Rs 180.'],
+    ['Net Profit / Loss', 'खुद नाफा / नोक्सान', 'What is left after every cost, including rent, salary, electricity and diesel.', 'Gross profit Rs 1,50,000 − running costs Rs 1,00,000 = net profit Rs 50,000.'],
+    ['Operating Expenses', 'सञ्चालन खर्च', 'The day-to-day costs of running the business, other than the goods you sell.', 'Rent, salary, electricity, diesel, repairs, telephone, bank charges.'],
+    ['Reconciliation', 'हिसाब मिलान', 'Comparing two records of the same thing and explaining the difference.', 'The ledger says Rs 43,100 cash, the count says Rs 42,300 — Rs 800 must be explained.'],
+    ['Voucher', 'भौचर', 'The numbered slip or document that proves a transaction.', 'Petty cash voucher PC-221 for Rs 250 taxi fare.'],
+    ['Debit / Credit', 'डेबिट / क्रेडिट', 'Two sides of every entry. Debit = value coming in or a cost; credit = value going out or money owed. For a customer, debit increases what they owe you; a payment to you is a credit.', 'A Rs 3,100 sale debits the customer (he owes more); his Rs 2,000 payment credits him (he owes less).'],
+    ['Cash Denomination', 'नगदको दरअनुसार गणना', 'Counting notes and coins note by note.', '20 × Rs 500 + 15 × Rs 100 + 30 × Rs 10 = Rs 11,800.'],
+    ['Depreciation', 'मूल्यह्रास', 'Spreading the cost of a long-lasting asset over the years it is used.', 'A Rs 3,00,000 chiller used for 10 years costs about Rs 30,000 a year.'],
+    ['Journal Entry', 'जर्नल प्रविष्टि', 'A manual double entry made when no other screen fits the transaction.', 'Correcting a wrong party on a payment by moving the amount between two ledgers.'],
+    ['Stock Adjustment', 'मौज्दात समायोजन', 'Correcting the stock figure after a physical count.', 'Register 120 kg, count 114 kg → 6 kg shortage recorded as an adjustment.'],
+    ['Advance Recovery', 'अग्रिम असुली', 'Taking back an advance from a later payment.', 'Rs 2,000 of salary advance recovered from the month’s Rs 15,000 salary.'],
+    ['Ageing', 'बाँकी अवधि विश्लेषण', 'Grouping outstanding amounts by how long they have been unpaid.', 'Receivables 0–30 days Rs 40,000, 30–60 days Rs 12,000, 60+ days Rs 4,000.'],
+    ['Fiscal Year', 'आर्थिक वर्ष', 'The twelve-month accounting year used for reports and tax.', 'In Nepal the fiscal year runs Shrawan 1 to Ashadh end.'],
+    ['Bank Reconciliation', 'बैंक मिलान', 'Matching the bank statement with your own records.', 'The statement shows Rs 12,000 paid; your books show the same payment — matched.'],
+    ['Trial of Totals', 'जोड परीक्षण', 'Adding the columns of a report to confirm they agree with the registers.', 'Monthly Report → Reconciliation tab: each check compares the report with its source register.'],
+    ['Working Capital', 'कार्यशील पुँजी', 'Money tied up in stock plus what customers owe, minus what you owe.', 'Stock Rs 1,34,970 + receivables Rs 39,64,247 − payables Rs 10,73,807.'],
+    ['Cash Flow', 'नगद प्रवाह', 'Money actually moving in and out, regardless of profit.', 'A profitable month can still run out of cash if customers have not paid.'],
+    ['Accrual', 'उपार्जन', 'Recording a cost or income in the period it belongs to, not when cash moves.', 'December’s electricity bill paid in January is a December cost.'],
+    ['Write-off', 'राइट अफ', 'Accepting that an amount will never be recovered and removing it from the books.', 'A customer who disappeared owing Rs 500 — written off after approval.'],
+    ['Contra Entry', 'आपसी लेनदेन', 'Moving money between two of your own accounts — never income or expense.', 'Rs 20,000 cash deposited into the bank is a contra entry.'],
+    ['Sub-ledger', 'सहायक खाता', 'A detailed ledger behind one control account.', 'All the individual party ledgers together make up receivables.']
+];
+
+function umGlossaryHtml() {
+    const rows = UM_GLOSSARY.map(([en, np, meaning, example]) => `
+        <tr>
+            <td style="font-weight:600;white-space:nowrap">${en}</td>
+            <td style="white-space:nowrap;font-family:'Noto Sans Devanagari','Kalimati','Nirmala UI',sans-serif">${np}</td>
+            <td>${meaning}</td>
+            <td style="font-size:12px;color:#555">${example}</td>
+        </tr>`).join('');
+    return `
+        <div id="um-glossary" style="background:var(--bg-white);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:28px;overflow:auto">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                <span style="font-size:24px">📘</span>
+                <h2 style="font-size:18px;font-weight:700;margin:0">Accounting Words Explained — शब्दावली (English + नेपाली)</h2>
+            </div>
+            <p style="font-size:13px;color:var(--text-light);line-height:1.6;margin:0 0 14px">
+                Every accounting word used in this software, in simple English and नेपाली, with a dairy example.
+                You do not need any accounting training to use these screens — this table is all the vocabulary you need.
+            </p>
+            <table class="data-table" style="font-size:12.5px;min-width:820px">
+                <thead><tr><th>English</th><th>नेपाली</th><th>What it means in plain words</th><th>Dairy example</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+}
+
+// Make globally accessible
+window.umGlossaryHtml = umGlossaryHtml;
+window.umModuleGuideHtml = umModuleGuideHtml;
 
 // ============================================================
 // Helper: Render a module card

@@ -396,6 +396,16 @@ function performCleanup(db, opts = {}) {
     const plan = getFreshStartWipePlan(db);
     const tables = plan.tables;
 
+    // Which file is being cleared — and whether another copy of the same book
+    // exists on this machine (the reason an old reset looked "undone").
+    const dbPath = (db && db.name) ? db.name : null;
+    let storage = null;
+    try {
+        const loc = require('../storage-location');
+        const dir = dbPath ? require('path').dirname(dbPath) : null;
+        storage = loc.report(loc.describe({ dir: dir || '.', mode: 'reset' }));
+    } catch (e) { /* location diagnostics are optional */ }
+
     // ── Wipe, atomically ──
     try {
         const wipe = db.transaction(() => {
@@ -457,13 +467,72 @@ function performCleanup(db, opts = {}) {
         return { success: false, error: `The reset failed and was rolled back — your data is unchanged. (${err.message})` };
     }
 
+    // ── PROOF: re-read the database and confirm nothing came back ──
+    // A reset may only report success if the tables really are empty after it.
+    const leftovers = {};
+    for (const t of tables) {
+        try {
+            const n = db.prepare(`SELECT COUNT(*) AS c FROM "${t}"`).get().c;
+            if (n > 0) leftovers[t] = n;
+        } catch (e) { /* table vanished — nothing to count */ }
+    }
+    if (Object.keys(leftovers).length) {
+        const list = Object.entries(leftovers).map(([t, n]) => `${t} (${n})`).join(', ');
+        return {
+            success: false,
+            error: `The reset did not clear every business table — still holding rows: ${list}. `
+                + 'Nothing else was changed; please report this so the wipe scope can be fixed.'
+        };
+    }
+
+    // The WAL must reach the main file, so the cleared book survives an
+    // abrupt quit or a power cut right after the reset.
+    let checkpointed = false;
+    try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+        checkpointed = true;
+    } catch (e) { /* not in WAL mode — nothing to checkpoint */ }
+
+    // ── Reset log beside the database (append-only, survives restarts) ──
+    let logPath = null;
+    try {
+        const path = require('path');
+        const dir = dbPath ? path.dirname(dbPath) : null;
+        if (dir && fs.existsSync(dir)) {
+            const backupsDir = path.join(dir, 'backups');
+            logPath = path.join(fs.existsSync(backupsDir) ? backupsDir : dir, 'fresh-start-log.jsonl');
+            const entry = {
+                at: new Date().toISOString(),
+                action: 'FRESH_START',
+                database: dbPath,
+                storage_mode: storage ? storage.mode : null,
+                cleared_tables: tables.length,
+                backup: backupInfo ? backupInfo.path : null,
+                backup_verified: true,
+                wal_checkpointed: checkpointed,
+                leftover_rows: leftovers,
+                other_database_copies: storage ? storage.other_copies.map(c => c.db_path) : [],
+                user_id: userId || null
+            };
+            fs.appendFileSync(logPath, JSON.stringify(entry) + '\n', 'utf8');
+        }
+    } catch (e) { logPath = null; }
+
     return {
         success: true,
         data: {
-            message: 'Fresh Start completed successfully. All business data cleared. Users, system settings and audit log kept.',
+            message: 'Fresh Start completed successfully. All business data cleared and verified empty. '
+                + 'Users, system settings and audit log kept.',
             backup: backupInfo,
             backup_verified: !!(backupInfo && backupInfo.path),
-            cleared_tables: tables.length
+            cleared_tables: tables.length,
+            cleared_table_names: tables,
+            database: dbPath,
+            storage_mode: storage ? storage.mode : null,
+            other_database_copies: storage ? storage.other_copies : [],
+            wal_checkpointed: checkpointed,
+            verified_empty: true,
+            log_path: logPath
         }
     };
 }

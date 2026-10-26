@@ -30,6 +30,13 @@ let currentUser = null;
  *   3. app.getPath('userData')/data — standard Electron user data (NSIS installs)
  *   4. path.join(__dirname, 'data') — project root (development mode)
  */
+function getStorageMode() {
+    if (process.env.DB_DIR) return 'custom (DB_DIR)';
+    if (process.env.PORTABLE_EXECUTABLE_DIR) return 'portable';
+    if (app.isPackaged) return 'desktop (packaged)';
+    return 'development';
+}
+
 function getDbDir() {
     if (process.env.DB_DIR) return process.env.DB_DIR;
     if (process.env.PORTABLE_EXECUTABLE_DIR) {
@@ -39,6 +46,16 @@ function getDbDir() {
         return path.join(app.getPath('userData'), 'data');
     }
     return path.join(__dirname, 'data');
+}
+
+/**
+ * Which database file this process is using, and the other copies of the same
+ * book that exist on this machine. A Fresh Start only ever clears the active
+ * one, so the operator must be able to see if a second copy exists.
+ */
+function getStorageReport() {
+    const storage = require('./shared/storage-location');
+    return storage.report(storage.describe({ dir: getDbDir(), mode: getStorageMode() }));
 }
 
 /**
@@ -63,6 +80,18 @@ function initAppDatabase() {
 
     db = initDatabase(dbDir, 'dairy-plant.db');
     console.log('Desktop app - using database at:', path.join(dbDir, 'dairy-plant.db'));
+
+    // Say it out loud when a second copy of the book exists: a Fresh Start in
+    // this window does not clear the other file, and that is what made a reset
+    // look like it had been undone after a restart.
+    try {
+        const storage = getStorageReport();
+        if (storage.multiple_copies) {
+            console.warn('  ⚠️  Another copy of the database exists on this machine:');
+            for (const c of storage.other_copies) console.warn(`      · ${c.db_path}`);
+            console.warn('      Settings → Data Location shows which file this window is using.');
+        }
+    } catch (e) { /* diagnostics must never stop the app starting */ }
 
     // Pre-load business data on first run
     importBundledExcelData(dbDir);
@@ -816,6 +845,12 @@ authHandle('db:reports:profit-loss-by-month', async (event, params = {}) => {
 // + per-month closing balances that carry forward + reconciliation checks.
 authHandle('db:reports:monthly-report', async (event, params = {}) => {
     return safeRun(() => ops.getMonthlyReport(db, params));
+});
+
+// Monthly Report drill-down (req 1): the records behind ONE report line, using
+// the same period and the same figures as the report itself.
+authHandle('db:reports:monthly-report-line', async (event, params = {}) => {
+    return safeRun(() => ops.getMonthlyReportLine(db, params));
 });
 
 // Prepaid expenses (advance rent) — an unused payment is an asset.
@@ -1824,6 +1859,11 @@ authHandle('dialog:save', async (event, options) => {
 // --- Get database path ---
 authHandle('db:path', async () => {
     return path.join(getDbDir(), 'dairy-plant.db');
+});
+
+// --- Where the data actually lives (Settings → Data Location) ---
+authHandle('db:storage-info', async () => {
+    return safeRun(() => getStorageReport());
 });
 
 // ============================================================

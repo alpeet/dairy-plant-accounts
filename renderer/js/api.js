@@ -147,6 +147,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getManagementReport: (opts) => apiPost('/reports/management', opts || {}),
         getProfitLossByMonth: (opts) => apiPost('/reports/profit-loss-by-month', opts || {}),
         getMonthlyReport: (opts) => apiPost('/reports/monthly-report', opts || {}),
+        getMonthlyReportLine: (opts) => apiPost('/reports/monthly-report-line', opts || {}),
         listPrepaidExpenses: (opts) => apiPost('/prepaid-expenses/list', opts || {}),
         savePrepaidExpense: (data) => apiPost('/prepaid-expenses/save', data || {}),
         getPrepaidSummary: (opts) => apiPost('/prepaid-expenses/summary', opts || {}),
@@ -372,6 +373,7 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         restoreBackupFromFile: (sourcePath) => apiPost('/backup/restore-from-file', { path: sourcePath }),
         getTableInfo: () => apiPost('/db/table-info'),
         getDatabasePath: () => apiPost('/db-path'),
+        getStorageInfo: () => apiPost('/storage-info'),
 
         // Print / PDF (web version: returns HTML, use window.print() instead)
         printToPDF: async (opts) => {
