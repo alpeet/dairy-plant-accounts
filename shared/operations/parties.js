@@ -132,6 +132,12 @@ function getPartyLedger(db, { party_id, from_date, to_date }) {
     query += " ORDER BY date, id";
     const entries = db.prepare(query).all(...params);
     const party = db.prepare("SELECT * FROM parties WHERE id = ?").get(party_id);
+    // Item / quantity / unit / rate detail (same helper as the party
+    // statement) so the ledger modal shows the real goods, not just text.
+    try {
+        const { attachEntryItemDetails } = require('./statements');
+        attachEntryItemDetails(db, party_id, entries);
+    } catch (e) { /* statements module unavailable — plain ledger */ }
     return { entries, party };
 }
 

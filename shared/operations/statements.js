@@ -55,6 +55,110 @@ function formatMilkLine(m) {
 }
 
 /**
+ * Attach item detail (product, quantity, unit, rate) and payment status to
+ * sale / purchase / milk / payment ledger rows. Used by BOTH the party
+ * statement and the party ledger modal so the two can never disagree.
+ *
+ * sales_items / purchase_items hold the real goods behind a ledger row.
+ * Imported rows reference bills by NUMBER (text) and bill numbers REPEAT
+ * across dates, so resolution is id → bill + date → bill.
+ *
+ * Purely presentational: it attaches display detail and never changes any
+ * amount, balance or total.
+ */
+function attachEntryItemDetails(db, partyId, entries) {
+    let saleItems, purchaseItems, saleByInvoice, saleByInvoiceAny,
+        purchaseByBillDate, purchaseByBill, saleStatus, purchaseStatus;
+    try {
+        saleItems = db.prepare('SELECT product_name, quantity, unit, rate, amount FROM sales_items WHERE sale_id = ? ORDER BY id');
+        purchaseItems = db.prepare('SELECT product_name, quantity, unit, rate, amount FROM purchase_items WHERE purchase_id = ? ORDER BY id');
+        saleByInvoice = db.prepare('SELECT id, status FROM sales WHERE party_id = ? AND invoice_no = ? AND date = ? ORDER BY id LIMIT 1');
+        saleByInvoiceAny = db.prepare('SELECT id, status FROM sales WHERE party_id = ? AND invoice_no = ? ORDER BY id LIMIT 1');
+        purchaseByBillDate = db.prepare('SELECT id, status FROM purchases WHERE party_id = ? AND bill_no = ? AND date = ? ORDER BY id LIMIT 1');
+        purchaseByBill = db.prepare('SELECT id, status FROM purchases WHERE party_id = ? AND bill_no = ? ORDER BY id LIMIT 1');
+        saleStatus = db.prepare('SELECT status FROM sales WHERE id = ?');
+        purchaseStatus = db.prepare('SELECT status FROM purchases WHERE id = ?');
+    } catch (e) { return; } // schema without item tables — statements degrade gracefully
+
+    for (const e of entries) {
+        try {
+            const type = String(e.reference_type || '');
+            if (type === 'sale' || type === 'purchase') {
+                let srcId = null, status = null;
+                const ref = e.reference_id;
+                if (Number.isInteger(ref)) {
+                    srcId = ref;
+                    const st = (type === 'sale' ? saleStatus : purchaseStatus).get(ref);
+                    if (st) status = st.status;
+                } else if (ref != null && String(ref).trim() !== '') {
+                    const no = String(ref).trim();
+                    const hit = type === 'sale'
+                        ? (saleByInvoice.get(partyId, no, e.date) || saleByInvoiceAny.get(partyId, no))
+                        : (purchaseByBillDate.get(partyId, no, e.date) || purchaseByBill.get(partyId, no));
+                    if (hit) { srcId = hit.id; status = hit.status; }
+                }
+                if (srcId != null) {
+                    e.source_id = srcId;
+                    const items = (type === 'sale' ? saleItems : purchaseItems).all(srcId);
+                    if (items.length) e.items = items;
+                }
+                if (status) e.payment_status = status;
+            } else if (type === 'milk_collection' && e.milk_type) {
+                e.items = [{
+                    product_name: titleCaseMilk(e.milk_type) + ' Milk',
+                    quantity: e.milk_quantity, unit: 'L', rate: e.milk_rate,
+                    amount: (Number(e.milk_quantity) || 0) * (Number(e.milk_rate) || 0)
+                }];
+            } else if (type === 'payment_made' || type === 'payment_received') {
+                e.payment_status = 'settled';
+            }
+        } catch (e2) { /* one bad row must not break the whole statement */ }
+    }
+
+    // ── Invoices split across several ledger rows ──────────────────────
+    // The workbook import can post ONE invoice as multiple ledger rows
+    // (e.g. BILL-6004 → 5,100 + 80 = 5,180). Every part resolves to the same
+    // source invoice, so without this pass each part would print the FULL
+    // invoice's goods against its own partial amount — a misleading line.
+    //
+    // Rule: show the item detail ONCE per invoice — on the part that matches
+    // the invoice total if there is one, otherwise on the first part — and
+    // stamp it with the invoice total and split count so the screen can say
+    // why the goods belong to the whole invoice, not just this row. Other
+    // parts show dashes (no invented quantities).
+    const bySource = new Map();
+    for (const e of entries) {
+        if (!Array.isArray(e.items) || !e.items.length || e.source_id == null) continue;
+        if (e.reference_type !== 'sale' && e.reference_type !== 'purchase') continue;
+        const key = e.reference_type + ':' + e.source_id;
+        if (!bySource.has(key)) bySource.set(key, []);
+        bySource.get(key).push(e);
+    }
+    for (const group of bySource.values()) {
+        if (group.length < 2) continue;
+        const itemsTotal = group[0].items.reduce(
+            (s, i) => s + (i.amount != null ? Number(i.amount) : Number(i.quantity || 0) * Number(i.rate || 0)), 0);
+        const rowTotal = group.reduce((s, e) => s + Math.abs((e.debit || 0) - (e.credit || 0)), 0);
+        // Prefer the single row that carries the whole invoice amount.
+        const whole = group.find(e =>
+            Math.abs(Math.abs((e.debit || 0) - (e.credit || 0)) - itemsTotal) <= 0.02);
+        const host = whole || group[0];
+        host.items_invoice_total = Math.round(itemsTotal * 100) / 100;
+        host.items_split_count = group.length;
+        // Document when the parts do not add up to the invoice either.
+        if (Math.abs(rowTotal - itemsTotal) > 0.02) {
+            host.items_rows_total = Math.round(rowTotal * 100) / 100;
+        }
+        for (const e of group) {
+            if (e === host) continue;
+            e.items = undefined;
+            e.items_split_part = true;
+            e.items_invoice_total = host.items_invoice_total; // so the row can point at the main line
+        }
+    }
+}
+
+/**
  * Get party statement with running balance.
  * Builds from ledger_entries with party info and opening balance.
  *
@@ -91,8 +195,8 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
     const entries = db.prepare(`
         SELECT le.*, 
             CASE 
-                WHEN le.reference_type = 'sale' THEN (SELECT invoice_no FROM sales WHERE id = le.reference_id)
-                WHEN le.reference_type = 'purchase' THEN (SELECT bill_no FROM purchases WHERE id = le.reference_id)
+                WHEN le.reference_type = 'sale' THEN COALESCE((SELECT invoice_no FROM sales WHERE id = le.reference_id), CASE WHEN typeof(le.reference_id) = 'text' THEN le.reference_id END)
+                WHEN le.reference_type = 'purchase' THEN COALESCE((SELECT bill_no FROM purchases WHERE id = le.reference_id), CASE WHEN typeof(le.reference_id) = 'text' THEN le.reference_id END)
                 WHEN le.reference_type = 'payment_received' THEN 'RCPT-' || le.reference_id
                 WHEN le.reference_type = 'payment_made' THEN 'PMT-' || le.reference_id
                 WHEN le.reference_type = 'milk_collection' THEN (SELECT collection_no FROM milk_collections WHERE id = le.reference_id)
@@ -231,6 +335,10 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
             }
         }
     } catch (e) { /* payments table shape difference — skip enrichment */ }
+
+    // Item / quantity / unit / rate behind sale, purchase and milk rows —
+    // the same helper the party ledger modal uses, so the two views agree.
+    attachEntryItemDetails(db, party_id, entries);
 
     // ── Post-Dated Cheques (PDC) ──
     // A held cheque is a promise, not money. It is shown as a ZERO-AMOUNT memo
@@ -447,4 +555,4 @@ function listPartiesWithBalance(db, { type, as_of_date } = {}) {
     });
 }
 
-module.exports = { getPartyStatement, listPartiesWithBalance };
+module.exports = { getPartyStatement, listPartiesWithBalance, attachEntryItemDetails };

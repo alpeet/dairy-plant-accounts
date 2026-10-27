@@ -189,6 +189,82 @@ function statementModuleName(type) {
     return rl(m[0], m[1]);
 }
 
+/** One dash for a field that does not apply — never a fake zero. */
+const ST_DASH = '<span style="color:var(--text-light)">—</span>';
+
+/** Quantity display: real numbers, no forced decimals, dash when absent. */
+function stQty(v) {
+    if (v == null || v === '') return ST_DASH;
+    const n = Number(v);
+    if (!isFinite(n)) return escapeHtml(String(v));
+    return String(Math.round(n * 1000) / 1000);
+}
+
+/**
+ * Item / Quantity / Unit / Rate cells for one statement row, built from the
+ * real sales_items / purchase_items / milk_collections records attached by
+ * the backend. A row with no recorded item detail shows dashes — never 0.
+ */
+function statementItemCells(e) {
+    const items = Array.isArray(e.items) ? e.items.filter(i => i && (i.product_name || i.quantity != null)) : [];
+    if (!items.length) return { item: ST_DASH, qty: ST_DASH, unit: ST_DASH, rate: ST_DASH };
+    const first = items[0];
+    const units = [...new Set(items.map(i => i.unit).filter(Boolean))];
+    const totalQty = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+    const sameRate = items.length === 1 || items.every(i => Number(i.rate) === Number(first.rate));
+    return {
+        item: escapeHtml(first.product_name || '—') + (items.length > 1 ? ` <span style="color:var(--text-light)">(+${items.length - 1})</span>` : ''),
+        qty: items.length === 1 ? stQty(first.quantity) : (units.length === 1 ? stQty(totalQty) : ST_DASH),
+        unit: units.length === 1 ? escapeHtml(units[0]) : ST_DASH,
+        rate: sameRate && first.rate != null ? formatCurrency(first.rate) : ST_DASH
+    };
+}
+
+/** Payment-status badge: paid / unpaid / partial / settled / cheque state. */
+function statementStatusCell(e) {
+    if (e.is_pdc) return statementPdcBadge(e) || ST_DASH;
+    const s = String(e.payment_status || '').toLowerCase();
+    const map = {
+        paid: ['Paid', 'तिरिएको', '#155724', '#d4edda'],
+        unpaid: ['Unpaid', 'तिर्नुबाँकी', '#721c24', '#f8d7da'],
+        partial: ['Partly paid', 'अंशतः तिरिएको', '#856404', '#fff3cd'],
+        settled: ['Settled', 'मिलान भयो', '#155724', '#d4edda']
+    };
+    const m = map[s];
+    if (!m) return ST_DASH;
+    return `<span style="display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:600;color:${m[2]};background:${m[3]};border:1px solid ${m[2]}33">${rl(m[0], m[1])}</span>`;
+}
+
+/** Item-wise detail list for the expandable strip under a row. */
+function statementItemsList(e) {
+    const items = Array.isArray(e.items) ? e.items : [];
+    if (!items.length) {
+        // Part of an invoice posted as several ledger rows: the goods were
+        // shown on the invoice's main row — explain instead of showing none.
+        if (e.items_split_part && e.items_invoice_total != null) {
+            return `<div style="margin-top:6px;color:var(--text-light)">` +
+                rl(`Goods for this invoice are listed on its main row (invoice total ${formatCurrency(e.items_invoice_total)}).`,
+                   `यो बिलका वस्तुहरू मुख्य लाइनमा देखिएका छन् (बिल जम्मा ${formatCurrency(e.items_invoice_total)})।`) +
+                `</div>`;
+        }
+        return '';
+    }
+    const lines = items.map(it =>
+        `<div>• ${escapeHtml(it.product_name || '—')} — ${stQty(it.quantity)} ${escapeHtml(it.unit || '')}` +
+        (it.rate != null ? ` @ ${formatCurrency(it.rate)}` : '') +
+        (it.amount != null ? ` = ${formatCurrency(it.amount)}` : '') + `</div>`).join('');
+    let note = '';
+    if (e.items_split_count > 1) {
+        note = `<div style="margin-top:3px;color:#856404">` +
+            rl(`Full invoice ${formatCurrency(e.items_invoice_total)} — posted as ${e.items_split_count} ledger rows.`,
+               `पूरा बिल ${formatCurrency(e.items_invoice_total)} — ${e.items_split_count} खाता लाइनमा विभाजित।`) +
+            (e.items_rows_total != null
+                ? ' ' + rl(`(those rows total ${formatCurrency(e.items_rows_total)})`, `(ती लाइनहरू जम्मा ${formatCurrency(e.items_rows_total)})`)
+                : '') + `</div>`;
+    }
+    return `<div style="margin-top:6px"><strong>${rl('Items', 'वस्तुहरू')}:</strong>${lines}${note}</div>`;
+}
+
 /**
  * The generated statement itself. Split out of generateStatement() so a
  * language change can redraw it from the data already in memory instead of
@@ -201,6 +277,7 @@ function renderStatementResult(data) {
     const rows = data.entries.map((e, i) => {
         const page = STATEMENT_MODULE_PAGES[String(e.reference_type || '').toLowerCase()] || '';
         const detailId = `stDetail${i}`;
+        const cells = statementItemCells(e);
         return `
         <tr style="${e.is_pdc ? 'background:#fbfcfe' : ''}" class="mr-line"
             onclick="statementToggleDetail(${i})"
@@ -209,22 +286,28 @@ function renderStatementResult(data) {
             <td>${escapeHtml(e.reference_no || '')}</td>
             <td>${statementModuleName(e.reference_type)}${e.is_pdc ? ' 🏛' : ''}</td>
             <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
-            <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
-            <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
+            <td>${cells.item}</td>
+            <td class="text-right">${cells.qty}</td>
+            <td>${cells.unit}</td>
+            <td class="text-right">${cells.rate}</td>
+            <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? ST_DASH : '')}</td>
+            <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? ST_DASH : '')}</td>
             <td class="text-right"><strong>${formatCurrency(e.running_balance)}</strong></td>
+            <td>${statementStatusCell(e)}</td>
         </tr>
         <tr id="${detailId}" style="display:none">
-            <td colspan="7" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
+            <td colspan="12" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
                 <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
                     <span><strong>${rl('Date', 'मिति')}:</strong> ${formatDate(e.date)}</span>
                     <span><strong>${rlt('reference')}:</strong> ${escapeHtml(e.reference_no || '—')}</span>
                     <span><strong>${rl('Source module', 'स्रोत मोड्युल')}:</strong> ${statementModuleName(e.reference_type)}</span>
-                    <span><strong>${rl('Record ID', 'रेकर्ड आईडी')}:</strong> ${e.reference_id ?? '—'}</span>
+                    <span><strong>${rl('Record ID', 'रेकर्ड आईडी')}:</strong> ${e.source_id ?? e.reference_id ?? '—'}</span>
                     <span><strong>${rlt('amount')}:</strong> ${e.debit > 0 ? formatCurrency(e.debit) : (e.credit > 0 ? formatCurrency(e.credit) : '—')}</span>
                     <span><strong>${rlt('balance')}:</strong> ${formatCurrency(e.running_balance)}</span>
                     ${e.milk_type ? `<span><strong>${rl('Milk', 'दूध')}:</strong> ${escapeHtml(e.milk_type)} · ${e.milk_quantity} L · ${e.milk_rate}/${rl('L', 'लि')}</span>` : ''}
                     ${page ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();navigateTo('${page}')">↗ ${rl('Open the record', 'रेकर्ड खोल्नुहोस्')}</button>` : ''}
                 </div>
+                ${statementItemsList(e)}
             </td>
         </tr>`;
     }).join('');
@@ -269,25 +352,32 @@ function renderStatementResult(data) {
                         <th>${rlt('reference')}</th>
                         <th>${rlt('transaction_type')}</th>
                         <th>${rlt('particulars')}</th>
+                        <th>${rlt('item')}</th>
+                        <th class="text-right">${rlt('quantity')}</th>
+                        <th>${rlt('unit')}</th>
+                        <th class="text-right">${rlt('rate')}</th>
                         <th class="text-right">${rlt('debit')}</th>
                         <th class="text-right">${rlt('credit')}</th>
                         <th class="text-right">${rlt('balance')}</th>
+                        <th>${rlt('status')}</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr style="background:#f0f4f8;font-weight:600">
-                        <td colspan="6">${rlt('opening_balance')}</td>
+                        <td colspan="10">${rlt('opening_balance')}</td>
                         <td class="text-right">${formatCurrency(data.opening_balance)}</td>
+                        <td></td>
                     </tr>
                     ${rows}
-                    ${data.entries.length === 0 ? `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
+                    ${data.entries.length === 0 ? `<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="4"><strong>${rlt('total')}</strong></td>
+                        <td colspan="8"><strong>${rlt('total')}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td>
+                        <td></td>
                     </tr>
                 </tfoot>
             </table>
@@ -333,6 +423,13 @@ function showSupplierStatements() {
 // ============================================================
 function buildStatementHtml(data, settings) {
     return `
+        <style>
+            /* 12 columns need the wide side of the sheet; later @page rules
+               override the portrait default written by printHTML(). */
+            @page { size: A4 landscape; }
+            table { font-size: 8pt; }
+            th, td { padding: 3px 5px; }
+        </style>
         <div class="header">
             <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
             <h2>${escapeHtml(data.party.name)} — ${rl('Statement of Account', 'खाताको विवरण')}</h2>
@@ -352,12 +449,12 @@ function buildStatementHtml(data, settings) {
             ${data.pdc.issued_held ? ` Issued ${formatCurrency(data.pdc.issued_held)} (${data.pdc.issued_held_count} cheque(s));` : ''}
         </div>` : ''}
         <table>
-            <thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
+            <thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th>${rlt('item')}</th><th class="text-right">${rlt('quantity')}</th><th>${rlt('unit')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
             <tbody>
-                <tr><td colspan="6">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>
-                ${data.entries.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td></tr>`).join('')}
+                <tr><td colspan="10">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
+                ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td>${c.item}</td><td class="text-right">${c.qty}</td><td>${c.unit}</td><td class="text-right">${c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
             </tbody>
-            <tfoot><tr><td colspan="4"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td></tr></tfoot>
+            <tfoot><tr><td colspan="8"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
         </table>
         <div class="footer"><div>${rl('Printed', 'प्रिन्ट')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
@@ -454,11 +551,11 @@ async function exportStatementPDF() {
     // The PDF gets its own style block so the Devanagari stack travels with it.
     const html = `
         <style>
-            @page { size: A4; margin: 15mm 12mm 20mm 12mm; }
+            @page { size: A4 landscape; margin: 12mm 10mm 16mm 10mm; }
             body { font-family: 'Noto Sans Devanagari','Kalimati','Mukta','Nirmala UI','Mangal','Segoe UI','Helvetica Neue',Arial,sans-serif; font-size: 10pt; color: #222; }
-            table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+            table { width: 100%; border-collapse: collapse; font-size: 8pt; }
             thead { display: table-header-group; }
-            th, td { padding: 5px 8px; border: 1px solid #bbb; text-align: left; }
+            th, td { padding: 3px 5px; border: 1px solid #bbb; text-align: left; }
             th { background: #1a5276; color: #fff; }
             .text-right { text-align: right; }
             .header { text-align: center; margin-bottom: 14px; border-bottom: 3px double #1a5276; padding-bottom: 10px; }
@@ -468,12 +565,12 @@ async function exportStatementPDF() {
             tfoot tr td { background: #eef2f7; font-weight: 700; }
         </style>
         <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>${escapeHtml(data.party.name)} — ${rl('Statement of Account', 'खाताको विवरण')}</h2><p>${rlt('period')}: ${data.from_date} → ${data.to_date}</p></div>
-        <table><thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
+        <table><thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th>${rlt('item')}</th><th class="text-right">${rlt('quantity')}</th><th>${rlt('unit')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
         <tbody>
-            <tr><td colspan="6">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>
-            ${data.entries.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td></tr>`).join('')}
+            <tr><td colspan="10">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
+            ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td>${c.item}</td><td class="text-right">${c.qty}</td><td>${c.unit}</td><td class="text-right">${c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
         </tbody>
-        <tfoot><tr><td colspan="4"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td></tr></tfoot></table>
+        <tfoot><tr><td colspan="8"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot></table>
         <div class="footer"><div>${rl('Generated', 'बनाइएको मिति')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
     await window.api.printToPDF({ html });
