@@ -73,6 +73,7 @@ async function renderStock() {
                 <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshTodaysStock()">Apply Range</button></div>
                 <div class="form-group" style="flex:1"><label>&nbsp;</label><div id="tsPeriodLabel" style="font-size:12px;color:var(--text-light);padding-top:6px"></div></div>
             </div>
+            ${reportLangPicker('Language / भाषा')}
             <div style="font-size:12.5px;color:var(--text-light);margin-bottom:8px">
                 <strong style="color:var(--text)">Opening + Collection/Purchase + Production − Sales − Consumption − Wastage ± Other = Closing</strong>
                 <span style="font-size:11px"> — click a product to open its Stock Statement detail</span>

@@ -235,9 +235,11 @@ function statusBadge(status) {
 // Shared Print CSS - single source of truth for all print/PDF output
 // ============================================================
 const PRINT_CSS = `
-    @page { margin: 15mm 12mm 20mm 12mm; size: A4; @bottom-right { content: "Page " counter(page); font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 7.5pt; color: #888; } }
+    @page { margin: 15mm 12mm 20mm 12mm; size: A4; @bottom-right { content: "Page " counter(page); font-family: 'Noto Sans Devanagari', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 7.5pt; color: #888; } }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 10pt; color: #222; line-height: 1.55; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* Devanagari first so a Nepali report prints with real glyphs instead of
+       whatever the system substitutes; Latin still resolves to Segoe/Helvetica. */
+    body { font-family: 'Noto Sans Devanagari', 'Kalimati', 'Mukta', 'Nirmala UI', 'Mangal', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 10pt; color: #222; line-height: 1.55; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .header { text-align: center; margin-bottom: 18px; border-bottom: 3px double #1a5276; padding-bottom: 12px; }
     .header h1 { font-size: 22pt; margin: 0; color: #1a5276; font-weight: 700; letter-spacing: 0.5px; }
     .header h2 { font-size: 13pt; margin: 6px 0 2px; color: #333; font-weight: 600; }

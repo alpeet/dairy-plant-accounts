@@ -53,9 +53,7 @@ async function renderSalary(monthParam) {
             <div class="form-group">
                 <label>Employee</label>
                 <input type="text" class="form-control" id="salSearch" placeholder="Search employee..." value="${escapeHtml(filt.search || '')}">
-            </div>
-            <div class="form-group">
-                <label>&nbsp;</label>
+            </div>            <div class="form-group"><label>&nbsp;</label>
                 <button class="btn btn-primary btn-sm" onclick="refreshSalary()">Search</button>
             </div>
             <div class="form-group">
@@ -66,6 +64,7 @@ async function renderSalary(monthParam) {
                 <label>&nbsp;</label>
                 <button class="btn btn-primary btn-sm" onclick="exportSalaryPDF()">📄 PDF</button>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="table-container">
             <table>

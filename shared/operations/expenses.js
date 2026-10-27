@@ -13,6 +13,7 @@
  */
 
 const { logAudit } = require('./audit');
+const { round2 } = require('./accounting');
 // One expense vocabulary for the whole app (Phase 3). The Expenses screen
 // offers it as datalist suggestions so free-text categories converge on it.
 const { EXPENSE_CATEGORIES } = require('./management_reports');
@@ -143,25 +144,48 @@ function getExpenseCategories(db) {
 }
 
 /**
+ * Rows entered in this register with an income category (rent received,
+ * scrap sale, commission) are INCOME, not expense. They are kept in the same
+ * table so one screen can record both, but they must never be added to an
+ * expense total — that would understate profit twice.
+ */
+const INCOME_CATEGORY_SQL = `UPPER(TRIM(COALESCE(category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')`;
+
+/** True when a register row is income rather than expense. */
+function isIncomeCategory(category) {
+    const c = String(category || '').trim().toUpperCase();
+    return ['INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED'].indexOf(c) !== -1;
+}
+
+/**
  * Get expenses summary by category.
  * Includes petty cash rows under the 'Petty Cash' category.
+ * `total`/`count`/`by_category` cover EXPENSES only; income rows are returned
+ * separately as `income_total` / `income_count`.
  */
 function getExpensesSummary(db, { from_date, to_date } = {}) {
     let query = `
         SELECT COALESCE(COUNT(*), 0) as count, COALESCE(SUM(amount), 0) as total FROM (
-            SELECT amount, date FROM other_expenses WHERE 1=1`;
+            SELECT amount, date, category FROM other_expenses WHERE 1=1 AND NOT (${INCOME_CATEGORY_SQL})`;
     const params = [];
     if (from_date) { query += " AND date >= ?"; params.push(from_date); }
-    if (to_date) { query += " AND date <= ?"; params.push(to_date); }
-    query += " UNION ALL SELECT amount, date FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'";
+    if (to_date) { query += " AND date <= ?"; params.push(to_date); }            query += " UNION ALL SELECT amount, date, 'Petty Cash' as category FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'";
     if (from_date) { query += " AND date >= ?"; params.push(from_date); }
     if (to_date) { query += " AND date <= ?"; params.push(to_date); }
     query += `)
     `;
     const total = db.prepare(query).get(...params);
 
+    // Income rows counted separately, never inside the expense total.
+    let incomeQuery = `SELECT COALESCE(COUNT(*), 0) as count, COALESCE(SUM(amount), 0) as total
+        FROM other_expenses WHERE 1=1 AND (${INCOME_CATEGORY_SQL})`;
+    const incomeParams = [];
+    if (from_date) { incomeQuery += " AND date >= ?"; incomeParams.push(from_date); }
+    if (to_date) { incomeQuery += " AND date <= ?"; incomeParams.push(to_date); }
+    const income = db.prepare(incomeQuery).get(...incomeParams);
+
     let catQuery = `SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM (
-        SELECT category, amount, date FROM other_expenses WHERE 1=1`;
+        SELECT category, amount, date FROM other_expenses WHERE 1=1 AND NOT (${INCOME_CATEGORY_SQL})`;
     const catParams = [];
     if (from_date) { catQuery += " AND date >= ?"; catParams.push(from_date); }
     if (to_date) { catQuery += " AND date <= ?"; catParams.push(to_date); }
@@ -171,7 +195,15 @@ function getExpensesSummary(db, { from_date, to_date } = {}) {
     catQuery += " ) GROUP BY category ORDER BY total DESC";
     const byCategory = db.prepare(catQuery).all(...catParams);
 
-    return { ...total, by_category: byCategory };
+    return {
+        ...total,
+        income_total: round2(income.total),
+        income_count: income.count,
+        by_category: byCategory
+    };
 }
 
-module.exports = { listOtherExpenses, getOtherExpense, saveOtherExpense, deleteOtherExpense, getExpenseCategories, getExpensesSummary };
+module.exports = {
+    listOtherExpenses, getOtherExpense, saveOtherExpense, deleteOtherExpense,
+    getExpenseCategories, getExpensesSummary, isIncomeCategory
+};

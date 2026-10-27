@@ -6,6 +6,7 @@
 async function renderStatements() {
     const container = document.getElementById('page-statements');
     document.getElementById('topActions').innerHTML = '';
+    window._stSelection = null;   // fresh visit: default period, not the last one
 
     const settings = await getSettingsCached();
 
@@ -54,51 +55,88 @@ async function showPartyStatement(type = '') {
     const parties = partiesResult.success ? partiesResult.data : [];
 
     const typeSelected = (t) => partyType === t ? ' selected' : '';
+    const st = window._stSelection || {};
+    const keep = v => (v !== undefined && v !== null && v !== '') ? v : undefined;
+    const partyVal = keep(st.partyId) || '';
+    const fromVal = keep(st.from) || preset.from;
+    const toVal = keep(st.to) || preset.to;
+    const typeVal = keep(st.type) !== undefined ? st.type : partyType;
 
     container.innerHTML = `
         <div class="card-header">
-            <h2>Party Statement</h2>
+            <h2>${rl('Party Statement', 'पार्टी विवरण')}</h2>
             <div class="btn-group">
-                <button class="btn btn-info btn-sm" onclick="printStatement()">🖨 Print</button>
-                <button class="btn btn-primary btn-sm" onclick="exportStatementPDF()">📄 PDF</button>
+                <button class="btn btn-info btn-sm" onclick="printStatement()">🖨 ${rlt('print')}</button>
+                <button class="btn btn-primary btn-sm" onclick="exportStatementPDF()">📄 ${rlt('pdf')}</button>
             </div>
         </div>
         <div class="filter-bar">
             <div class="form-group">
-                <label>Party Type</label>
+                <label>${rl('Party Type', 'पार्टी प्रकार')}</label>
                 <select class="form-control" id="stType" onchange="filterPartiesByType()">
-                    <option value=""${typeSelected('')}>All</option>
-                    <option value="customer"${typeSelected('customer')}>Customer</option>
-                    <option value="supplier"${typeSelected('supplier')}>Supplier</option>
-                    <option value="both"${typeSelected('both')}>Both</option>
+                    <option value=""${typeVal === '' ? ' selected' : ''}>${rl('All', 'सबै')}</option>
+                    <option value="customer"${typeVal === 'customer' ? ' selected' : ''}>${rlt('customer')}</option>
+                    <option value="supplier"${typeVal === 'supplier' ? ' selected' : ''}>${rlt('supplier')}</option>
+                    <option value="both"${typeVal === 'both' ? ' selected' : ''}>${rl('Both', 'दुवै')}</option>
                 </select>
             </div>
             <div class="form-group">
-                <label>Party</label>
+                <label>${rlt('party')}</label>
                 <select class="form-control" id="stParty">
-                    <option value="">-- Select Party --</option>
-                    ${parties.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.type})</option>`).join('')}
+                    <option value="">${rl('-- Select Party --', '-- पार्टी छान्नुहोस् --')}</option>
+                    ${parties.map(p => `<option value="${p.id}"${String(partyVal) === String(p.id) ? ' selected' : ''}>${escapeHtml(p.name)} (${p.type})</option>`).join('')}
                 </select>
             </div>
             <div class="form-group">
-                <label>From</label>
-                <input type="date" class="form-control" id="stFrom" value="${preset.from}">
+                <label>${rlt('from')} (BS)</label>
+                <input type="date" class="form-control" id="stFrom" value="${fromVal}">
             </div>
             <div class="form-group">
-                <label>To</label>
-                <input type="date" class="form-control" id="stTo" value="${preset.to}">
+                <label>${rlt('to')} (BS)</label>
+                <input type="date" class="form-control" id="stTo" value="${toVal}">
             </div>
             <div class="form-group">
                 <label>&nbsp;</label>
-                <button class="btn btn-primary btn-sm" onclick="generateStatement()">Generate</button>
+                <button class="btn btn-primary btn-sm" onclick="generateStatement()">${rlt('generate')}</button>
             </div>
+            ${reportLangPicker()}
         </div>
         <div id="statementResult">
             <div style="text-align:center;padding:40px;color:var(--text-light)">
-                Select a party and date range, then click Generate.
+                ${rl('Select a party and date range, then click Generate.', 'पार्टी र मिति छानेर Generate थिच्नुहोस्।')}
             </div>
         </div>
     `;
+    // Re-render in the newly chosen language without losing the selection,
+    // and re-draw the statement already on screen (no second API call).
+    if (typeof onReportLangChange === 'function') {
+        onReportLangChange(async () => {
+            const keepSel = {
+                partyId: document.getElementById('stParty')?.value,
+                from: document.getElementById('stFrom')?.value,
+                to: document.getElementById('stTo')?.value,
+                type: document.getElementById('stType')?.value
+            };
+            window._stSelection = keepSel;
+            // await — the rebuild is async; drawing the statement before it
+            // finishes would be overwritten by the fresh placeholder.
+            await showPartyStatement(keepSel.type || '');
+            if (window._lastStatement) renderStatementResult(window._lastStatement);
+        }, 'statements');
+    }
+    // Remember the last selection so a language switch restores it exactly.
+    const remember = () => {
+        window._stSelection = {
+            partyId: document.getElementById('stParty')?.value,
+            from: document.getElementById('stFrom')?.value,
+            to: document.getElementById('stTo')?.value,
+            type: document.getElementById('stType')?.value
+        };
+    };
+    ['stParty', 'stFrom', 'stTo', 'stType'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', remember);
+    });
 }
 
 async function filterPartiesByType() {
@@ -120,28 +158,93 @@ async function generateStatement() {
     const result = await window.api.getPartyStatement({ party_id: parseInt(partyId), from_date: from, to_date: to });
     if (!result.success) { showToast(result.error, 'error'); return; }
 
-    const data = result.data;
-    const container = document.getElementById('statementResult');
-    const settings = await getSettingsCached();
+    window._lastStatement = result.data;
+    renderStatementResult(result.data);
+}
 
-    window._lastStatement = data;
+/** Which screen a statement line can be opened on, by its ledger reference type. */
+const STATEMENT_MODULE_PAGES = {
+    sale: 'sales',
+    purchase: 'purchases',
+    milk_collection: 'milk',
+    payment_received: 'payment-collection',
+    payment_made: 'payment-collection',
+    pdc: 'pdc',
+    opening: ''
+};
+
+/** Human name of the module a statement line came from. */
+function statementModuleName(type) {
+    const map = {
+        sale: ['Sales', 'बिक्री'],
+        purchase: ['Purchases', 'खरिद'],
+        milk_collection: ['Milk Collection', 'दूध सङ्कलन'],
+        payment_received: ['Payment received', 'प्राप्त भुक्तानी'],
+        payment_made: ['Payment made', 'गरिएको भुक्तानी'],
+        pdc: ['Cheque (PDC)', 'चेक (पीडीसी)'],
+        opening: ['Opening balance', 'सुरुको मौज्दात'],
+        manual: ['Manual entry', 'हात्तले लेखिएको']
+    };
+    const m = map[String(type || '')] || [String(type || '—'), String(type || '—')];
+    return rl(m[0], m[1]);
+}
+
+/**
+ * The generated statement itself. Split out of generateStatement() so a
+ * language change can redraw it from the data already in memory instead of
+ * re-querying the database (and so the selection is never lost).
+ */
+function renderStatementResult(data) {
+    const container = document.getElementById('statementResult');
+    if (!container || !data) return;
+
+    const rows = data.entries.map((e, i) => {
+        const page = STATEMENT_MODULE_PAGES[String(e.reference_type || '').toLowerCase()] || '';
+        const detailId = `stDetail${i}`;
+        return `
+        <tr style="${e.is_pdc ? 'background:#fbfcfe' : ''}" class="mr-line"
+            onclick="statementToggleDetail(${i})"
+            title="${escapeHtml(rl('Click to open this line\u2019s details', 'यो लाइनको विवरण हेर्न क्लिक गर्नुहोस्'))}">
+            <td>${formatDate(e.date)}</td>
+            <td>${escapeHtml(e.reference_no || '')}</td>
+            <td>${statementModuleName(e.reference_type)}${e.is_pdc ? ' 🏛' : ''}</td>
+            <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
+            <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
+            <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
+            <td class="text-right"><strong>${formatCurrency(e.running_balance)}</strong></td>
+        </tr>
+        <tr id="${detailId}" style="display:none">
+            <td colspan="7" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+                    <span><strong>${rl('Date', 'मिति')}:</strong> ${formatDate(e.date)}</span>
+                    <span><strong>${rlt('reference')}:</strong> ${escapeHtml(e.reference_no || '—')}</span>
+                    <span><strong>${rl('Source module', 'स्रोत मोड्युल')}:</strong> ${statementModuleName(e.reference_type)}</span>
+                    <span><strong>${rl('Record ID', 'रेकर्ड आईडी')}:</strong> ${e.reference_id ?? '—'}</span>
+                    <span><strong>${rlt('amount')}:</strong> ${e.debit > 0 ? formatCurrency(e.debit) : (e.credit > 0 ? formatCurrency(e.credit) : '—')}</span>
+                    <span><strong>${rlt('balance')}:</strong> ${formatCurrency(e.running_balance)}</span>
+                    ${e.milk_type ? `<span><strong>${rl('Milk', 'दूध')}:</strong> ${escapeHtml(e.milk_type)} · ${e.milk_quantity} L · ${e.milk_rate}/${rl('L', 'लि')}</span>` : ''}
+                    ${page ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();navigateTo('${page}')">↗ ${rl('Open the record', 'रेकर्ड खोल्नुहोस्')}</button>` : ''}
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
 
     container.innerHTML = `
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px">
-                <span class="label">Opening Balance</span>
+                <span class="label">${rlt('opening_balance')}</span>
                 <span class="value" style="font-size:18px">${formatCurrency(data.opening_balance)}</span>
             </div>
             <div class="summary-card card-success" style="margin:0;padding:12px">
-                <span class="label">Total Debit</span>
+                <span class="label">${rl('Total Debit', 'कुल डेबिट')}</span>
                 <span class="value" style="font-size:18px">${formatCurrency(data.total_debit)}</span>
             </div>
             <div class="summary-card card-warning" style="margin:0;padding:12px">
-                <span class="label">Total Credit</span>
+                <span class="label">${rl('Total Credit', 'कुल क्रेडिट')}</span>
                 <span class="value" style="font-size:18px">${formatCurrency(data.total_credit)}</span>
             </div>
             <div class="summary-card card-info" style="margin:0;padding:12px">
-                <span class="label">Closing Balance</span>
+                <span class="label">${rlt('closing_balance')}</span>
                 <span class="value" style="font-size:18px">${formatCurrency(data.closing_balance)}</span>
             </div>
         </div>
@@ -150,45 +253,38 @@ async function generateStatement() {
             ${data.party.phone ? '| ' + escapeHtml(data.party.phone) : ''}
             ${data.party.email ? '| ✉️ ' + escapeHtml(data.party.email) : ''}
             ${data.party.address ? '| ' + escapeHtml(data.party.address) : ''}
-            <span style="float:right">Period: ${data.from_date} to ${data.to_date}</span>
+            <span style="float:right">${rlt('period')}: ${data.from_date} → ${data.to_date}</span>
             <div style="margin-top:8px">
-                <button class="btn btn-primary btn-sm" onclick="showEmailDialog()">✉️ Email Statement</button>
+                <button class="btn btn-primary btn-sm" onclick="showEmailDialog()">✉️ ${rl('Email Statement', 'विवरण इमेल')}</button>
+                <span style="font-size:12px;color:var(--text-light);margin-left:8px">
+                    ${rl('Click any line to see its source record.', 'स्रोत रेकर्ड हेर्न कुनै पनि लाइनमा क्लिक गर्नुहोस्।')}
+                </span>
             </div>
         </div>
         <div class="table-container">
             <table>
                 <thead>
                     <tr>
-                        <th>Date</th>
-                        <th>Ref No</th>
-                        <th>Transaction Type</th>
-                        <th>Particulars</th>
-                        <th class="text-right">Debit</th>
-                        <th class="text-right">Credit</th>
-                        <th class="text-right">Balance</th>
+                        <th>${rlt('date')}</th>
+                        <th>${rlt('reference')}</th>
+                        <th>${rlt('transaction_type')}</th>
+                        <th>${rlt('particulars')}</th>
+                        <th class="text-right">${rlt('debit')}</th>
+                        <th class="text-right">${rlt('credit')}</th>
+                        <th class="text-right">${rlt('balance')}</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr style="background:#f0f4f8;font-weight:600">
-                        <td colspan="6">Opening Balance</td>
+                        <td colspan="6">${rlt('opening_balance')}</td>
                         <td class="text-right">${formatCurrency(data.opening_balance)}</td>
                     </tr>
-                    ${data.entries.map(e => `
-                        <tr style="${e.is_pdc ? 'background:#fbfcfe' : ''}">
-                            <td>${formatDate(e.date)}</td>
-                            <td>${escapeHtml(e.reference_no || '')}</td>
-                            <td>${e.reference_type}${e.is_pdc ? ' 🏛' : ''}</td>
-                            <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
-                            <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
-                            <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? '<span style="color:var(--text-light)">—</span>' : '')}</td>
-                            <td class="text-right"><strong>${formatCurrency(e.running_balance)}</strong></td>
-                        </tr>
-                    `).join('')}
-                    ${data.entries.length === 0 ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">No transactions in this period</td></tr>' : ''}
+                    ${rows}
+                    ${data.entries.length === 0 ? `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="4"><strong>Total</strong></td>
+                        <td colspan="4"><strong>${rlt('total')}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td>
@@ -197,6 +293,13 @@ async function generateStatement() {
             </table>
         </div>
     `;
+}
+
+/** Show/hide the detail strip under one statement line (the “dropdown”). */
+function statementToggleDetail(i) {
+    const row = document.getElementById('stDetail' + i);
+    if (!row) return;
+    row.style.display = row.style.display === 'none' ? '' : 'none';
 }
 
 /**
@@ -232,15 +335,15 @@ function buildStatementHtml(data, settings) {
     return `
         <div class="header">
             <h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1>
-            <h2>${escapeHtml(data.party.name)} — Statement of Account</h2>
-            <p>Party Type: ${data.party.type} | Period: ${data.from_date} to ${data.to_date}</p>
+            <h2>${escapeHtml(data.party.name)} — ${rl('Statement of Account', 'खाताको विवरण')}</h2>
+            <p>${rl('Party Type', 'पार्टी प्रकार')}: ${data.party.type} | ${rlt('period')}: ${data.from_date} → ${data.to_date}</p>
             ${data.party.address ? `<div class="business-detail">${escapeHtml(data.party.address)}</div>` : ''}
         </div>
         <div class="value-cards">
-            <div class="value-card"><div class="value-label">Opening Balance</div><div class="value-number">${formatCurrency(data.opening_balance)}</div></div>
-            <div class="value-card"><div class="value-label">Total Debit</div><div class="value-number">${formatCurrency(data.total_debit)}</div></div>
-            <div class="value-card"><div class="value-label">Total Credit</div><div class="value-number">${formatCurrency(data.total_credit)}</div></div>
-            <div class="value-card"><div class="value-label">Closing Balance</div><div class="value-number">${formatCurrency(data.closing_balance)}</div></div>
+            <div class="value-card"><div class="value-label">${rlt('opening_balance')}</div><div class="value-number">${formatCurrency(data.opening_balance)}</div></div>
+            <div class="value-card"><div class="value-label">${rl('Total Debit', 'कुल डेबिट')}</div><div class="value-number">${formatCurrency(data.total_debit)}</div></div>
+            <div class="value-card"><div class="value-label">${rl('Total Credit', 'कुल क्रेडिट')}</div><div class="value-number">${formatCurrency(data.total_credit)}</div></div>
+            <div class="value-card"><div class="value-label">${rlt('closing_balance')}</div><div class="value-number">${formatCurrency(data.closing_balance)}</div></div>
         </div>
         ${data.pdc && (data.pdc.received_held || data.pdc.issued_held) ? `
         <div class="notes-section">
@@ -249,14 +352,14 @@ function buildStatementHtml(data, settings) {
             ${data.pdc.issued_held ? ` Issued ${formatCurrency(data.pdc.issued_held)} (${data.pdc.issued_held_count} cheque(s));` : ''}
         </div>` : ''}
         <table>
-            <thead><tr><th>Date</th><th>Ref No</th><th>Type</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th></tr></thead>
+            <thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
             <tbody>
-                <tr><td colspan="6">Opening Balance</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>
-                ${data.entries.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${e.reference_type}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td></tr>`).join('')}
+                <tr><td colspan="6">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>
+                ${data.entries.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td></tr>`).join('')}
             </tbody>
-            <tfoot><tr><td colspan="4"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td></tr></tfoot>
+            <tfoot><tr><td colspan="4"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td></tr></tfoot>
         </table>
-        <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
+        <div class="footer"><div>${rl('Printed', 'प्रिन्ट')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
 }
 
@@ -348,21 +451,38 @@ async function exportStatementPDF() {
     if (!data) { showToast('Generate a statement first', 'warning'); return; }
     const settings = await getSettingsCached();
 
+    // The PDF gets its own style block so the Devanagari stack travels with it.
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>${escapeHtml(data.party.name)} — Statement of Account</h2><p>Period: ${data.from_date} to ${data.to_date}</p></div>
-        <table><thead><tr><th>Date</th><th>Ref</th><th>Type</th><th>Particulars</th><th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th></tr></thead>
+        <style>
+            @page { size: A4; margin: 15mm 12mm 20mm 12mm; }
+            body { font-family: 'Noto Sans Devanagari','Kalimati','Mukta','Nirmala UI','Mangal','Segoe UI','Helvetica Neue',Arial,sans-serif; font-size: 10pt; color: #222; }
+            table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+            thead { display: table-header-group; }
+            th, td { padding: 5px 8px; border: 1px solid #bbb; text-align: left; }
+            th { background: #1a5276; color: #fff; }
+            .text-right { text-align: right; }
+            .header { text-align: center; margin-bottom: 14px; border-bottom: 3px double #1a5276; padding-bottom: 10px; }
+            .header h1 { font-size: 20pt; margin: 0; color: #1a5276; }
+            .header h2 { font-size: 13pt; margin: 6px 0 2px; }
+            .footer { display: flex; justify-content: space-between; margin-top: 18px; font-size: 9pt; }
+            tfoot tr td { background: #eef2f7; font-weight: 700; }
+        </style>
+        <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>${escapeHtml(data.party.name)} — ${rl('Statement of Account', 'खाताको विवरण')}</h2><p>${rlt('period')}: ${data.from_date} → ${data.to_date}</p></div>
+        <table><thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
         <tbody>
-            <tr><td colspan="6">Opening Balance</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>
-            ${data.entries.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${e.reference_type}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td></tr>`).join('')}
+            <tr><td colspan="6">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td></tr>
+            ${data.entries.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td></tr>`).join('')}
         </tbody>
-        <tfoot><tr><td colspan="4"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td></tr></tfoot></table>
-        <div class="footer"><div>Generated: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
+        <tfoot><tr><td colspan="4"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td></tr></tfoot></table>
+        <div class="footer"><div>${rl('Generated', 'बनाइएको मिति')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
     await window.api.printToPDF({ html });
 }
 
 // Globals
 window.renderStatements = renderStatements;
+window.renderStatementResult = renderStatementResult;
+window.statementToggleDetail = statementToggleDetail;
 window.showPartyStatement = showPartyStatement;
 window.showCustomerStatements = showCustomerStatements;
 window.showSupplierStatements = showSupplierStatements;

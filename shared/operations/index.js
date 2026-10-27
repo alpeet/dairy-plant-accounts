@@ -81,7 +81,8 @@ const {
 } = require('./vehicle');
 const {
     listOtherExpenses, getOtherExpense, saveOtherExpense,
-    deleteOtherExpense, getExpenseCategories, getExpensesSummary
+    deleteOtherExpense, getExpenseCategories, getExpensesSummary,
+    isIncomeCategory
 } = require('./expenses');
 const { logAudit, getAuditLogs } = require('./audit');
 const { getFreshStartStatus, getFreshStartWipePlan, setSecurityCode, performCleanup, verifyBackupFile, FRESH_START_KEEP_TABLES } = require('./data_cleanup');
@@ -247,6 +248,7 @@ module.exports = {
     // Other Expenses
     listOtherExpenses, getOtherExpense, saveOtherExpense,
     deleteOtherExpense, getExpenseCategories, getExpensesSummary,
+    isIncomeCategory,
 
     // Financial Reports
     getProfitLoss, getProfitLossByMonth, getStockStatement, getEnhancedDaybook,

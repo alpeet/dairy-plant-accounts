@@ -271,6 +271,7 @@ async function showDayBook(fromDate = '', toDate = '') {
                 <button class="btn btn-secondary btn-sm" onclick="document.getElementById('dbFrom').value='';document.getElementById('dbTo').value='${preset.to}';applyDayBook()">Today</button>
                 <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('this_month');document.getElementById('dbFrom').value=p.from;document.getElementById('dbTo').value=p.to;applyDayBook()">This Month</button>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Total Entries</span><span class="value" style="font-size:20px">${data.count || 0}</span></div>
@@ -355,6 +356,7 @@ async function showSalesRegister(fromDate = '', toDate = '', partyId = '', statu
                 </select>
             </div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applySalesRegister()">Generate</button></div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Invoices</span><span class="value" style="font-size:20px">${data.count}</span></div>
@@ -423,6 +425,7 @@ async function showPurchaseRegister(fromDate = '', toDate = '', partyId = '', st
                 </select>
             </div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyPurchaseRegister()">Generate</button></div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-primary" style="margin:0;padding:12px"><span class="label">Bills</span><span class="value" style="font-size:20px">${data.count}</span></div>

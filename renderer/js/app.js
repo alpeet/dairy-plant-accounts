@@ -186,7 +186,70 @@ function navigateTo(page) {
         // Render module
         pageModules[page]();
     }
+
+    // Every screen gets the report-language control next to its Print / PDF
+    // buttons, so the language that will be used for the printed document is
+    // visible exactly where the document is produced.
+    mountTopLangPicker();
 }
+
+/**
+ * Put the three-way report-language selector in the page toolbar.
+ * Modules overwrite #topActions asynchronously as they render, so the
+ * observer below re-mounts it whenever the toolbar is rebuilt.
+ */
+function mountTopLangPicker() {
+    const bar = document.getElementById('topActions');
+    if (!bar) return;
+    if (bar.querySelector('.report-lang-picker')) {
+        if (bar.querySelector('.top-actions-lang') && !bar.querySelector('.btn')) {
+            // The module cleared its buttons, so this screen has no print or
+            // export of its own — the top-bar selector is enough there.
+            bar.innerHTML = '';
+            return;
+        }
+        if (typeof window.syncReportLangSelectors === 'function') window.syncReportLangSelectors();
+        return;
+    }
+    if (typeof window.reportLangSelector !== 'function') return;
+    // Only next to real page actions (Print / PDF / New …).
+    if (!bar.querySelector('.btn')) return;
+    const holder = document.createElement('span');
+    holder.className = 'top-actions-lang';
+    holder.innerHTML = window.reportLangSelector('topActionsLang');
+    bar.appendChild(holder.firstElementChild);
+    if (typeof window.syncReportLangSelectors === 'function') window.syncReportLangSelectors();
+}
+
+window.mountTopLangPicker = mountTopLangPicker;
+
+/**
+ * Redraw the screen the user is looking at after a language change.
+ * The report screens that manage their own re-render register a subscriber in
+ * report-lang.js, so they are skipped here to avoid drawing twice.
+ */
+window.rerenderActivePage = function () {
+    const selfRendering = ['monthly-report', 'profit-loss', 'receivable-payable', 'statements'];
+    if (!currentPage || selfRendering.indexOf(currentPage) !== -1) return;
+    if (typeof pageModules !== 'undefined' && pageModules[currentPage]) {
+        pageModules[currentPage]();
+    }
+};
+
+(function watchTopActions() {
+    function start() {
+        const bar = document.getElementById('topActions');
+        if (!bar) return;
+        if (window.__topActionsLangObserver) window.__topActionsLangObserver.disconnect();
+        window.__topActionsLangObserver = new MutationObserver(function () {
+            mountTopLangPicker();
+        });
+        window.__topActionsLangObserver.observe(bar, { childList: true });
+        mountTopLangPicker();
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+})();
 
 // ============================================================
 // Collapsible Nav Groups

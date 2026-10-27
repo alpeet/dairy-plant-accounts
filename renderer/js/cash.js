@@ -64,6 +64,7 @@ async function showCashCollection() {
                 <label>&nbsp;</label>
                 <button class="btn btn-primary btn-sm" onclick="refreshCashCollection()">Generate</button>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
             <div class="summary-card card-success" style="margin:0;padding:12px">
@@ -307,6 +308,7 @@ async function showDenominationCount() {
                 <label>&nbsp;</label>
                 <button class="btn btn-primary btn-sm" onclick="refreshDenomination()">Generate</button>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="table-container">
             <table>

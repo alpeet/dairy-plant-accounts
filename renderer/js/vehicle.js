@@ -32,6 +32,7 @@ async function renderVehicle() {
             <div class="form-group"><label>Vehicle</label><input type="text" class="form-control" id="veSearch" placeholder="Vehicle name..." value="${escapeHtml(filt.search || '')}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshVehicle()">Search</button></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-info btn-sm" onclick="printVehicle()">🖨 Print</button></div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="table-container">
             <table>

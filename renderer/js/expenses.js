@@ -4,6 +4,16 @@
  * Manages all other business expenses with add/edit/delete, print & PDF.
  */
 
+/**
+ * Rows with an income category (rent received, scrap sale) are income, not
+ * expense. The shared summary already separates them; the screen must too,
+ * otherwise the printed total would mix money in with money out.
+ */
+function _isIncomeCategory(category) {
+    const c = String(category || '').trim().toUpperCase();
+    return ['INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED'].indexOf(c) !== -1;
+}
+
 async function renderExpenses() {
     const container = document.getElementById('page-expenses');
     document.getElementById('topActions').innerHTML = `
@@ -25,6 +35,10 @@ async function renderExpenses() {
     const usedCategories = categories.filter(c => c.used);
     window._expenseCategories = categories;
     const summary = summaryResult.success ? summaryResult.data : { count: 0, total: 0, by_category: [] };
+    const expenseRows = expenses.filter(e => !_isIncomeCategory(e.category));
+    const incomeRows = expenses.filter(e => _isIncomeCategory(e.category));
+    const listedExpenseTotal = expenseRows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const listedIncomeTotal = incomeRows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
 
     container.innerHTML = `
         <div class="summary-cards" style="grid-template-columns:1fr 1fr 1fr 1fr">
@@ -46,10 +60,16 @@ async function renderExpenses() {
             <div class="summary-card card-primary" style="margin:0;padding:12px">
                 <span class="label">Actions</span>
                 <div style="margin-top:6px">
-                    <button class="btn btn-info btn-sm" onclick="printExpenses()">🖨 Print</button>
-                    <button class="btn btn-primary btn-sm" onclick="exportExpensesPDF()">📄 PDF</button>
+                    <button class="btn btn-info btn-sm" onclick="printExpenses()">🖨 ${rl('Print', 'प्रिन्ट')}</button>
+                    <button class="btn btn-primary btn-sm" onclick="exportExpensesPDF()">📄 ${rl('PDF', 'पी.डी.एफ.')}</button>
                 </div>
             </div>
+            ${incomeRows.length > 0 || Number(summary.income_total) > 0 ? `
+            <div class="summary-card card-success" style="margin:0;padding:12px">
+                <span class="label">${rl('Other Income (not an expense)', 'अन्य आम्दानी (खर्च होइन)')}</span>
+                <span class="value" style="font-size:22px">${formatCurrency(summary.income_total || listedIncomeTotal)}</span>
+                <span class="sub">${rl('Rent received and similar — kept out of the expense total', 'घरभाडा आम्दानी आदि — खर्चको जोडमा पर्दैन')}</span>
+            </div>` : ''}
         </div>
         <div class="filter-bar">
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="exFrom" value="${filt.from || ''}"></div>
@@ -61,6 +81,7 @@ async function renderExpenses() {
                 </select>
             </div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshExpenses()">Search</button></div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="table-container">
             <table>
@@ -69,7 +90,7 @@ async function renderExpenses() {
                     ${expenses.map(e => `
                         <tr>
                             <td>${formatDate(e.date)}</td>
-                            <td><span class="badge badge-info">${escapeHtml(e.category)}</span></td>
+                            <td><span class="badge ${_isIncomeCategory(e.category) ? 'badge-success' : 'badge-info'}">${escapeHtml(e.category)}</span></td>
                             <td><strong>${escapeHtml(e.expense_head)}</strong></td>
                             <td>${escapeHtml(e.description || '')}</td>
                             <td>${escapeHtml(e.paid_to || '')}</td>
@@ -78,13 +99,14 @@ async function renderExpenses() {
                             <td>${escapeHtml(e.reference_no || '')}</td>
                             <td class="actions">
                                 <button class="btn btn-info btn-sm" onclick="editExpense(${e.id})">✏️</button>
-                                <button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})">🗑</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteExpenseEntry(${e.id})">🗑</button>
                             </td>
                         </tr>
                     `).join('')}
                     ${expenses.length === 0 ? '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text-light)">No expenses found</td></tr>' : ''}
                 </tbody>
-                ${expenses.length > 0 ? `<tfoot><tr><td colspan="5"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(expenses.reduce((s,e) => s + e.amount, 0))}</strong></td><td colspan="3"></td></tr></tfoot>` : ''}
+                ${expenseRows.length > 0 ? `<tfoot><tr><td colspan="5"><strong>${rl('Total Expenses', 'कुल खर्च')}</strong></td><td class="text-right"><strong>${formatCurrency(listedExpenseTotal)}</strong></td><td colspan="3"></td></tr></tfoot>` : ''}
+                ${incomeRows.length > 0 ? `<tfoot><tr><td colspan="5"><strong>${rl('Total Other Income', 'कुल अन्य आम्दानी')}</strong></td><td class="text-right"><strong>${formatCurrency(listedIncomeTotal)}</strong></td><td colspan="3">${rl('income — excluded from expenses above', 'आम्दानी — माथिको खर्चमा समावेश छैन')}</td></tr></tfoot>` : ''}
             </table>
         </div>
         ${summary.by_category.length > 0 ? `
@@ -194,11 +216,14 @@ async function printExpenses() {
     if (data.length === 0) { showToast('No data', 'warning'); return; }
     const settings = await getSettingsCached();
 
+    const expensesOnly = data.filter(e => !_isIncomeCategory(e.category));
+    const incomeOnly = data.filter(e => _isIncomeCategory(e.category));
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Expenses Register</h2></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>${rl('Expenses Register', 'खर्च रजिस्टर')}</h2></div>
         <table class="compact"><thead><tr><th>Date</th><th>Category</th><th>Head</th><th>Description</th><th>Paid To</th><th class="text-right">Amount</th></tr></thead>
         <tbody>${data.map(e => `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.category)}</td><td>${escapeHtml(e.expense_head)}</td><td>${escapeHtml(e.description||'')}</td><td>${escapeHtml(e.paid_to||'')}</td><td class="text-right">${formatCurrency(e.amount)}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td colspan="5"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(data.reduce((s,e) => s + e.amount, 0))}</strong></td></tr></tfoot></table>
+        <tfoot><tr><td colspan="5"><strong>${rl('Total Expenses', 'कुल खर्च')}</strong></td><td class="text-right"><strong>${formatCurrency(expensesOnly.reduce((s,e) => s + e.amount, 0))}</strong></td></tr>
+        ${incomeOnly.length ? `<tr><td colspan="5"><strong>${rl('Total Other Income', 'कुल अन्य आम्दानी')}</strong></td><td class="text-right"><strong>${formatCurrency(incomeOnly.reduce((s,e) => s + e.amount, 0))}</strong></td></tr>` : ''}</tfoot></table>
         <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
     `;
     printHTML(html);

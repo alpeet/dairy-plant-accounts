@@ -57,6 +57,7 @@ async function renderCompanyLedger() {
                         <button class="btn btn-secondary btn-sm" onclick="companyLedgerQuick('month')">This Month</button>
                     </span></div>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div id="clBody"><div class="loading" style="text-align:center;padding:40px">Loading company ledger…</div></div>
     `;

@@ -58,23 +58,41 @@ const MR_SUMMARY_ORDER = [
     ['loan_receivable', 0], ['loan_payable', 0], ['prepaid_rent', 1]
 ];
 
+/**
+ * The language the whole app is showing reports in — the shared preference
+ * (report-lang.js), not a Monthly-Report-only flag. Before this, choosing
+ * नेपाली on the Summary tab left the Income Heads / Expense Heads tabs in
+ * English because each tab read its own copy of the state.
+ */
+function _mrLang() {
+    return (typeof getReportLang === 'function') ? getReportLang() : (_mrMonth.lang || 'en');
+}
+
 /** Label for a report line in the currently chosen language. */
 function _mrLbl(key, fallback) {
     const pair = MR_LABELS[key];
     if (!pair) return fallback || key;
-    if (_mrMonth.lang === 'np') return pair[1];
-    if (_mrMonth.lang === 'both') return `${pair[0]} / ${pair[1]}`;
+    const lang = _mrLang();
+    if (lang === 'np') return pair[1];
+    if (lang === 'both') return `${pair[0]} / ${pair[1]}`;
     return pair[0];
 }
 
 function _mrLangBtn(key, label) {
-    return `<button class="btn btn-sm ${_mrMonth.lang === key ? 'btn-primary' : 'btn-secondary'}"
+    return `<button class="btn btn-sm ${_mrLang() === key ? 'btn-primary' : 'btn-secondary'}"
         onclick="mrSetLang('${key}')">${label}</button>`;
 }
 
+/**
+ * Language switch. Re-renders the filter bar too — otherwise the buttons keep
+ * showing the old selection and the switch looks broken.
+ */
 function mrSetLang(lang) {
+    // One preference for the whole app: the subscriber registered in
+    // renderMonthlyReport() re-renders the filters and the visible tab.
+    if (typeof setReportLang === 'function') { setReportLang(lang); return; }
     _mrMonth.lang = (lang === 'np' || lang === 'both') ? lang : 'en';
-    try { localStorage.setItem('mr_lang', _mrMonth.lang); } catch (e) { /* storage unavailable */ }
+    _mrRenderFilters();
     if (_mrMonth.drill) { mrRenderDrill(); } else { _mrRenderTabs(); mrRenderBody(); }
 }
 
@@ -141,10 +159,15 @@ async function renderMonthlyReport() {
     _mrMonthDefaults();
     _mrMonth.data = null;
     _mrMonth.drill = null;
-    try {
-        const saved = localStorage.getItem('mr_lang');
-        if (saved) _mrMonth.lang = saved;
-    } catch (e) { /* storage unavailable */ }
+    _mrMonth.lang = _mrLang();
+    // A language picked on another screen (Statements, P&L, …) must show up here.
+    if (typeof onReportLangChange === 'function') {
+        onReportLangChange(() => {
+            _mrMonth.lang = _mrLang();
+            _mrRenderFilters();
+            if (_mrMonth.drill) { mrRenderDrill(); } else { _mrRenderTabs(); mrRenderBody(); }
+        }, 'monthly-report');
+    }
     document.getElementById('topActions').innerHTML = `
         <button class="btn btn-secondary btn-sm" onclick="mrExportExcel()">📊 Export Excel</button>
         <button class="btn btn-secondary btn-sm" onclick="mrMonthlyPdf()">📄 PDF</button>
@@ -174,34 +197,34 @@ function _mrRenderFilters() {
 
     hosts.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="filter-bar" style="margin:0;flex-wrap:wrap">
-            <div class="form-group"><label>Period</label>
+            <div class="form-group"><label>${rlt('period')}</label>
                 <select class="form-control" id="mrMode" onchange="mrSetMode(this.value)">
-                    <option value="month"${sel('month', _mrMonth.mode)}>One BS Month</option>
-                    <option value="range"${sel('range', _mrMonth.mode)}>Custom BS Range</option>
-                    <option value="mtd"${sel('mtd', _mrMonth.mode)}>Month to Date</option>
-                    <option value="last_month"${sel('last_month', _mrMonth.mode)}>Previous Month</option>
-                    <option value="ytd"${sel('ytd', _mrMonth.mode)}>Year to Date</option>
-                    <option value="all"${sel('all', _mrMonth.mode)}>All History</option>
+                    <option value="month"${sel('month', _mrMonth.mode)}>${rl('One BS Month', 'एक बि.स. महिना')}</option>
+                    <option value="range"${sel('range', _mrMonth.mode)}>${rl('Custom BS Range', 'आफ्नै बि.स. अवधि')}</option>
+                    <option value="mtd"${sel('mtd', _mrMonth.mode)}>${rl('Month to Date', 'महिनाको सुरुदेखि आजसम्म')}</option>
+                    <option value="last_month"${sel('last_month', _mrMonth.mode)}>${rl('Previous Month', 'अघिल्लो महिना')}</option>
+                    <option value="ytd"${sel('ytd', _mrMonth.mode)}>${rl('Year to Date', 'वर्षको सुरुदेखि आजसम्म')}</option>
+                    <option value="all"${sel('all', _mrMonth.mode)}>${rl('All History', 'सम्पूर्ण इतिहास')}</option>
                 </select></div>
             <div class="form-group" ${_mrMonth.mode === 'month' || _mrMonth.mode === 'last_month' ? '' : 'style="display:none"'}>
-                <label>BS Month</label>
+                <label>${rl('BS Month', 'बि.स. महिना')}</label>
                 <div style="display:flex;gap:6px">
                     <select class="form-control" id="mrYear" onchange="mrPickMonth()">${years.map(v => `<option value="${v}"${sel(v, _mrMonth.month.slice(0, 4))}>${v} BS</option>`).join('')}</select>
                     <select class="form-control" id="mrMonthSel" onchange="mrPickMonth()">${monthOpts}</select>
                 </div>
             </div>
             <div class="form-group" ${_mrMonth.mode === 'range' ? '' : 'style="display:none"'}>
-                <label>Start (BS)</label><input type="date" class="form-control" id="mrFrom" value="${_mrMonth.from}"></div>
+                <label>${rl('Start (BS)', 'सुरु (बि.स.)')}</label><input type="date" class="form-control" id="mrFrom" value="${_mrMonth.from}"></div>
             <div class="form-group" ${_mrMonth.mode === 'range' ? '' : 'style="display:none"'}>
-                <label>End (BS)</label><input type="date" class="form-control" id="mrTo" value="${_mrMonth.to}"></div>
-            <div class="form-group"><label>Language / भाषा</label>
+                <label>${rl('End (BS)', 'अन्त्य (बि.स.)')}</label><input type="date" class="form-control" id="mrTo" value="${_mrMonth.to}"></div>
+            <div class="form-group"><label>${rlt('language')} / भाषा</label>
                 <div style="display:flex;gap:4px">
                     ${_mrLangBtn('en', 'English')}
                     ${_mrLangBtn('np', 'नेपाली')}
-                    ${_mrLangBtn('both', 'Both')}
+                    ${_mrLangBtn('both', rl('Both', 'दुवै'))}
                 </div></div>
             <div class="form-group"><label>&nbsp;</label>
-                <button class="btn btn-primary btn-sm" onclick="mrApply()">📊 Generate Report</button></div>
+                <button class="btn btn-primary btn-sm" onclick="mrApply()">📊 ${rl('Generate Report', 'प्रतिवेदन बनाउनुहोस्')}</button></div>
             <div class="form-group" style="flex:1"><label>&nbsp;</label>
                 <div id="mrRangeHint" style="font-size:12px;color:var(--text-light);padding-top:6px"></div></div>
         </div></div>
@@ -216,7 +239,7 @@ function _mrShowRangeHint() {
     if (!hint) return;
     const r = _mrResolveRange();
     const ad = (window.NepaliDate && NepaliDate.bsToAD) ? NepaliDate.bsToAD(r.to_date) : '';
-    hint.textContent = `Period: ${r.from_date} → ${r.to_date} (BS)${ad ? ` · ends AD ${ad}` : ''}`;
+    hint.textContent = `${rl('Period', 'अवधि')}: ${r.from_date} → ${r.to_date} (BS)${ad ? ` · ${rl('ends AD', 'ए.डि')} ${ad}` : ''}`;
 }
 
 function mrSetMode(mode) {
@@ -260,11 +283,11 @@ function _mrRenderTabs() {
     if (!tabs) return;
     const btn = (key, label) => `<button class="btn btn-sm ${_mrMonth.tab === key ? 'btn-primary' : 'btn-secondary'}" onclick="mrMonthlySetTab('${key}')">${label}</button>`;
     tabs.innerHTML = `<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
-        ${btn('summary', '📋 Summary')}
-        ${btn('income', '💵 Income Heads')}
-        ${btn('expense', '🧾 Expense Heads')}
-        ${btn('monthly', '🗓 Monthly Closing')}
-        ${btn('reconcile', '✅ Reconciliation')}
+        ${btn('summary', '📋 ' + rlt('summary'))}
+        ${btn('income', '💵 ' + rlt('income_heads'))}
+        ${btn('expense', '🧾 ' + rlt('expense_heads'))}
+        ${btn('monthly', '🗓 ' + rlt('monthly_closing'))}
+        ${btn('reconcile', '✅ ' + rlt('reconciliation'))}
     </div>`;
 }
 
@@ -304,26 +327,27 @@ function _mrSummaryView(d) {
     const s = d.summary;
     // Every line is clickable: it opens the records behind that figure.
     const row = (key, strong) => `<tr class="mr-line${strong ? ' mr-strong' : ''}" onclick="mrOpenDrill('${key}')"
-            title="Click to see the records and calculation behind this figure">
+            title="${escapeHtml(rl('Click to see the records and calculation behind this figure', 'यो रकम पछाडिका रेकर्ड र हिसाब हेर्न क्लिक गर्नुहोस्'))}">
         <td><span class="mr-line-open">🔍</span> ${escapeHtml(_mrLbl(key))}</td>
         <td class="mr-amount">${_mrMoney(s[key])}</td></tr>`;
     const gaps = d.notes.gaps.length
         ? `<div class="card" style="margin-top:14px;border-left:4px solid var(--warning,#f59e0b);padding:10px 14px">
-             <strong>⚠️ Data gaps — read before relying on these numbers</strong>
+             <strong>⚠️ ${rl('Data gaps — read before relying on these numbers', 'तथ्यांक अभाव — यो आँकडामा निर्भर हुनु अघि पढ्नुहोस्')}</strong>
              <ul style="margin:8px 0 0 18px">${d.notes.gaps.map(g => `<li>${escapeHtml(g)}</li>`).join('')}</ul>
            </div>` : '';
     const notes = d.notes.notes.length
         ? `<div class="card" style="margin-top:14px;padding:10px 14px">
-             <strong>Notes</strong>
+             <strong>${rl('Notes', 'टिप्पणी')}</strong>
              <ul style="margin:8px 0 0 18px">${d.notes.notes.map(g => `<li>${escapeHtml(g)}</li>`).join('')}</ul>
            </div>` : '';
     return `
-        ${_mrHead(`${escapeHtml(d.business.name)} · Monthly Report · ${d.from_date} → ${d.to_date} (BS)`
+        ${_mrHead(`${escapeHtml(d.business.name)} · ${rl('Monthly Report', 'मासिक प्रतिवेदन')} · ${d.from_date} → ${d.to_date} (BS)`
             + `${d.from_ad ? ` · AD ${d.from_ad} → ${d.to_ad}` : ''}
-            · ${d.month_count} month(s) · documents up to ${d.data_window.latest_document_date || '—'}`)}
+            · ${d.month_count} ${rl('month(s)', 'महिना')} · ${rl('documents up to', 'कागजात')} ${d.data_window.latest_document_date || '—'}`)}
         <div class="card" style="padding:0">
             <table class="data-table">
-                <thead><tr><th>Monthly Summary</th><th style="text-align:right">Amount (Rs)</th></tr></thead>
+                <thead><tr><th>${rl('Monthly Summary', 'मासिक सारांश')}</th>
+                    <th style="text-align:right">${rlt('amount')}</th></tr></thead>
                 <tbody>
                     ${MR_SUMMARY_ORDER.map(([key, strong]) => row(key, strong)).join('')}
                 </tbody>
@@ -332,25 +356,69 @@ function _mrSummaryView(d) {
         ${gaps}${notes}`;
 }
 
+/**
+ * Income/expense head names are stored data (Milk Sales, Packaging, …). They
+ * are translated for display only — the drill-down still filters on the
+ * original stored name, and an unknown head is shown untouched rather than
+ * guessed at.
+ */
+const MR_HEAD_NP = {
+    'Milk Sales': 'दूध बिक्री',
+    'Paneer Sales': 'पनिर बिक्री',
+    'Cream Sales': 'क्रिम बिक्री',
+    'Nauni / Butter Sales': 'नौनी / मक्खन बिक्री',
+    'Ghee Sales': 'घिउ बिक्री',
+    'Curd Sales': 'दही बिक्री',
+    'Yogurt Sales': 'दही बिक्री',
+    'Milk': 'दूध',
+    'Salaries and Wages': 'तलब र भत्ता',
+    'Salary': 'तलब',
+    'Water': 'पानी',
+    'Boiler Fuel / Firewood': 'बैलर इन्धन / इमारत',
+    'Transportation and Collection': 'यातायात र सङ्कलन',
+    'Packaging': 'प्याकेजिङ',
+    'Repairs and Maintenance': 'मर्मत र मर्मत',
+    'Cleaning Supplies': 'सफाई सामग्री',
+    'Office Expenses': 'कार्यालय खर्च',
+    'Other Operating Expenses': 'अन्य सञ्चालन खर्च',
+    'Factory Rent': 'कारखाना भाडा',
+    'other expenses': 'अन्य खर्च',
+    'petty cash': 'सानो नगद',
+    'salary': 'तलब',
+    'vehicle expenses': 'सवारी खर्च',
+    'Electricity': 'बिजुली',
+    'Rent': 'घरभाडा',
+    'Telephone / Internet': 'टेलिफोन / इन्टरनेट',
+    'Fuel': 'इन्धन',
+    'Bank Charges': 'बैंक शुल्क',
+    'Miscellaneous': 'विविध'
+};
+
+function _mrHeadLabel(name) {
+    const np = MR_HEAD_NP[name];
+    return np ? rl(name, np) : name;
+}
+
 function _mrIncomeView(d) {
     const rows = d.income_heads.map(h => `<tr class="mr-line" onclick="mrOpenDrill('total_income', {category: '${escapeHtml(h.head)}'})"
             title="Click to see the invoices behind this income head">
-        <td><span class="mr-line-open">🔍</span> ${escapeHtml(h.head)}</td>
+        <td><span class="mr-line-open">🔍</span> ${escapeHtml(_mrHeadLabel(h.head))}</td>
         <td class="mr-amount">${_mrMoney(h.amount)}</td>
         <td style="text-align:right">${h.count || ''}</td>
         <td style="text-align:right">${h.share_percent == null ? '' : h.share_percent + '%'}</td></tr>`).join('');
     return `
-        ${_mrHead(`Income heads · ${d.from_date} → ${d.to_date} (BS)`)}
+        ${_mrHead(`${rlt('income_heads')} · ${d.from_date} → ${d.to_date} (BS)`) }
         <div class="card" style="padding:0"><table class="data-table">
-            <thead><tr><th>Income Head</th><th style="text-align:right">Amount (Rs)</th><th style="text-align:right">Lines</th><th style="text-align:right">% of Sales</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="4">No income in this period.</td></tr>'}
-            <tr style="font-weight:600;background:#f8fafc"><td>Total (heads)</td>
+            <thead><tr><th>${rl('Income Head', 'आमदानी शीर्षक')}</th><th style="text-align:right">${rlt('amount')}</th>
+                <th style="text-align:right">${rlt('lines')}</th><th style="text-align:right">${rlt('percent_of_sales')}</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="4">${rl('No income in this period.', 'यो अवधिमा आमदानी छैन।')}</td></tr>`}
+            <tr style="font-weight:600;background:#f8fafc"><td>${rl('Total (heads)', 'शीर्षक कुल')}</td>
                 <td style="text-align:right">${_mrMoney(d.activity.income_heads_total)}</td><td colspan="2"></td></tr>
-            <tr><td>Sales revenue (invoices, excl. opening balances)</td>
+            <tr><td>${rl('Sales revenue (invoices, excl. opening balances)', 'बिक्री आय (बिल, सुरुको मौज्दात बाहेक)')}</td>
                 <td style="text-align:right">${_mrMoney(d.summary.sales_revenue)}</td><td colspan="2"></td></tr>
-            ${Math.abs(d.activity.income_unexplained) >= 0.01 ? `<tr><td>Difference (rounding / free-typed invoice lines)</td>
+            ${Math.abs(d.activity.income_unexplained) >= 0.01 ? `<tr><td>${rl('Difference (rounding / free-typed invoice lines)', 'भिन्नता (राउन्डिङ / स्वतः लेखिएको बिल लाइन)')}</td>
                 <td style="text-align:right">${_mrMoney(d.activity.income_unexplained)}</td><td colspan="2"></td></tr>` : ''}
-            <tr><td>Opening-balance documents (brought-forward receivables, NOT income)</td>
+            <tr><td>${rl('Opening-balance documents (brought-forward receivables, NOT income)', 'सुरुको मौज्दातका कागजात (अगाडि बढेको उठाउनबाँकी, आमदानी होइन)')}</td>
                 <td style="text-align:right">${_mrMoney(d.activity.opening_balance_documents)}</td><td colspan="2"></td></tr>
             </tbody></table></div>`;
 }
@@ -358,36 +426,42 @@ function _mrIncomeView(d) {
 function _mrExpenseView(d) {
     const rows = d.expense_heads.map(h => `<tr class="mr-line" onclick="mrOpenDrill('total_operating_expenses', {category: '${escapeHtml(h.head)}'})"
             title="Click to see the vouchers behind this expense head">
-        <td><span class="mr-line-open">🔍</span> ${escapeHtml(h.head)}</td>
+        <td><span class="mr-line-open">🔍</span> ${escapeHtml(_mrHeadLabel(h.head))}</td>
         <td class="mr-amount">${_mrMoney(h.amount)}</td>
         <td style="text-align:right">${h.count || ''}</td></tr>`).join('');
     const src = d.activity.expense_sources || {};
     const srcRows = Object.entries(src).map(([k, v]) =>
-        `<tr><td>${escapeHtml(k.replace(/_/g, ' '))}</td><td style="text-align:right">${_mrMoney(v)}</td></tr>`).join('');
+        `<tr><td>${escapeHtml(_mrHeadLabel(k.replace(/_/g, ' ')))}</td><td style="text-align:right">${_mrMoney(v)}</td></tr>`).join('');
     return `
-        ${_mrHead(`Expense heads · ${d.from_date} → ${d.to_date} (BS)`)}
+        ${_mrHead(`${rlt('expense_heads')} · ${d.from_date} → ${d.to_date} (BS)`)}
         <div class="card" style="padding:0"><table class="data-table">
-            <thead><tr><th>Expense Head</th><th style="text-align:right">Amount (Rs)</th><th style="text-align:right">Vouchers</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="3">No operating expenses in this period.</td></tr>'}
-            <tr style="font-weight:600;background:#f8fafc"><td>Total Operating Expenses</td>
+            <thead><tr><th>${rl('Expense Head', 'खर्च शीर्षक')}</th><th style="text-align:right">${rlt('amount')}</th>
+                <th style="text-align:right">${rlt('vouchers')}</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="3">${rl('No operating expenses in this period.', 'यो अवधिमा सञ्चालन खर्च छैन।')}</td></tr>`}
+            <tr style="font-weight:600;background:#f8fafc"><td>${rlt('operating_expenses')}</td>
                 <td style="text-align:right">${_mrMoney(d.activity.operating_expenses)}</td><td></td></tr>
-            <tr><td>Cost of Goods Sold (milk + purchases)</td>
+            <tr><td>${rl('Cost of Goods Sold (milk + purchases)', 'बिक्री भएका सामानको लागत (दूध + खरिद)')}</td>
                 <td style="text-align:right">${_mrMoney(d.activity.cogs)}</td><td></td></tr>
-            <tr style="font-weight:600;background:#f8fafc"><td>Total Expenses</td>
+            <tr style="font-weight:600;background:#f8fafc"><td>${rlt('total_expenses')}</td>
                 <td style="text-align:right">${_mrMoney(d.activity.total_expenses)}</td><td></td></tr>
             </tbody></table></div>
         <div class="card" style="padding:0;margin-top:14px"><table class="data-table">
-            <thead><tr><th>Expense source (each recognised once)</th><th style="text-align:right">Amount (Rs)</th></tr></thead>
+            <thead><tr><th>${rl('Expense source (each recognised once)', 'खर्च स्रोत (प्रत्येक एकपटक मात्र)')}</th>
+                <th style="text-align:right">${rlt('amount')}</th></tr></thead>
             <tbody>${srcRows}</tbody></table></div>
         <div class="card" style="margin-top:14px;padding:10px 14px;font-size:12px">
-            Loan principal repayments, cash transfers, supplier payable settlements and advances are NOT expenses,
-            and a purchase already carried through Cost of Goods Sold is never expensed a second time.
+            ${rl('Loan principal repayments, cash transfers, supplier payable settlements and advances are NOT expenses, and a purchase already carried through Cost of Goods Sold is never expensed a second time.',
+                'ऋणको मूलधन तिर्नु, नगद स्थानान्तरण, आपूर्तिकर्ताको बाँकी मिलान र अग्रिम रकम खर्च होइनन्, र Cost of Goods Sold मार्फत पहिले नै लिइएको खरिद फेरि खर्च गरिँदैन।')}
         </div>`;
 }
 
 function _mrMonthlyView(d) {
-    const rows = d.months.map(m => `<tr>
-        <td>${escapeHtml(m.label)}</td><td>${m.from_date}</td><td>${m.to_date}</td>
+    // Clicking a month opens that month's own report (period preserved in the picker).
+    const rows = d.months.map(m => {
+        const ym = String(m.from_date || '').slice(0, 7);
+        return `<tr class="mr-line" onclick="mrJumpMonth('${escapeHtml(ym)}')"
+                title="Open ${escapeHtml(m.label)} in the Monthly Report">
+        <td><span class="mr-line-open">🔍</span> ${escapeHtml(m.label)}</td><td>${m.from_date}</td><td>${m.to_date}</td>
         <td style="text-align:right">${_mrMoney(m.opening_cash)}</td>
         <td style="text-align:right">${_mrMoney(m.opening_bank)}</td>
         <td style="text-align:right">${_mrMoney(m.sales_revenue)}</td>
@@ -403,23 +477,37 @@ function _mrMonthlyView(d) {
         <td style="text-align:right">${_mrMoney(m.closing_payables)}</td>
         <td style="text-align:right">${_mrMoney(m.closing_advances)}</td>
         <td style="text-align:right">${_mrMoney(m.closing_prepaid_rent)}</td>
-    </tr>`).join('');
+    </tr>`; }).join('');
     return `
-        ${_mrHead(`Monthly closing · ${d.from_date} → ${d.to_date} (BS) — each month's closing balance is the next month's opening balance`)}
+        ${_mrHead(`${rlt('monthly_closing')} · ${d.from_date} → ${d.to_date} (BS) — ${rl("each month's closing balance is the next month's opening balance", 'हरेक महिनाको अन्तिम मौज्दात अर्को महिनाको सुरुको मौज्दात हो')}`)}
         <div class="card" style="padding:0;overflow:auto"><table class="data-table" style="font-size:12px">
             <thead><tr>
-                <th>Month</th><th>Start</th><th>End</th><th style="text-align:right">Open Cash</th><th style="text-align:right">Open Bank</th>
-                <th style="text-align:right">Sales</th><th style="text-align:right">Other Income</th><th style="text-align:right">COGS</th>
-                <th style="text-align:right">Gross</th><th style="text-align:right">Expenses</th><th style="text-align:right">Net</th>
-                <th style="text-align:right">Close Cash</th><th style="text-align:right">Close Bank</th><th style="text-align:right">Close Inv.</th>
-                <th style="text-align:right">Receivable</th><th style="text-align:right">Payable</th><th style="text-align:right">Advances</th>
-                <th style="text-align:right">Prepaid Rent</th>
+                <th>${rlt('month')}</th><th>${rl('Start', 'सुरु')}</th><th>${rl('End', 'अन्त्य')}</th>
+                <th style="text-align:right">${rl('Open Cash', 'सुरु नगद')}</th><th style="text-align:right">${rl('Open Bank', 'सुरु बैंक')}</th>
+                <th style="text-align:right">${rlt('sales')}</th><th style="text-align:right">${rlt('other_income')}</th>
+                <th style="text-align:right">${rlt('cogs')}</th><th style="text-align:right">${rl('Gross', 'कुल')}</th>
+                <th style="text-align:right">${rl('Expenses', 'खर्च')}</th><th style="text-align:right">${rl('Net', 'खुद')}</th>
+                <th style="text-align:right">${rl('Close Cash', 'अन्तिम नगद')}</th><th style="text-align:right">${rl('Close Bank', 'अन्तिम बैंक')}</th>
+                <th style="text-align:right">${rl('Close Inv.', 'अन्तिम मौज्दात')}</th>
+                <th style="text-align:right">${rl('Receivable', 'उठाउनबाँकी')}</th><th style="text-align:right">${rl('Payable', 'तिर्नबाँकी')}</th>
+                <th style="text-align:right">${rlt('advance')}</th><th style="text-align:right">${rlt('prepaid_rent')}</th>
             </tr></thead>
             <tbody>${rows}</tbody></table></div>
         <div class="card" style="margin-top:14px;padding:10px 14px;font-size:12px">
-            Income and expense columns cover only that month's own transactions — no closing balance is added to a
-            month's income, and the previous month's profit is never carried forward as income.
+            ${rl('Income and expense columns cover only that month\u2019s own transactions — no closing balance is added to a month\u2019s income, and the previous month\u2019s profit is never carried forward as income.',
+                'आमदानी र खर्च स्तम्भले त्यही महिनाको आफ्नै लेनदेन मात्र समेट्छ — कुनै अन्तिम मौज्दात महिनाको आमदानीमा थपिँदैन, र अघिल्लो महिनाको नाफा आमदानीको रूपमा लैजाँदैन।')}
         </div>`;
+}
+
+/** Jump to one month of the closing table (keeps the language and tab). */
+function mrJumpMonth(ym) {
+    if (!/^\d{4}-\d{2}$/.test(String(ym || ''))) return;
+    _mrMonth.mode = 'month';
+    _mrMonth.month = ym;
+    _mrRenderFilters();
+    mrMonthlyLoad();
+    const el = document.querySelector('#page-monthly-report');
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function _mrReconcileView(d) {
@@ -430,13 +518,16 @@ function _mrReconcileView(d) {
         <td style="text-align:right;${c.ok ? '' : 'color:var(--danger);font-weight:600'}">${_mrMoney(c.difference)}</td>
         <td style="font-size:12px">${escapeHtml(c.note || '')}</td>
     </tr>`).join('');
+    const n = d.reconciliation.checks.length;
+    const flagged = d.reconciliation.differences.length;
     return `
         ${_mrHead(d.reconciliation.all_ok
-            ? `Reconciliation · all ${d.reconciliation.checks.length} checks agree`
-            : `Reconciliation · ${d.reconciliation.differences.length} of ${d.reconciliation.checks.length} checks FLAGGED`)}
+            ? `${rlt('reconciliation')} · ${rl(`all ${n} checks agree`, `सबै ${n} जाँच मिल्छ`)}`
+            : `${rlt('reconciliation')} · ${rl(`${flagged} of ${n} checks FLAGGED`, `${n} मध्ये ${flagged} जाँच झन्डा लागेको`)}`)}
         <div class="card" style="padding:0"><table class="data-table" style="font-size:12px">
-            <thead><tr><th>Check</th><th style="text-align:right">Expected</th><th style="text-align:right">Actual</th>
-                <th style="text-align:right">Difference</th><th>Note</th></tr></thead>
+            <thead><tr><th>${rl('Check', 'जाँच')}</th><th style="text-align:right">${rl('Expected', 'अपेक्षित')}</th>
+                <th style="text-align:right">${rl('Actual', 'वास्तविक')}</th>
+                <th style="text-align:right">${rl('Difference', 'भिन्नता')}</th><th>${rl('Note', 'टिप्पणी')}</th></tr></thead>
             <tbody>${rows}</tbody></table></div>`;
 }
 
@@ -505,8 +596,9 @@ function _mrPrintCss(extra) {
 
 /** Nepali labels for report sections when the language is not English. */
 function _mrBilingual(en, np) {
-    if (_mrMonth.lang === 'np') return np;
-    if (_mrMonth.lang === 'both') return `${en} / ${np}`;
+    const lang = _mrLang();
+    if (lang === 'np') return np;
+    if (lang === 'both') return `${en} / ${np}`;
     return en;
 }
 
@@ -519,10 +611,10 @@ function _mrReportHtml(d) {
         `<tr${strong ? ' class="total-row"' : ''}><td>${escapeHtml(_mrLbl(key))}</td>
          <td class="num">${money(s[key])}</td></tr>`).join('');
     const incomeRows = d.income_heads.map(h =>
-        `<tr><td>${escapeHtml(h.head)}</td><td class="num">${money(h.amount)}</td>
+        `<tr><td>${escapeHtml(_mrHeadLabel(h.head))}</td><td class="num">${money(h.amount)}</td>
          <td class="num">${h.count || ''}</td></tr>`).join('');
     const expenseRows = d.expense_heads.map(h =>
-        `<tr><td>${escapeHtml(h.head)}</td><td class="num">${money(h.amount)}</td>
+        `<tr><td>${escapeHtml(_mrHeadLabel(h.head))}</td><td class="num">${money(h.amount)}</td>
          <td class="num">${h.count || ''}</td></tr>`).join('');
     const monthRows = d.months.map(m => `<tr>
         <td>${escapeHtml(m.label)}</td><td>${m.from_date}</td><td>${m.to_date}</td>
@@ -536,7 +628,7 @@ function _mrReportHtml(d) {
         <td class="num">${money(c.expected)}</td><td class="num">${money(c.actual)}</td>
         <td class="num">${money(c.difference)}</td></tr>`).join('');
 
-    return `<!DOCTYPE html><html lang="${_mrMonth.lang === 'np' ? 'ne' : 'en'}"><head>
+    return `<!DOCTYPE html><html lang="${_mrLang() === 'np' ? 'ne' : 'en'}"><head>
 <meta charset="utf-8"><title>${escapeHtml(d.business.name)} — Monthly Report</title>
 <style>${_mrPrintCss()}</style></head><body>
     <div class="head">
@@ -837,7 +929,7 @@ function _mrDrillHtml(d) {
     </tr>`).join('');
     const formula = (d.formula || []).map(c =>
         `<tr><td>${escapeHtml(c.label)}</td><td class="num">${_mrMoney(c.amount)}</td></tr>`).join('');
-    return `<!DOCTYPE html><html lang="${_mrMonth.lang === 'np' ? 'ne' : 'en'}"><head><meta charset="utf-8">
+    return `<!DOCTYPE html><html lang="${_mrLang() === 'np' ? 'ne' : 'en'}"><head><meta charset="utf-8">
 <title>${escapeHtml(d.label)}</title><style>${_mrPrintCss()}</style></head><body>
         <div class="head">
             <h1>${escapeHtml((_mrMonth.data && _mrMonth.data.business.name) || '')}</h1>

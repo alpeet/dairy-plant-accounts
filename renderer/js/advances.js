@@ -43,6 +43,7 @@ async function renderAdvances() {
                         Leave <em>From</em> empty for all history; <em>To</em> is the as-of cutoff.
                     </div></div>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div id="advBody"><div class="loading" style="text-align:center;padding:40px">Loading advance register…</div></div>
     `;

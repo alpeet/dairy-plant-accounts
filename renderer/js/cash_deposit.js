@@ -104,6 +104,7 @@ async function renderCashDeposit() {
             <div class="form-group"><label>From</label><input type="date" class="form-control" id="cdFrom" value="${filt.from || ''}"></div>
             <div class="form-group"><label>To</label><input type="date" class="form-control" id="cdTo" value="${filt.to || ''}"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="refreshCashDeposits()">Refresh</button></div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         ${depositPrelude}
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">

@@ -64,19 +64,17 @@ async function renderBank() {
             <div class="form-group">
                 <label>Search</label>
                 <input type="text" class="form-control" id="bkSearch" placeholder="Name / description / ref..." value="${escapeHtml(filt.search || '')}">
-            </div>
-            <div class="form-group">
-                <label>Status</label>                    <select class="form-control" id="bkStatus">
+            </div>            <div class="form-group"><label>Status</label>                    <select class="form-control" id="bkStatus">
                         <option value=""${!filt.status ? ' selected' : ''}>All</option>
                         <option value="auto"${filt.status === 'auto' ? ' selected' : ''}>Auto-matched</option>
                         <option value="review"${filt.status === 'review' ? ' selected' : ''}>Needs review</option>
                         <option value="none"${filt.status === 'none' ? ' selected' : ''}>Unmatched</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>&nbsp;</label>
+            <div class="form-group"><label>&nbsp;</label>
                 <button class="btn btn-primary btn-sm" onclick="refreshBank()">Search</button>
             </div>
+            ${reportLangPicker('Language / भाषा')}
         </div>
         <div class="table-container">
             <table>

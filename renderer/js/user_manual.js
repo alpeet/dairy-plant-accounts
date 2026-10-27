@@ -409,6 +409,9 @@ async function renderUserManual() {
                 </div>
             </div>
 
+            <!-- ============== WHERE DO I RECORD THIS? ============== -->
+            ${umWhereToRecordHtml()}
+
             <!-- ==================== MODULE GUIDE ==================== -->
             ${umModuleGuideHtml()}
 
@@ -568,6 +571,92 @@ const UM_MODULE_GUIDE = [
         'Diagnostics only']
 ];
 
+// ============================================================
+// "Where do I record this?" — the four questions that come up most
+// ============================================================
+// [question EN, question NP, screen, what you enter, what it does, trap]
+const UM_WHERE_TO_RECORD = [
+    ['Where do I record other purchases — pouches, chemicals, spare parts, packing material?',
+        'अन्य खरिद — पाउच, केमिकल, स्पेयर पार्ट्स, प्याकिङ सामान कहाँ लेख्ने?',
+        '📦 Purchases → + New Purchase',
+        'Supplier, bill no, date, item, quantity, rate, and whether you paid cash, bank or will pay later (credit).',
+        'A supplier bill becomes a supplier payable. Stock goes up by the quantity. It reaches Profit & Loss only as those goods are sold (cost of goods sold) — not on the bill date.',
+        'Do not also enter the same bill in the Payment Register as an expense. When you pay the supplier later, use Payment Register — that settles the payable without a second expense.'],
+
+    ['Where do I record diesel bought from a party on credit?',
+        'पार्टीबाट उधारोमा किनेको डिजेल कहाँ लेख्ने?',
+        '🚛 Vehicle Expenses (or 📦 Purchases if you keep it as stock)',
+        'Vehicle, date, expense type = Fuel / Diesel, litres and amount, plus the party name and bill number.',
+        'Diesel used in your own van is a Fuel cost of that month, and the party is owed the money until you pay — so it is an expense AND a payable at the same time.',
+        'Recording the diesel bill and then paying the same party through Payment Register is correct — the payment only clears the payable. Entering the diesel again as an “Other Expense” is a double cost.'],
+
+    ['Where do I record rent paid?',
+        'तिरेको घरभाडा कहाँ लेख्ने?',
+        '📋 Other Expenses → category “Rent” for one month, or the Prepaid Rent screen when you pay several months at once',
+        'Date, category Rent, head “Shop rent”, amount, paid to, mode, reference number.',
+        'One month of rent for one month of use is an operating expense. Rent paid in advance for future months is an ASSET (prepaid rent); one month’s share becomes an expense each month as it is used.',
+        'Do not expense six months of rent in the month you paid: that month would show a loss and the next five would show extra profit. Use the prepaid screen so each month carries its own share.'],
+
+    ['Where do I record rent received?',
+        'प्राप्त भएको घरभाडा कहाँ लेख्ने?',
+        '📋 Other Expenses → category “Income”, head “Rent received”',
+        'Date, category Income, head “Rent received”, amount, received from, mode, receipt number.',
+        'It is shown as Other Income in the Profit & Loss and the Monthly Report, and the Expenses screen keeps it OUT of the expense total — money coming in is never an expense.',
+        'If the tenant paid several months in advance, only the current month is income; the unearned part is an advance received (a liability). Do not treat the whole receipt as this month’s income.'],
+
+    ['Where do I record paying a supplier for a bill already entered?',
+        'पहिले नै लेखिएको बिलको भुक्तानी कहाँ लेख्ने?',
+        '💳 Payment Register (or Cash → Payment Collection)',
+        'Party, amount, date, mode, and mark it as a settlement against the bill.',
+        'Money leaves the bank or drawer and the payable falls. Profit does not change — the cost was already recorded with the bill.',
+        'Do not enter it again in Other Expenses. Doing that counts the same cost twice.'],
+
+    ['Where do I record cash put into the bank?',
+        'बैंकमा जम्मा गरेको नगद कहाँ लेख्ने?',
+        '🏦 Cash Deposit',
+        'Date, slip number, bank, amount.',
+        'Cash falls by that amount and bank rises by the same amount. Total money is unchanged — it is a transfer, not income.',
+        'Depositing the day’s collection never creates sales income. The sale was already counted when the sale was recorded.']
+];
+
+function umWhereToRecordHtml() {
+    const rows = UM_WHERE_TO_RECORD.map(([qEn, qNp, screen, entry, effect, trap]) => `
+        <tr>
+            <td style="font-weight:600;min-width:230px">${qEn}
+                <div style="font-family:'Noto Sans Devanagari','Kalimati','Nirmala UI',sans-serif;font-weight:400;color:var(--text-light);font-size:12px;margin-top:4px">${qNp}</div>
+            </td>
+            <td style="white-space:nowrap;font-weight:600;color:#1565c0">${screen}</td>
+            <td style="font-size:12.5px">${entry}</td>
+            <td style="font-size:12.5px">${effect}</td>
+            <td style="font-size:12px;color:#8a4b00;background:#fff7ed">${trap}</td>
+        </tr>`).join('');
+    return `
+        <div id="um-where" style="background:var(--bg-white);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:28px;overflow:auto">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                <span style="font-size:24px">❓</span>
+                <h2 style="font-size:18px;font-weight:700;margin:0">Where Do I Record This? — यो कहाँ लेख्ने?</h2>
+            </div>
+            <p style="font-size:13px;color:var(--text-light);line-height:1.6;margin:0 0 14px">
+                The six questions asked most often. Each row names the exact screen, what to type, what the entry
+                does to Cash / Bank / Stock / Party balance / Profit, and the mistake to avoid.
+            </p>
+            <table class="data-table" style="font-size:12.5px;min-width:1000px">
+                <thead><tr>
+                    <th>Question</th><th>Screen to use</th><th>What you enter</th>
+                    <th>What it does</th><th>The mistake to avoid</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            <div style="margin-top:16px;padding:14px 18px;background:#eef7ff;border-left:4px solid #1565c0;border-radius:8px;font-size:13px;line-height:1.7">
+                <strong>One rule covers all six:</strong> money moving between your own accounts (cash → bank, supplier bill → supplier payment)
+                never creates a second income or expense. Only a new sale, a new bill or a new cost does.
+                <div style="font-family:'Noto Sans Devanagari','Kalimati','Nirmala UI',sans-serif;margin-top:6px;color:#334">
+                    एउटै नियम सबैमा लागू: आफ्नै खाताबीच सारिएको पैसा (नगद → बैंक, बिल → भुक्तानी) ले दोस्रो आम्दानी वा खर्च बन्दैन।
+                </div>
+            </div>
+        </div>`;
+}
+
 function umModuleGuideHtml() {
     const rows = UM_MODULE_GUIDE.map(([group, module, icon, purpose, when, entry, example, affects]) => `
         <tr>
@@ -688,6 +777,7 @@ function umGlossaryHtml() {
 
 // Make globally accessible
 window.umGlossaryHtml = umGlossaryHtml;
+window.umWhereToRecordHtml = umWhereToRecordHtml;
 window.umModuleGuideHtml = umModuleGuideHtml;
 
 // ============================================================

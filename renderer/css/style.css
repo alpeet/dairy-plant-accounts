@@ -1721,3 +1721,58 @@ table tbody tr:hover { background: var(--primary-soft); }
     .page-content { padding: 0; }
     .card, .summary-card, .kpi-card { box-shadow: none; border: 1px solid #ddd; }
 }
+
+/* ============================================================
+   Global report-language control (top bar)
+   ============================================================ */
+.top-lang {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 14px;
+    padding-left: 14px;
+    border-left: 1px solid var(--border);
+}
+.top-lang-icon { font-size: 15px; opacity: 0.7; }
+.top-lang select {
+    width: auto;
+    min-width: 132px;
+    padding: 5px 26px 5px 9px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: 8px;
+    border-color: var(--border-strong);
+    background-position: right 8px center;
+}
+.top-lang select:focus { border-color: var(--primary-light); box-shadow: var(--ring); }
+@media (max-width: 760px) { .top-lang { display: none; } }
+
+/* The same control, inline next to a page's own Print / PDF buttons. */
+.report-lang-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    vertical-align: middle;
+}
+.report-lang-picker .report-lang-icon { font-size: 13px; opacity: 0.65; }
+.report-lang-picker select.report-lang-select {
+    width: auto;
+    min-width: 124px;
+    padding: 4px 24px 4px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 7px;
+    border-color: var(--border-strong);
+    background-position: right 7px center;
+}
+.report-lang-picker select.report-lang-select:focus {
+    border-color: var(--primary-light);
+    box-shadow: var(--ring);
+}
+.report-lang-picker .report-lang-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-light);
+    margin-right: 2px;
+}
+.report-lang-btn { padding: 4px 10px !important; font-size: 11.5px !important; }

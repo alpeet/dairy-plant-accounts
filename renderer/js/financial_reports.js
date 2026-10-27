@@ -30,96 +30,103 @@ async function showProfitLoss(preloadedData = null) {
 
     const isEmpty = data.income.total_income === 0 && data.expenses.total_expenses === 0 && data.sales_count === 0 && data.milk_collection_count === 0;
 
+    // Language switch: redraw in the new language without re-querying.
+    if (typeof onReportLangChange === 'function') {
+        onReportLangChange(() => showProfitLoss(_finLastData.profitLoss || null), 'profit-loss');
+    }
+
     container.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <h2 style="margin:0">📊 Profit & Loss Statement</h2>
-            <div class="btn-group">
-                <button class="btn btn-info btn-sm" onclick="printProfitLoss()">🖨 Print</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+            <h2 style="margin:0">📊 ${rl('Profit & Loss Statement', 'नाफा–नोक्सान विवरण')}</h2>
+            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                ${reportLangPicker()}
+                <div class="form-group" style="margin:0"><label>&nbsp;</label>
+                    <button class="btn btn-info btn-sm" onclick="printProfitLoss()">🖨 ${rlt('print')}</button></div>
             </div>
         </div>
         <div class="filter-bar">
-            <div class="form-group"><label>From (BS)</label><input type="text" class="form-control" id="plFrom" placeholder="2083-05-01" value="${preset.from}" data-bs-date></div>
-            <div class="form-group"><label>To (BS)</label><input type="text" class="form-control" id="plTo" placeholder="2083-05-32" value="${preset.to}" data-bs-date></div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLoss()">Generate</button></div>
+            <div class="form-group"><label>${rlt('from')} (BS)</label><input type="text" class="form-control" id="plFrom" placeholder="2083-05-01" value="${preset.from}" data-bs-date></div>
+            <div class="form-group"><label>${rlt('to')} (BS)</label><input type="text" class="form-control" id="plTo" placeholder="2083-05-32" value="${preset.to}" data-bs-date></div>
+            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="applyProfitLoss()">${rlt('generate')}</button></div>
             <div class="form-group"><label>&nbsp;</label>
-                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('today');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">Today</button>
-                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('this_month');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">This Month</button>
-                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('last_month');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">Last Month</button>
+                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('today');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">${rl('Today', 'आज')}</button>
+                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('this_month');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">${rl('This Month', 'यो महिना')}</button>
+                <button class="btn btn-secondary btn-sm" onclick="const p=getDatePreset('last_month');document.getElementById('plFrom').value=p.from;document.getElementById('plTo').value=p.to;applyProfitLoss()">${rl('Last Month', 'गएको महिना')}</button>
             </div>
         </div>
         ${isEmpty ? `
         <div style="text-align:center;padding:40px 20px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:16px">
             <div style="font-size:48px;margin-bottom:12px">📊</div>
-            <h3 style="font-size:16px;margin-bottom:8px;color:var(--text-light)">No Transactions Found</h3>
+            <h3 style="font-size:16px;margin-bottom:8px;color:var(--text-light)">${rl('No Transactions Found', 'कुनै लेनदेन भेटिएन')}</h3>
             <p style="font-size:13px;color:var(--text-light);max-width:400px;margin:0 auto;line-height:1.6">
-                There are no sales, purchases, expenses, or other transactions recorded for this period.
+                ${rl('There are no sales, purchases, expenses, or other transactions recorded for this period.', 'यो अवधिमा कुनै बिक्री, खरिद, खर्च वा अन्य लेनदेन छैन।')}
                 <br><br>
-                <strong>Period:</strong> ${data.from_date || preset.from} to ${data.to_date || preset.to}
+                <strong>${rl('Period', 'अवधि')}:</strong> ${data.from_date || preset.from} → ${data.to_date || preset.to}
                 <br><br>
-                <span style="font-size:12px">Try selecting a different date range or record some transactions first.</span>
+                <span style="font-size:12px">${rl('Try selecting a different date range or record some transactions first.', 'फरक मिति छान्नुहोस् वा पहिले केही लेनदेन लेख्नुहोस्।')}</span>
             </p>
         </div>
         ` : `
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="summary-card card-success" style="margin:0;padding:12px">
-                <span class="label">💰 Total Income</span>
+                <span class="label">💰 ${rlt('total_income')}</span>
                 <span class="value" style="font-size:20px">${formatCurrency(data.income.total_income)}</span>
-                <span class="sub">Sales ${formatCurrency(data.income.total_sales)}${data.income.total_other_income ? ' + Other Income ' + formatCurrency(data.income.total_other_income) : ''}</span>
+                <span class="sub">${rlt('sales')} ${formatCurrency(data.income.total_sales)}${data.income.total_other_income ? ' + ' + rl('Other Income', 'अन्य आमदानी') + ' ' + formatCurrency(data.income.total_other_income) : ''}</span>
             </div>
             <div class="summary-card card-danger" style="margin:0;padding:12px">
-                <span class="label">📉 Total Expenses</span>
+                <span class="label">📉 ${rlt('total_expenses')}</span>
                 <span class="value" style="font-size:20px">${formatCurrency(data.expenses.total_expenses)}</span>
-                <span class="sub">COGS ${formatCurrency(data.cogs || 0)} + Operating ${formatCurrency(data.operating_expenses || 0)}</span>
+                <span class="sub">${rlt('cogs')} ${formatCurrency(data.cogs || 0)} + ${rl('Operating', 'सञ्चालन')} ${formatCurrency(data.operating_expenses || 0)}</span>
             </div>
             <div class="summary-card ${data.net_profit >= 0 ? 'card-primary' : 'card-danger'}" style="margin:0;padding:12px">
-                <span class="label">${data.net_profit >= 0 ? '📈 Net Profit' : '📉 Net Loss'}</span>
+                <span class="label">${data.net_profit >= 0 ? '📈 ' + rlt('net_profit') : '📉 ' + rlt('net_loss')}</span>
                 <span class="value" style="font-size:22px;font-weight:700">${formatCurrency(data.net_profit)}</span>
-                <span class="sub">Gross Profit: ${formatCurrency(data.gross_profit)}</span>
+                <span class="sub">${rlt('gross_profit')}: ${formatCurrency(data.gross_profit)}</span>
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
             <div class="card">
-                <div class="card-header"><h3>💰 Income Breakdown</h3></div>
+                <div class="card-header"><h3>💰 ${rl('Income Breakdown', 'आमदानी विभाजन')}</h3></div>
                 <table>
-                    <thead><tr><th>Source</th><th class="text-right">Amount</th></tr></thead>
+                    <thead><tr><th>${rl('Source', 'स्रोत')}</th><th class="text-right">${rlt('amount')}</th></tr></thead>
                     <tbody>
-                        <tr><td>Sales (${data.sales_count || 0} invoices)</td><td class="text-right" style="color:var(--accent);font-weight:600">${formatCurrency(data.income.total_sales)}</td></tr>
-                        ${data.income.total_other_income ? `<tr><td>Other Income</td><td class="text-right" style="color:var(--accent)">${formatCurrency(data.income.total_other_income)}</td></tr>` : ''}
-                        <tr style="background:var(--bg);font-weight:700"><td>Total Income</td><td class="text-right">${formatCurrency(data.income.total_income)}</td></tr>
+                        <tr><td>${rl('Sales', 'बिक्री')} (${data.sales_count || 0} ${rl('invoices', 'बिल')})</td><td class="text-right" style="color:var(--accent);font-weight:600">${formatCurrency(data.income.total_sales)}</td></tr>
+                        ${data.income.total_other_income ? `<tr><td>${rl('Other Income', 'अन्य आमदानी')}</td><td class="text-right" style="color:var(--accent)">${formatCurrency(data.income.total_other_income)}</td></tr>` : ''}
+                        <tr style="background:var(--bg);font-weight:700"><td>${rlt('total_income')}</td><td class="text-right">${formatCurrency(data.income.total_income)}</td></tr>
                     </tbody>
                 </table>
             </div>
             <div class="card">
-                <div class="card-header"><h3>📉 Expense Breakdown</h3></div>
+                <div class="card-header"><h3>📉 ${rl('Expense Breakdown', 'खर्च विभाजन')}</h3></div>
                 <table>
-                    <thead><tr><th>Category</th><th class="text-right">Amount</th></tr></thead>
+                    <thead><tr><th>${rl('Category', 'श्रेणी')}</th><th class="text-right">${rlt('amount')}</th></tr></thead>
                     <tbody>
-                        <tr><td>🥛 Milk Purchase — Milk Collection (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(data.expenses.milk_collection.total)}</td></tr>
-                        <tr><td>📦 Purchases (non-milk)${data.milk_cost_basis && data.milk_cost_basis.linked_milk_in_purchases ? `<br><span style="font-size:11px;color:var(--text-light)">${formatCurrency(data.milk_cost_basis.linked_milk_in_purchases)} of milk already on the bills above is excluded — counted once</span>` : ''}</td><td class="text-right">${formatCurrency(data.expenses.purchases.total)}</td></tr>
-                        <tr style="background:var(--bg);font-weight:600"><td>Cost of Goods Sold</td><td class="text-right">${formatCurrency(data.cogs || 0)}</td></tr>
-                        <tr><td>👷 Salary</td><td class="text-right">${formatCurrency(data.expenses.salary.total)}</td></tr>
-                        <tr><td>📋 Other Expenses</td><td class="text-right">${formatCurrency(data.expenses.other_expenses.total)}</td></tr>
-                        <tr><td>💰 Petty Cash</td><td class="text-right">${formatCurrency(data.expenses.petty_cash.total)}</td></tr>
-                        <tr><td>🚛 Vehicle Expenses</td><td class="text-right">${formatCurrency(data.expenses.vehicle_expenses.total)}</td></tr>
-                        ${data.expenses.bank_expenses && data.expenses.bank_expenses.total ? `<tr><td>🏦 Office Expenses (paid from bank)</td><td class="text-right">${formatCurrency(data.expenses.bank_expenses.total)}</td></tr>` : ''}
-                        <tr style="background:var(--bg);font-weight:600"><td>Operating Expenses</td><td class="text-right">${formatCurrency(data.operating_expenses || 0)}</td></tr>
-                        <tr style="background:var(--bg);font-weight:700"><td>Total Expenses</td><td class="text-right">${formatCurrency(data.expenses.total_expenses)}</td></tr>
+                        <tr><td>🥛 ${rl('Milk Purchase — Milk Collection', 'दूध खरिद — दूध सङ्कलन')} (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(data.expenses.milk_collection.total)}</td></tr>
+                        <tr><td>📦 ${rl('Purchases (non-milk)', 'खरिद (दूध बाहेक)')}${data.milk_cost_basis && data.milk_cost_basis.linked_milk_in_purchases ? `<br><span style="font-size:11px;color:var(--text-light)">${formatCurrency(data.milk_cost_basis.linked_milk_in_purchases)} ${rl('of milk already on the bills above is excluded — counted once', 'माथिको बिलमा पहिले नै रहेको दूध बाहेक — एकपटक मात्र गणना')}</span>` : ''}</td><td class="text-right">${formatCurrency(data.expenses.purchases.total)}</td></tr>
+                        <tr style="background:var(--bg);font-weight:600"><td>${rlt('cogs')}</td><td class="text-right">${formatCurrency(data.cogs || 0)}</td></tr>
+                        <tr><td>👷 ${rlt('salary')}</td><td class="text-right">${formatCurrency(data.expenses.salary.total)}</td></tr>
+                        <tr><td>📋 ${rl('Other Expenses', 'अन्य खर्च')}</td><td class="text-right">${formatCurrency(data.expenses.other_expenses.total)}</td></tr>
+                        <tr><td>💰 ${rlt('petty_cash')}</td><td class="text-right">${formatCurrency(data.expenses.petty_cash.total)}</td></tr>
+                        <tr><td>🚛 ${rlt('vehicle_expenses')}</td><td class="text-right">${formatCurrency(data.expenses.vehicle_expenses.total)}</td></tr>
+                        ${data.expenses.bank_expenses && data.expenses.bank_expenses.total ? `<tr><td>🏦 ${rlt('office_expenses')} ${rl('(paid from bank)', '(बैंकबाट तिरिएको)')}</td><td class="text-right">${formatCurrency(data.expenses.bank_expenses.total)}</td></tr>` : ''}
+                        <tr style="background:var(--bg);font-weight:600"><td>${rlt('operating_expenses')}</td><td class="text-right">${formatCurrency(data.operating_expenses || 0)}</td></tr>
+                        <tr style="background:var(--bg);font-weight:700"><td>${rlt('total_expenses')}</td><td class="text-right">${formatCurrency(data.expenses.total_expenses)}</td></tr>
                     </tbody>
                 </table>
             </div>
         </div>
         <div class="card" style="margin-top:12px;padding:16px;text-align:center;background:${data.net_profit >= 0 ? 'var(--success-bg, #d4edda)' : 'var(--danger-bg, #f8d7da)'};border-radius:8px">
             <span style="font-size:18px;font-weight:700;color:${data.net_profit >= 0 ? 'var(--accent, #155724)' : 'var(--danger, #721c24)'}">
-                ${data.net_profit >= 0 ? '✅ NET PROFIT: ' : '❌ NET LOSS: '} ${formatCurrency(Math.abs(data.net_profit))}
+                ${data.net_profit >= 0 ? '✅ ' + rlt('net_profit') + ': ' : '❌ ' + rlt('net_loss') + ': '} ${formatCurrency(Math.abs(data.net_profit))}
             </span>
             <span style="display:block;font-size:13px;margin-top:4px;opacity:0.8">
-                Sales ${formatCurrency(data.income.total_sales)} − COGS ${formatCurrency(data.cogs || 0)} = Gross ${formatCurrency(data.gross_profit)} − Operating ${formatCurrency(data.operating_expenses || 0)} = Net ${formatCurrency(data.net_profit)}
+                ${rlt('sales')} ${formatCurrency(data.income.total_sales)} − ${rlt('cogs')} ${formatCurrency(data.cogs || 0)} = ${rlt('gross_profit')} ${formatCurrency(data.gross_profit)} − ${rlt('operating_expenses')} ${formatCurrency(data.operating_expenses || 0)} = ${rl('Net', 'खुद')} ${formatCurrency(data.net_profit)}
             </span>
             <span style="display:block;font-size:12px;margin-top:6px;opacity:0.7">
-                Cash collected in period: ${formatCurrency(data.income.total_receipts)} (shown for cash-flow reference; collections are against the same sales, not extra income)
+                ${rl('Cash collected in period', 'अवधिमा सङ्कलन भएको नगद')}: ${formatCurrency(data.income.total_receipts)} (${rl('shown for cash-flow reference; collections are against the same sales, not extra income', 'नगद प्रवाहको लागि मात्र देखाइएको; त्यही बिक्रीको सङ्कलन हो, थप आमदानी होइन')})
             </span>
             <span style="display:block;font-size:13px;margin-top:4px;opacity:0.8">
-                Period: ${data.from_date || preset.from} to ${data.to_date || preset.to}
+                ${rlt('period')}: ${data.from_date || preset.from} → ${data.to_date || preset.to}
             </span>
         </div>
         <div id="pl-reconcile-section" style="margin-top:20px"></div>
@@ -241,37 +248,37 @@ async function printProfitLoss() {
     const settings = await getSettingsCached();
     const exp = data.expenses;
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Profit & Loss Statement</h2><p>Period: ${data.from_date} to ${data.to_date}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>${rl('Profit & Loss Statement', 'नाफा–नोक्सान विवरण')}</h2><p>${rlt('period')}: ${data.from_date} → ${data.to_date}</p></div>
         <div class="value-cards">
-            <div class="value-card"><div class="value-label">Total Income</div><div class="value-number">${formatCurrency(data.income.total_income)}</div></div>
-            <div class="value-card" style="border-color:var(--danger)"><div class="value-label">Total Expenses</div><div class="value-number">${formatCurrency(data.expenses.total_expenses)}</div></div>
-            <div class="value-card" style="border-color:var(--accent)"><div class="value-label">Gross Profit</div><div class="value-number">${formatCurrency(data.gross_profit)}</div></div>
-            <div class="value-card" style="border-color:${data.net_profit >= 0 ? 'var(--accent)' : 'var(--danger)'}"><div class="value-label">${data.net_profit >= 0 ? 'Net Profit' : 'Net Loss'}</div><div class="value-number">${formatCurrency(Math.abs(data.net_profit))}</div></div>
+            <div class="value-card"><div class="value-label">${rlt('total_income')}</div><div class="value-number">${formatCurrency(data.income.total_income)}</div></div>
+            <div class="value-card" style="border-color:var(--danger)"><div class="value-label">${rlt('total_expenses')}</div><div class="value-number">${formatCurrency(data.expenses.total_expenses)}</div></div>
+            <div class="value-card" style="border-color:var(--accent)"><div class="value-label">${rlt('gross_profit')}</div><div class="value-number">${formatCurrency(data.gross_profit)}</div></div>
+            <div class="value-card" style="border-color:${data.net_profit >= 0 ? 'var(--accent)' : 'var(--danger)'}"><div class="value-label">${data.net_profit >= 0 ? rlt('net_profit') : rlt('net_loss')}</div><div class="value-number">${formatCurrency(Math.abs(data.net_profit))}</div></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
             <table>
-                <thead><tr><th>Income</th><th class="text-right">Amount</th></tr></thead>
+                <thead><tr><th>${rlt('income')}</th><th class="text-right">${rlt('amount')}</th></tr></thead>
                 <tbody>
-                    <tr><td>Sales (${data.sales_count || 0} invoices)</td><td class="text-right">${formatCurrency(data.income.total_sales)}</td></tr>
-                    ${data.income.total_other_income ? `<tr><td>Other Income</td><td class="text-right">${formatCurrency(data.income.total_other_income)}</td></tr>` : ''}
-                    <tr style="font-weight:700"><td>Total Income</td><td class="text-right">${formatCurrency(data.income.total_income)}</td></tr>
+                    <tr><td>${rl('Sales', 'बिक्री')} (${data.sales_count || 0} ${rl('invoices', 'बिल')})</td><td class="text-right">${formatCurrency(data.income.total_sales)}</td></tr>
+                    ${data.income.total_other_income ? `<tr><td>${rl('Other Income', 'अन्य आमदानी')}</td><td class="text-right">${formatCurrency(data.income.total_other_income)}</td></tr>` : ''}
+                    <tr style="font-weight:700"><td>${rlt('total_income')}</td><td class="text-right">${formatCurrency(data.income.total_income)}</td></tr>
                 </tbody>
             </table>
             <table>
-                <thead><tr><th>Expenses</th><th class="text-right">Amount</th></tr></thead>
+                <thead><tr><th>${rlt('expense')}</th><th class="text-right">${rlt('amount')}</th></tr></thead>
                 <tbody>
-                    <tr><td>Milk Collection (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(exp.milk_collection.total)}</td></tr>
-                    <tr><td>Purchases</td><td class="text-right">${formatCurrency(exp.purchases.total)}</td></tr>
-                    <tr><td>Salary</td><td class="text-right">${formatCurrency(exp.salary.total)}</td></tr>
-                    <tr><td>Other Expenses</td><td class="text-right">${formatCurrency(exp.other_expenses.total)}</td></tr>
-                    <tr><td>Petty Cash</td><td class="text-right">${formatCurrency(exp.petty_cash.total)}</td></tr>
-                    <tr><td>Vehicle Expenses</td><td class="text-right">${formatCurrency(exp.vehicle_expenses.total)}</td></tr>
-                    <tr style="font-weight:700"><td>Total Expenses</td><td class="text-right">${formatCurrency(exp.total_expenses)}</td></tr>
+                    <tr><td>${rl('Milk Collection', 'दूध सङ्कलन')} (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(exp.milk_collection.total)}</td></tr>
+                    <tr><td>${rlt('purchases')}</td><td class="text-right">${formatCurrency(exp.purchases.total)}</td></tr>
+                    <tr><td>${rlt('salary')}</td><td class="text-right">${formatCurrency(exp.salary.total)}</td></tr>
+                    <tr><td>${rl('Other Expenses', 'अन्य खर्च')}</td><td class="text-right">${formatCurrency(exp.other_expenses.total)}</td></tr>
+                    <tr><td>${rlt('petty_cash')}</td><td class="text-right">${formatCurrency(exp.petty_cash.total)}</td></tr>
+                    <tr><td>${rlt('vehicle_expenses')}</td><td class="text-right">${formatCurrency(exp.vehicle_expenses.total)}</td></tr>
+                    <tr style="font-weight:700"><td>${rlt('total_expenses')}</td><td class="text-right">${formatCurrency(exp.total_expenses)}</td></tr>
                 </tbody>
             </table>
         </div>
-        <p style="margin-top:12px;font-size:11px;color:#666">Note: Cash collected in period ${formatCurrency(data.income.total_receipts)} — collections are against the same sales invoices, so they are not added to income (accrual basis).</p>
-        <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
+        <p style="margin-top:12px;font-size:11px;color:#666">${rl('Note', 'टिप्पणी')}: ${rl('Cash collected in period', 'अवधिमा सङ्कलन भएको नगद')} ${formatCurrency(data.income.total_receipts)} — ${rl('collections are against the same sales invoices, so they are not added to income (accrual basis)', 'सङ्कलन त्यही बिक्रीको बिलको विरुद्ध हो, त्यसैले आमदानीमा थपिँदैन (accrual आधार)')}.</p>
+        <div class="footer"><div>${rl('Printed', 'प्रिन्ट')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
     printHTML(html);
 }
@@ -451,68 +458,126 @@ async function showReceivablePayable() {
     const totalPayable = payables.reduce((s, p) => s + p.outstanding, 0);
     const netPosition = totalReceivable - totalPayable;
 
+    _finLastData.receivablePayable = { receivables, payables, totalReceivable, totalPayable, netPosition };
+
+    // A language change redraws this page without re-querying the database.
+    if (typeof onReportLangChange === 'function') {
+        onReportLangChange(() => renderReceivablePayable(), 'receivable-payable');
+    }
+    renderReceivablePayable();
+}
+
+/**
+ * Draw the Receivable / Payable page from data already fetched.
+ * Each party row expands (a dropdown strip) to show the underlying balance and
+ * can jump straight to that party's statement.
+ */
+function renderReceivablePayable() {
+    const container = document.getElementById('page-receivable-payable');
+    const d = _finLastData.receivablePayable;
+    if (!container || !d) return;
+    const { receivables, payables, totalReceivable, totalPayable, netPosition } = d;
+
+    const rows = (list, kind) => list.map((r, i) => {
+        const detailId = `rpDetail${kind}${i}`;
+        return `
+            <tr class="mr-line" onclick="rpToggle('${detailId}')"
+                title="${escapeHtml(rl('Click to see this balance and open the party statement', 'यो मौज्दात र पार्टी विवरण हेर्न क्लिक गर्नुहोस्'))}">
+                <td><span class="mr-line-open">🔍</span> <strong>${escapeHtml(r.name)}</strong></td>
+                <td>${escapeHtml(r.phone || '-')}</td>
+                <td class="text-right" style="color:${kind === 'rec' ? 'var(--accent)' : 'var(--danger)'};font-weight:600">${formatCurrency(r.outstanding)}</td>
+            </tr>
+            <tr id="${detailId}" style="display:none">
+                <td colspan="3" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+                        <span><strong>${rlt('party')}:</strong> ${escapeHtml(r.name)}</span>
+                        <span><strong>${rlt('phone')}:</strong> ${escapeHtml(r.phone || '—')}</span>
+                        <span><strong>${kind === 'rec' ? rl('To collect', 'उठाउन बाँकी') : rl('To pay', 'तिर्न बाँकी')}:</strong> ${formatCurrency(r.outstanding)}</span>
+                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();rpOpenStatement(${r.id || 0})">↗ ${rl('Open statement', 'विवरण खोल्नुहोस्')}</button>
+                    </div>
+                </td>
+            </tr>`;
+    }).join('');
+
     container.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <h2 style="margin:0">💰 Receivables & Payables</h2>
-            <div class="btn-group">
-                <button class="btn btn-info btn-sm" onclick="printReceivablePayable()">🖨 Print</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+            <h2 style="margin:0">💰 ${rl('Receivables & Payables', 'उठाउनबाँकी र तिर्नबाँकी')}</h2>
+            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                ${reportLangPicker()}
+                <div class="form-group" style="margin:0"><label>&nbsp;</label>
+                    <button class="btn btn-info btn-sm" onclick="printReceivablePayable()">🖨 ${rlt('print')}</button></div>
             </div>
         </div>
         <div class="summary-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
             <div class="summary-card card-success" style="margin:0;padding:12px">
-                <span class="label">💰 Total Receivables</span>
+                <span class="label">💰 ${rl('Total Receivables', 'कुल उठाउनबाँकी')}</span>
                 <span class="value" style="font-size:20px">${formatCurrency(totalReceivable)}</span>
-                <span class="sub">From ${receivables.length} customers</span>
+                <span class="sub">${rl(`From ${receivables.length} customers`, `${receivables.length} ग्राहकबाट`)}</span>
             </div>
             <div class="summary-card card-danger" style="margin:0;padding:12px">
-                <span class="label">⚠️ Total Payables</span>
+                <span class="label">⚠️ ${rl('Total Payables', 'कुल तिर्नबाँकी')}</span>
                 <span class="value" style="font-size:20px">${formatCurrency(totalPayable)}</span>
-                <span class="sub">To ${payables.length} suppliers</span>
+                <span class="sub">${rl(`To ${payables.length} suppliers`, `${payables.length} आपूर्तिकर्तालाई`)}</span>
             </div>
             <div class="summary-card ${netPosition >= 0 ? 'card-primary' : 'card-warning'}" style="margin:0;padding:12px">
-                <span class="label">📊 Net Position</span>
+                <span class="label">📊 ${rl('Net Position', 'नेट स्थिति')}</span>
                 <span class="value" style="font-size:20px">${formatCurrency(netPosition)}</span>
-                <span class="sub">${netPosition >= 0 ? 'Net Receivable' : 'Net Payable'}</span>
+                <span class="sub">${netPosition >= 0 ? rl('Net Receivable', 'नेट उठाउनबाँकी') : rl('Net Payable', 'नेट तिर्नबाँकी')}</span>
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
             <div>
-                <h3 style="font-size:14px;margin-bottom:8px">💰 Receivables (Customers owe you)</h3>
+                <h3 style="font-size:14px;margin-bottom:8px">💰 ${rl('Receivables (Customers owe you)', 'उठाउनबाँकी (ग्राहकले दिनुपर्छ)')}</h3>
                 <div class="table-container" style="max-height:400px;overflow-y:auto">
                     <table>
-                        <thead><tr><th>Customer</th><th>Phone</th><th class="text-right">Outstanding</th></tr></thead>
+                        <thead><tr><th>${rlt('customer')}</th><th>${rlt('phone')}</th><th class="text-right">${rlt('outstanding')}</th></tr></thead>
                         <tbody>
-                            ${receivables.map(r => `<tr>
-                                <td><strong>${escapeHtml(r.name)}</strong></td>
-                                <td>${escapeHtml(r.phone || '-')}</td>
-                                <td class="text-right" style="color:var(--accent);font-weight:600">${formatCurrency(r.outstanding)}</td>
-                            </tr>`).join('')}
-                            ${receivables.length === 0 ? '<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--text-light)">No outstanding receivables</td></tr>' : ''}
+                            ${rows(receivables, 'rec')}
+                            ${receivables.length === 0 ? `<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--text-light)">${rl('No outstanding receivables', 'कुनै उठाउनबाँकी छैन')}</td></tr>` : ''}
                         </tbody>
-                        <tfoot><tr><td colspan="2"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(totalReceivable)}</strong></td></tr></tfoot>
+                        <tfoot><tr><td colspan="2"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(totalReceivable)}</strong></td></tr></tfoot>
                     </table>
                 </div>
             </div>
             <div>
-                <h3 style="font-size:14px;margin-bottom:8px">⚠️ Payables (You owe suppliers)</h3>
+                <h3 style="font-size:14px;margin-bottom:8px">⚠️ ${rl('Payables (You owe suppliers)', 'तिर्नबाँकी (आपूर्तिकर्तालाई दिनुपर्छ)')}</h3>
                 <div class="table-container" style="max-height:400px;overflow-y:auto">
                     <table>
-                        <thead><tr><th>Supplier</th><th>Phone</th><th class="text-right">Outstanding</th></tr></thead>
+                        <thead><tr><th>${rlt('supplier')}</th><th>${rlt('phone')}</th><th class="text-right">${rlt('outstanding')}</th></tr></thead>
                         <tbody>
-                            ${payables.map(p => `<tr>
-                                <td><strong>${escapeHtml(p.name)}</strong></td>
-                                <td>${escapeHtml(p.phone || '-')}</td>
-                                <td class="text-right" style="color:var(--danger);font-weight:600">${formatCurrency(p.outstanding)}</td>
-                            </tr>`).join('')}
-                            ${payables.length === 0 ? '<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--text-light)">No outstanding payables</td></tr>' : ''}
+                            ${rows(payables, 'pay')}
+                            ${payables.length === 0 ? `<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--text-light)">${rl('No outstanding payables', 'कुनै तिर्नबाँकी छैन')}</td></tr>` : ''}
                         </tbody>
-                        <tfoot><tr><td colspan="2"><strong>Total</strong></td><td class="text-right"><strong>${formatCurrency(totalPayable)}</strong></td></tr></tfoot>
+                        <tfoot><tr><td colspan="2"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(totalPayable)}</strong></td></tr></tfoot>
                     </table>
                 </div>
             </div>
         </div>
+        <div class="card" style="margin-top:14px;padding:10px 14px;font-size:12px">
+            ${rl('Click any party row to see the balance behind it and jump to that party\u2019s statement. An advance or a loan is never part of these totals.',
+                'पार्टी पङ्क्तिमा क्लिक गरेर त्यस मौज्दातको विवरण र त्यही पार्टीको विवरण खोल्न सकिन्छ। अग्रिम र ऋण यी जोडमा कहिले पनि पर्दैनन्।')}
+        </div>
     `;
-    _finLastData.receivablePayable = { receivables, payables, totalReceivable, totalPayable, netPosition };
+}
+
+/** Expand/collapse the detail strip under a receivable/payable row. */
+function rpToggle(id) {
+    const row = document.getElementById(id);
+    if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+/** Jump from a balance row to that party's statement, preselected. */
+function rpOpenStatement(partyId) {
+    if (!partyId) { showToast('This row has no party id', 'warning'); return; }
+    const preset = getDatePreset('this_month');
+    const selection = { partyId: String(partyId), from: preset.from, to: preset.to, type: '' };
+    navigateTo('statements');
+    setTimeout(() => {
+        // renderStatements() clears the remembered selection on arrival, so the
+        // jump's own selection is applied afterwards, then the form is drawn.
+        window._stSelection = selection;
+        if (typeof showPartyStatement === 'function') showPartyStatement('');
+    }, 350);
 }
 
 async function printReceivablePayable() {
@@ -520,13 +585,13 @@ async function printReceivablePayable() {
     if (!d) { showToast('Load data first', 'warning'); return; }
     const settings = await getSettingsCached();
     const html = `
-        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>Receivables & Payables</h2><p>As of: ${formatDate(today())}</p></div>
+        <div class="header"><h1>${escapeHtml(settings.business_name)}</h1><h2>${rl('Receivables & Payables', 'उठाउनबाँकी र तिर्नबाँकी')}</h2><p>${rl('As of', 'मिति')}: ${formatDate(today())}</p></div>
         <div class="value-cards">
-            <div class="value-card"><div class="value-label">Total Receivables</div><div class="value-number">${formatCurrency(d.totalReceivable)}</div></div>
-            <div class="value-card" style="border-color:var(--danger)"><div class="value-label">Total Payables</div><div class="value-number">${formatCurrency(d.totalPayable)}</div></div>
-            <div class="value-card"><div class="value-label">Net Position</div><div class="value-number">${formatCurrency(d.netPosition)}</div></div>
+            <div class="value-card"><div class="value-label">${rl('Total Receivables', 'कुल उठाउनबाँकी')}</div><div class="value-number">${formatCurrency(d.totalReceivable)}</div></div>
+            <div class="value-card" style="border-color:var(--danger)"><div class="value-label">${rl('Total Payables', 'कुल तिर्नबाँकी')}</div><div class="value-number">${formatCurrency(d.totalPayable)}</div></div>
+            <div class="value-card"><div class="value-label">${rl('Net Position', 'नेट स्थिति')}</div><div class="value-number">${formatCurrency(d.netPosition)}</div></div>
         </div>
-        <div class="footer"><div>Printed: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">Authorized Signature</div></div>
+        <div class="footer"><div>${rl('Printed', 'प्रिन्ट')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
     printHTML(html);
 }
