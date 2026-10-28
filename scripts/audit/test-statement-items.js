@@ -158,10 +158,14 @@ console.log('\n— 6. Party ledger modal receives the same detail —');
     check('ledger party resolved', !!ledger.party);
 }
 
-console.log('\n— 6b. Invoices split across ledger rows show goods exactly once —');
+console.log('\n— 6b. Invoices posted as several ledger rows show the right goods on each row —');
 {
+    // The workbook import posts one ledger row PER PRODUCT (row 'NAUNI' 2,400,
+    // row 'Mix Milk' 700). Each of those rows is a different product line, so it
+    // must carry its OWN quantity and rate. Only when a row cannot be matched to
+    // exactly one invoice item (a bill posted as amount-only parts) does the
+    // single-host rule apply, and then no part may carry invented goods.
     const data = getPartyStatement(db, { party_id: saleParty.id });
-    // Group sale rows by the source invoice they resolved to.
     const bySource = new Map();
     for (const e of data.entries) {
         if (e.reference_type !== 'sale' || e.source_id == null) continue;
@@ -170,33 +174,53 @@ console.log('\n— 6b. Invoices split across ledger rows show goods exactly once
     }
     const splits = [...bySource.values()].filter(g => g.length > 1);
     console.log(`    (${splits.length} invoices posted as multiple ledger rows)`);
-    let hostsOk = 0, partsOk = 0;
+    const amountOf = i => (i.amount != null ? Number(i.amount) : Number(i.quantity || 0) * Number(i.rate || 0));
+    let perRowOk = 0, hostModeOk = 0, drift = 0, noFake = 0;
     for (const g of splits) {
-        const hosts = g.filter(e => Array.isArray(e.items) && e.items.length);
+        const src = db.prepare('SELECT product_name, quantity, unit, rate, amount FROM sales_items WHERE sale_id = ? ORDER BY id').all(g[0].source_id);
+        const assigned = g.filter(e => Array.isArray(e.items) && e.items.length);
+        if (assigned.length) {
+            // Every row that carries goods carries exactly ONE invoice item, and
+            // that item is the invoice's own line — never another row's goods.
+            const oneEach = assigned.every(e => e.items.length === 1);
+            const isReal = assigned.every(e => src.some(s =>
+                String(s.product_name || '').trim() === String(e.items[0].product_name || '').trim()
+                && Math.abs(Number(s.rate) - Number(e.items[0].rate)) <= 0.005
+                && Math.abs(Number(s.quantity) - Number(e.items[0].quantity)) <= 0.005));
+            if (oneEach && isReal) perRowOk++;
+            // No row may claim the whole invoice's goods while others show lines.
+            const claimsAll = assigned.some(e => e.items.length === src.length && src.length > 1 && assigned.length > 1);
+            if (!claimsAll) noFake++;
+        }
+        const hosts = g.filter(e => e.items_split_count === g.length);
         const parts = g.filter(e => e.items_split_part);
-        // Exactly ONE row carries the goods; the rest are marked as parts.
-        if (hosts.length === 1 && hosts[0].items_split_count === g.length) hostsOk++;
-        // Parts never carry items (no invented quantities against a partial
-        // amount) but do point at the invoice total.
-        if (parts.length === g.length - 1 &&
-            parts.every(e => !e.items && e.items_invoice_total != null)) partsOk++;
+        if (!assigned.length && hosts.length === 1 && parts.length === g.length - 1
+            && parts.every(e => !e.items)) hostModeOk++;
     }
-    check('each split invoice shows goods on exactly one row', hostsOk === splits.length,
-        `${hostsOk}/${splits.length} hosts correct`);
-    check('split parts carry no fake items but reference the invoice total',
-        partsOk === splits.length, `${partsOk}/${splits.length} part rows correct`);
+    check('each multi-row invoice puts its own product line on each row',
+        perRowOk + hostModeOk === splits.length,
+        `${perRowOk} per-row, ${hostModeOk} single-host, of ${splits.length}`);
+    check('no row claims another line\'s goods', noFake === splits.length,
+        `${splits.length - noFake} invoices duplicated the whole bill on one row`);
 
-    // The host row's goods must equal the SOURCE invoice's items (no drift).
-    let hostDrift = 0;
+    // Quantity/rate drift against the source invoice. A bill can hold several
+    // lines of the SAME product (Mix Milk 70 @ 85 and Mix Milk 40 @ 86), so every
+    // displayed line must match a distinct invoice line on name + quantity + rate.
     for (const g of splits) {
-        const host = g.find(e => Array.isArray(e.items) && e.items.length);
-        if (!host) continue;
-        const src = db.prepare('SELECT product_name, quantity, unit, rate FROM sales_items WHERE sale_id = ? ORDER BY id').all(host.source_id);
-        const got = JSON.stringify(host.items.map(i => [i.product_name, Number(i.quantity), i.unit, Number(i.rate)]));
-        const want = JSON.stringify(src.map(i => [i.product_name, Number(i.quantity), i.unit, Number(i.rate)]));
-        if (got !== want) hostDrift++;
+        const src = db.prepare('SELECT product_name, quantity, unit, rate FROM sales_items WHERE sale_id = ? ORDER BY id').all(g[0].source_id);
+        const used = new Set();
+        for (const e of g) {
+            if (!Array.isArray(e.items)) continue;
+            for (const it of e.items) {
+                const idx = src.findIndex((s, i) => !used.has(i)
+                    && String(s.product_name || '').trim() === String(it.product_name || '').trim()
+                    && Math.abs(Number(s.quantity) - Number(it.quantity)) <= 0.005
+                    && Math.abs(Number(s.rate) - Number(it.rate)) <= 0.005);
+                if (idx < 0) drift++; else used.add(idx);
+            }
+        }
     }
-    check('host items match sales_items exactly', hostDrift === 0, `${hostDrift} drifted`);
+    check('every displayed quantity and rate matches the invoice line', drift === 0, `${drift} drifted`);
 }
 
 console.log('\n— 7. Totals still reconcile with the ledger (statement integrity) —');
@@ -243,6 +267,41 @@ console.log('\n— 9. Statement columns: Qty/Rate kept, Item/Unit columns gone �
     check('party ledger modal prints qty and rate', /c\.qty/.test(pj) && /c\.rate/.test(pj));
     check('party ledger modal has no Item/Unit columns',
         !/<th[^>]*>\s*(Item|Unit)\s*<\/th>/.test(pj));
+}
+
+console.log('\n— 10. A row named after a product always shows its quantity and rate —');
+{
+    // Regression: NAUNI lines printed with blank quantity/rate because a bill
+    // posted as one ledger row per product was treated as a "split invoice" and
+    // every row except one had its items stripped. Any row whose description is
+    // the name of a product on its own invoice must carry that product's qty/rate.
+    const parties = db.prepare(`
+        SELECT DISTINCT party_id FROM ledger_entries
+         WHERE reference_type IN ('sale','purchase') AND COALESCE(description,'') != ''
+    `).all();
+    let checked = 0, blank = 0;
+    const blanks = [];
+    for (const { party_id } of parties) {
+        const data = getPartyStatement(db, { party_id });
+        for (const e of data.entries) {
+            if (e.reference_type !== 'sale' && e.reference_type !== 'purchase') continue;
+            const desc = String(e.description || '').trim().toLowerCase();
+            if (!desc) continue;
+            const table = e.reference_type === 'sale' ? 'sales_items' : 'purchase_items';
+            const col = e.reference_type === 'sale' ? 'sale_id' : 'purchase_id';
+            if (e.source_id == null) continue;
+            const named = db.prepare(`SELECT product_name, quantity, rate FROM ${table} WHERE ${col} = ?`).all(e.source_id)
+                .filter(i => String(i.product_name || '').trim().toLowerCase() === desc);
+            if (!named.length) continue;      // description is not a product line
+            checked++;
+            const okRow = Array.isArray(e.items) && e.items.length > 0
+                && e.items.every(i => i.quantity != null && i.rate != null);
+            if (!okRow) { blank++; if (blanks.length < 5) blanks.push(`${party_id}/${e.date}/${e.reference_id}/${e.description}`); }
+        }
+    }
+    check('product-named rows were found to check', checked > 0, `${checked} rows`);
+    check('every product-named row carries quantity and rate', blank === 0,
+        `${blank} blank of ${checked}: ${blanks.join(', ')}`);
 }
 
 db.close();

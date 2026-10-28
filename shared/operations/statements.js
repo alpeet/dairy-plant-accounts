@@ -136,8 +136,58 @@ function attachEntryItemDetails(db, partyId, entries) {
     }
     for (const group of bySource.values()) {
         if (group.length < 2) continue;
-        const itemsTotal = group[0].items.reduce(
-            (s, i) => s + (i.amount != null ? Number(i.amount) : Number(i.quantity || 0) * Number(i.rate || 0)), 0);
+        const amountOf = (i) => (i.amount != null ? Number(i.amount) : Number(i.quantity || 0) * Number(i.rate || 0));
+        // Snapshot: the loop below rewrites each row's `items`, including
+        // group[0]'s, so the source list must not be read after that starts.
+        const groupItems = group[0].items.slice();
+        const itemsTotal = groupItems.reduce((s, i) => s + amountOf(i), 0);
+
+        // ── One ledger row per product line ────────────────────────────
+        // The workbook import posts an invoice as one ledger row PER PRODUCT
+        // (row 'NAUNI' 2,400 · row 'Mix Milk' 700). Those rows are different
+        // goods, not partials of the same goods, so each must carry its own
+        // quantity and rate. Before this, every row but one was blanked and a
+        // NAUNI line showed no quantity at all.
+        // Only when the rows genuinely cannot be matched to the items one-for-one
+        // (a bill posted as amount-only parts) do we keep the single-host rule.
+        // Only UNIQUE evidence counts: a row must match exactly one item, by
+        // product name first and then by its own amount. A row that matches
+        // nothing (a product the item table never recorded) keeps blank
+        // quantity/rate — it is never given another line's goods.
+        const perRow = (() => {
+            const unassigned = new Set(groupItems.map((_, idx) => idx));
+            const pickByName = (e) => {
+                const desc = String(e.description || '').trim().toLowerCase();
+                if (!desc) return null;
+                const hits = [...unassigned].filter(idx =>
+                    String(groupItems[idx].product_name || '').trim().toLowerCase() === desc);
+                return hits.length === 1 ? hits[0] : null;
+            };
+            const pickByAmount = (e) => {
+                const rowAmount = Math.abs((Number(e.debit) || 0) - (Number(e.credit) || 0));
+                const hits = [...unassigned].filter(idx => Math.abs(amountOf(groupItems[idx]) - rowAmount) <= 0.02);
+                return hits.length === 1 ? hits[0] : null;
+            };
+            const assigned = new Map();
+            for (const pass of [pickByName, pickByAmount]) {
+                for (const e of group) {
+                    if (assigned.has(e)) continue;
+                    const idx = pass(e);
+                    if (idx != null) { assigned.set(e, idx); unassigned.delete(idx); }
+                }
+            }
+            return assigned;
+        })();
+        if (perRow.size) {
+            for (const [e, idx] of perRow) {
+                e.items = [groupItems[idx]];
+                e.items_split_part = false;
+                delete e.items_invoice_total;
+                delete e.items_split_count;
+                delete e.items_rows_total;
+            }
+            continue;
+        }
         const rowTotal = group.reduce((s, e) => s + Math.abs((e.debit || 0) - (e.credit || 0)), 0);
         // Prefer the single row that carries the whole invoice amount.
         const whole = group.find(e =>

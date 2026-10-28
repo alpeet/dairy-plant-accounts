@@ -137,8 +137,11 @@ console.log('\nTEST 2 — Cash deposit from a bank transaction (link, no extra i
     ok(save.success !== false && !!save.data, 'bank cash-deposit row saved', save.error);
     const row = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(save.data.id);
     ok(row && row.accounting_class === 'cash_to_bank_transfer', 'classified as cash → bank transfer', row && row.accounting_class);
-    ok(row && row.ledger_posted === 1 && row.ledger_entry_id == null,
-        'transfer is marked non-party: never posted to the ledger (never income)', row && { posted: row.ledger_posted, entry: row.ledger_entry_id });
+    ok(row && Number(row.ledger_posted) === 0 && row.ledger_entry_id == null && !row.party_id,
+        'transfer is never posted to the ledger and carries no party (never income)',
+        row && { posted: row.ledger_posted, entry: row.ledger_entry_id, party: row.party_id });
+    ok(!db.prepare(`SELECT id FROM ledger_entries WHERE reference_type IN ('payment_received','payment_made')`).get(),
+        'no customer receipt / supplier payment was invented for the transfer');
 
     const pnlBefore = ops.getProfitLoss(db, { from_date: '0001-01-01', to_date: '9999-12-31' });
     const dep = ops.saveCashDeposit(db, {
@@ -147,14 +150,16 @@ console.log('\nTEST 2 — Cash deposit from a bank transaction (link, no extra i
     });
     ok(!!dep.id, 'register deposit saved', dep);
     const depRow = db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(dep.id);
-    ok(depRow && depRow.bank_txn_id === row.id, 'deposit PERSISTENTLY links to its bank statement row', depRow && depRow.bank_txn_id);
+    // Bank Transactions is standalone: the Cash Deposit register keeps its own
+    // record and does not link back to a bank statement row.
+    ok(depRow && depRow.bank_txn_id == null, 'deposit stays in its own register (no bank link)', depRow && depRow.bank_txn_id);
 
     const pnlAfter = ops.getProfitLoss(db, { from_date: '0001-01-01', to_date: '9999-12-31' });
     ok(pnlAfter.income.total_income === pnlBefore.income.total_income,
         'the deposit adds NO income and NO sales', { before: pnlBefore.income.total_income, after: pnlAfter.income.total_income });
 
     const list = ops.listCashDeposits(db, {});
-    ok(list.some(d => d.bank_txn_id === row.id), 'register list exposes the bank link for the trace');
+    ok(list.some(d => d.id === dep.id), 'register list still lists the deposit');
 
     const dep2 = ops.saveCashDeposit(db, { date: '2083-06-11', bank_name: 'X', amount: 100, bank_txn_id: 99999 });
     const dep2Row = db.prepare('SELECT bank_txn_id FROM cash_deposits WHERE id = ?').get(dep2.id);
