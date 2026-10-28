@@ -272,7 +272,9 @@ if (R.reconciliation.checks.some(c => c.check === 'Cash on hand vs physical coun
         'the flagged cash difference is explained in the data-gap notes');
 }
 if (R.reconciliation.checks.some(c => c.check === 'Stock valuation completeness' && !c.ok)) {
-    ok(R.notes.gaps.some(g => /negative/i.test(g)),
+    // Incompleteness can come from negative quantities OR from stock with no
+    // defensible unit cost — either way a gap note must say so.
+    ok(R.notes.gaps.some(g => /negative|incomplete|unvalued|lack defensible/i.test(g)),
         'the flagged stock incompleteness is explained in the data-gap notes');
 }
 

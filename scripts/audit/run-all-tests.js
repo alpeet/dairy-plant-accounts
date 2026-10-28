@@ -62,7 +62,14 @@ const MANIFEST = [
     'test-workbook-import-76.js',
     'test-bulk-entry.js',
     'test-bank-idempotency.js',
+    // bank register must never post into another module
+    'test-bank-standalone.js',
+    // party statement item/quantity/rate detail + column set
+    'test-statement-items.js',
+    // every Monthly Report figure is traceable to its rows
+    'test-report-drilldown.js',
     // reporting & acceptance
+    'test-report-lang.js',
     'test-management-reports.js',
     'test-erp-acceptance.js',
     'test-trust-pack.js',
@@ -71,7 +78,8 @@ const MANIFEST = [
 ];
 
 const EXCLUDED = {
-    'test-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime'
+    'test-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime',
+    'test-statement-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime'
 };
 
 const filter = (process.argv[2] || '').toLowerCase();

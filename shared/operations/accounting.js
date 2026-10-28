@@ -710,11 +710,20 @@ function getCashBankPosition(db, opts = {}) {
     // represent one, counted once each) + bank-mode receipts not already on the
     // statement.
     const cashToBank = round2(cashDepositRows.total + transferIn);
-    const bankCustomerReceipts = round2(receiptRows.reduce((s, r) => s + (Number(r.credit) || 0), 0));
+    // Every credit on the statement is money into the bank and every debit is
+    // money out — the class only labels the row. Counting only the rows the
+    // classifier happened to call "customer_receipt"/"supplier_payment" made a
+    // credit whose narration read like an expense vanish from the balance while
+    // the drill-down still listed it (a 65,000 gap in Kartik 2083).
+    const nonTransferRows = bankRows.filter(r => !r.is_transfer);
+    const bankCustomerReceipts = round2(
+        nonTransferRows.reduce((s, r) => s + (Number(r.credit) || 0), 0));
+    const bankNonTransferOut = round2(
+        nonTransferRows.reduce((s, r) => s + (Number(r.debit) || 0), 0));
     const bankIn = round2(bankCustomerReceipts + cashToBank
         + (bankReceiptsDoc.total - dupReceipts.reduce((s, r) => s + (Number(r.amount) || 0), 0)));
     const bankExpenseOut = round2(expenseRows.reduce((s, r) => s + (Number(r.debit) || 0), 0));
-    const bankOut = round2(paymentRows.reduce((s, r) => s + (Number(r.debit) || 0), 0) + transferOut + bankExpenseOut
+    const bankOut = round2(bankNonTransferOut + transferOut
         + (bankPaymentsDoc.total - dupPayments.reduce((s, r) => s + (Number(r.amount) || 0), 0)));
 
     const cashIn = round2(cashSales.total + cashReceipts.total);

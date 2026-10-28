@@ -142,22 +142,31 @@ const healedList = bank.listBankTransactions(db, {});
 const healedDeposit = healedList.find(r => r.reference_no === 'CDM-9001');
 const healedReceipt = healedList.find(r => r.reference_no === 'RCT-9002');
 check('deposit-text legacy row healed to cash_to_bank_transfer', healedDeposit && healedDeposit.accounting_class === 'cash_to_bank_transfer', healedDeposit && healedDeposit.accounting_class);
-check('healed deposit row is auto + ledger_posted (out of review queue)', healedDeposit && healedDeposit.match_status === 'auto' && healedDeposit.ledger_posted === 1, healedDeposit && { ms: healedDeposit.match_status, lp: healedDeposit.ledger_posted });
+// Standalone bank register: nothing is ever "posted", so no row — deposit or
+// receipt — may claim a ledger entry or be routed by party matching.
+check('healed deposit row is never posted to a ledger',
+    healedDeposit && Number(healedDeposit.ledger_posted) === 0 && healedDeposit.ledger_entry_id == null,
+    healedDeposit && { ms: healedDeposit.match_status, lp: healedDeposit.ledger_posted });
 check('plain receipt legacy row healed to customer_receipt', healedReceipt && healedReceipt.accounting_class === 'customer_receipt', healedReceipt && healedReceipt.accounting_class);
 const queue = bank.getBankReviewQueue(db);
 check('healed deposit row excluded from review queue', !queue.some(r => r.reference_no === 'CDM-9001'));
-check('receipt row stays in review queue for matching', queue.some(r => r.reference_no === 'RCT-9002'));
+check('no bank row sits in a party-matching queue',
+    !queue.some(r => r.reference_no === 'RCT-9002'), queue.map(r => r.reference_no));
 
 // ── 7. Manual classification (persisted + audited) ──────────────────────────
 console.log('\n7) setBankAccountingClass manual override');
 const rcId = healedReceipt.id;
 const cls1 = bank.setBankAccountingClass(db, rcId, 'expense', userId);
 check('classify to expense succeeds', cls1.success === true, cls1);
-check('class persisted + non-party treatment applied', cls1.data.accounting_class === 'expense' && cls1.data.match_status === 'auto' && cls1.data.ledger_posted === 1, cls1.data);
+check('class persisted without any ledger posting',
+    cls1.data.accounting_class === 'expense' && Number(cls1.data.ledger_posted) === 0
+    && cls1.data.ledger_entry_id == null && !cls1.data.party_id, cls1.data);
 const auditRow = db.prepare("SELECT * FROM audit_log WHERE table_name = 'bank_transactions' AND record_id = ? ORDER BY id DESC LIMIT 1").get(rcId);
 check('audit log entry written with user', !!auditRow && auditRow.changed_by === userId, auditRow && auditRow.changed_by);
 const cls2 = bank.setBankAccountingClass(db, rcId, 'customer_receipt', userId);
-check('flip back to receipt re-opens matching', cls2.success === true && cls2.data.match_status === 'review' && cls2.data.ledger_posted === 0, cls2.data);
+check('flipping the class back still posts nothing',
+    cls2.success === true && cls2.data.accounting_class === 'customer_receipt'
+    && Number(cls2.data.ledger_posted) === 0 && !cls2.data.party_id, cls2.data);
 const clsBad = bank.setBankAccountingClass(db, rcId, 'banana', userId);
 check('unknown class rejected', clsBad.success === false, clsBad);
 
