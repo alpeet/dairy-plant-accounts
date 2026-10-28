@@ -40,6 +40,9 @@ const MR_LABELS = {
     closing_cash:             ['Closing Cash Balance', 'अन्तिम नगद मौज्दात'],
     closing_bank:             ['Closing Bank Balance', 'अन्तिम बैंक मौज्दात'],
     closing_inventory:        ['Closing Inventory Value', 'अन्तिम मौज्दात मूल्य'],
+    opening_stock_qty:        ['Opening Stock Quantity', 'सुरुको मौज्दात परिमाण'],
+    closing_stock_qty:        ['Closing Stock Quantity', 'अन्तिम मौज्दात परिमाण'],
+    stock_in:                 ['Stock in (milk + purchases)', 'मौज्दातमा थपिएको (दूध + खरिद)'],
     receivables:              ['Outstanding Receivables', 'उठाउन बाँकी रकम'],
     payables:                 ['Outstanding Payables', 'तिर्न बाँकी रकम'],
     advances:                 ['Outstanding Advances', 'अग्रिम रकम (उठाउन बाँकी)'],
@@ -353,6 +356,7 @@ function _mrSummaryView(d) {
                 </tbody>
             </table>
         </div>
+        ${_mrStockView(d)}
         ${gaps}${notes}`;
 }
 
@@ -393,6 +397,48 @@ const MR_HEAD_NP = {
     'Bank Charges': 'बैंक शुल्क',
     'Miscellaneous': 'विविध'
 };
+
+/**
+ * Stock valuation block — the arithmetic that turns purchases into COGS.
+ * Opening stock + stock in − closing stock = COGS; a period whose stock cannot
+ * be valued says so instead of quietly inventing a cost.
+ */
+function _mrStockView(d) {
+    const s = d.summary || {};
+    const qty = v => (v === null || v === undefined || v === '')
+        ? '—'
+        : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const complete = s.stock_valuation_complete === true;
+    const stockIn = (Number(s.milk_cost) || 0) + (Number(s.other_purchases) || 0);
+    const rows = [
+        [rl('Opening Stock Value', 'सुरुको मौज्दात मूल्य'), _mrMoney(s.opening_inventory), qty(s.opening_inventory_quantity)],
+        [rl('Stock in (milk + purchases)', 'मौज्दातमा थपिएको (दूध + खरिद)'), _mrMoney(stockIn), '—'],
+        [rl('Closing Stock Value', 'अन्तिम मौज्दात मूल्य'), _mrMoney(s.closing_inventory), qty(s.closing_inventory_quantity)],
+        [rl('Cost of Goods Sold', 'बिक्री भएका सामानको लागत'), _mrMoney(s.cogs), '—']
+    ].map(([label, value, q]) => `<tr><td>${escapeHtml(label)}</td>
+        <td class="mr-amount">${value}</td><td class="mr-amount">${q}</td></tr>`).join('');
+    const status = complete
+        ? `<div class="muted" style="margin:6px 0 0">✅ ${escapeHtml(rl(
+            'Stock-adjusted: opening stock + stock in − closing stock = COGS. Net profit is actual profit for this period.',
+            'मौज्दात समायोजित: सुरुको मौज्दात + थपिएको − अन्तिम मौज्दात = लागत। यस अवधिको खुद नाफा वास्तविक हो।'))}
+           <br>${escapeHtml(s.cogs_method || '')}</div>`
+        : `<div class="muted" style="margin:6px 0 0;color:var(--warning,#b45309)">⚠️ ${escapeHtml(rl(
+            'Provisional: stock quantities/costs do not reconcile, so COGS is the purchase-recognition figure and net profit is not verified actual profit. Fix the flagged stock first.',
+            'अस्थायी: मौज्दात परिमाण/लागत मिलेन, त्यसैले लागत खरिद-आधारित हो र खुद नाफा प्रमाणित वास्तविक नाफा होइन। पहिले मौज्दात सुधार्नुहोस्।'))}
+           <br>${escapeHtml(s.cogs_method || '')}</div>`;
+    return `
+        <div class="card" style="padding:0;margin-top:14px">
+            <table class="data-table">
+                <thead><tr>
+                    <th>${rl('Stock Valuation (Cost of Goods Sold)', 'मौज्दात मूल्यांकन (बिक्री लागत)')}</th>
+                    <th style="text-align:right">${rlt('amount')}</th>
+                    <th style="text-align:right">${rl('Quantity', 'परिमाण')}</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            ${status}
+        </div>`;
+}
 
 function _mrHeadLabel(name) {
     const np = MR_HEAD_NP[name];
@@ -623,6 +669,17 @@ function _mrReportHtml(d) {
         <td class="num">${money(m.net_profit)}</td><td class="num">${money(m.closing_cash)}</td>
         <td class="num">${money(m.closing_bank)}</td><td class="num">${money(m.closing_inventory)}</td>
     </tr>`).join('');
+    const stockQty = v => (v === null || v === undefined || v === '')
+        ? '—'
+        : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const stockInReport = (Number(s.milk_cost) || 0) + (Number(s.other_purchases) || 0);
+    const stockRows = [
+        [_mrBilingual('Opening Stock Value', 'सुरुको मौज्दात मूल्य'), money(s.opening_inventory), stockQty(s.opening_inventory_quantity)],
+        [_mrBilingual('Stock in (milk + purchases)', 'मौज्दातमा थपिएको'), money(stockInReport), '—'],
+        [_mrBilingual('Closing Stock Value', 'अन्तिम मौज्दात मूल्य'), money(s.closing_inventory), stockQty(s.closing_inventory_quantity)],
+        [_mrBilingual('Cost of Goods Sold', 'बिक्री भएका सामानको लागत'), money(s.cogs), '—']
+    ].map(([label, value, q]) => `<tr><td>${escapeHtml(label)}</td>
+        <td class="num">${value}</td><td class="num">${q}</td></tr>`).join('');
     const checkRows = d.reconciliation.checks.map(c => `<tr>
         <td>${c.ok ? 'OK' : 'FLAG'} — ${escapeHtml(c.check)}</td>
         <td class="num">${money(c.expected)}</td><td class="num">${money(c.actual)}</td>
@@ -652,6 +709,19 @@ function _mrReportHtml(d) {
         <th>${_mrBilingual('Item', 'विवरण')}</th>
         <th class="num">${_mrBilingual('Amount (Rs)', 'रकम (रु)')}</th>
     </tr></thead><tbody>${summaryRows}</tbody></table>
+
+    <h2>${_mrBilingual('Stock valuation', 'मौज्दात मूल्यांकन')}</h2>
+    <table><thead><tr>
+        <th>${_mrBilingual('Line', 'विवरण')}</th>
+        <th class="num">${_mrBilingual('Amount (Rs)', 'रकम (रु)')}</th>
+        <th class="num">${_mrBilingual('Quantity', 'परिमाण')}</th>
+    </tr></thead><tbody>${stockRows}</tbody></table>
+    <div class="muted" style="margin:-6px 0 10px">${escapeHtml(s.stock_valuation_complete
+        ? (_mrBilingual('Stock-adjusted COGS: opening stock + stock in − closing stock. Net profit is actual profit.',
+            'मौज्दात समायोजित लागत: सुरुको + थपिएको − अन्तिम मौज्दात। खुद नाफा वास्तविक हो।'))
+        : (_mrBilingual('Provisional: stock quantities/costs do not reconcile — COGS is purchase-based and net profit is not verified actual profit.',
+            'अस्थायी: मौज्दात परिमाण/लागत मिलेन — लागत खरिद-आधारित हो, खुद नाफा प्रमाणित होइन।'))
+        + ' ' + (s.cogs_method || ''))}</div>
 
     <h2>${_mrBilingual('Income by head', 'आम्दानीको शीर्षक')}</h2>
     <table><thead><tr><th>${_mrBilingual('Income head', 'आम्दानी शीर्षक')}</th>

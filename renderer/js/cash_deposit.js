@@ -43,27 +43,7 @@ async function renderCashDeposit() {
             </table>
         </div>` : ''}
 
-        <!-- Bank-statement deposits with no register record (counted once, never as income) -->
-        ${bt.rows.length ? `
-        <div class="table-container" style="margin-bottom:16px">
-            <h3 style="margin:0 0 4px">🏦 Bank Statement Deposits — not in register (${bt.count})</h3>
-            <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">Classified as cash→bank transfers from the bank statement and already counted exactly once as an internal transfer — never as new sales or income. Copy one to the register if you also track it there.</div>
-            <table>
-                <thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Bank Account</th><th class="text-right">Amount</th><th class="actions">Actions</th></tr></thead>
-                <tbody>
-                    ${bt.rows.map((r, i) => `
-                        <tr>
-                            <td>${formatDate(r.date)}</td>
-                            <td style="font-size:11px">${escapeHtml(r.reference_no || '-')}</td>
-                            <td>${escapeHtml(r.description || r.counterparty_name || '-')}</td>
-                            <td style="font-size:11px">${escapeHtml(r.bank_account || '-')}</td>
-                            <td class="text-right" style="font-weight:600">${formatCurrency(Number(r.credit) || Number(r.debit) || 0)}</td>
-                            <td class="actions"><button class="btn btn-primary btn-sm" onclick="copyBankDepositToRegister(${i})" title="Copy this statement deposit into the Cash Deposit register">➕ To Register</button></td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        </div>` : ''}
+        <!-- Bank Transactions are intentionally managed only in their own module. -->
 `;
     container.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -143,7 +123,7 @@ async function renderCashDeposit() {
                             <td class="text-right" style="font-weight:600;color:var(--accent)">${formatCurrency(d.amount)}</td>
                             <td><span class="badge badge-info">${escapeHtml(d.cash_source || '-')}</span></td>
                             <td>${escapeHtml(d.deposit_mode || '-')}</td>
-                            <td style="font-size:11px">${escapeHtml(d.reference_no || '-')}${d.bank_txn_id ? ` <span title="Linked to bank statement transaction #${d.bank_txn_id}">🔗</span>` : ''}</td>
+                            <td style="font-size:11px">${escapeHtml(d.reference_no || '-')}</td>
                             <td>${escapeHtml(d.deposited_by || '-')}</td>
                             <td class="actions">
                                 <button class="btn btn-info btn-sm" onclick="editCashDeposit(${d.id})">✏️</button>
@@ -181,9 +161,8 @@ async function refreshCashDeposits() {
         amount: 0, cash_source: 'mixed', deposit_mode: 'cash', 
         reference_no: '', remarks: '', deposited_by: '' 
     };
-    // Persistent statement link: carried from the bank row ("➕ To Register")
-    // or from the row being edited; null for a brand-new manual deposit.
-    _depositBankTxnId = (existingData && existingData.bank_txn_id) || null;
+    // Cash deposits are a separate register; no bank transaction is attached.
+    _depositBankTxnId = null;
 
     showModal(`
         <div class="modal-header">
@@ -264,7 +243,7 @@ function copyBankDepositToRegister(idx) {
         reference_no: r.reference_no || '',
         remarks: `From bank statement: ${r.description || r.counterparty_name || ''}`.trim(),
         deposited_by: '',
-        bank_txn_id: r.id || null
+        bank_txn_id: null
     });
 }
 
@@ -288,7 +267,7 @@ async function saveCashDeposit(id) {
         reference_no: document.getElementById('cdRefNo')?.value || '',
         remarks: document.getElementById('cdRemarks')?.value || '',
         deposited_by: document.getElementById('cdDepositedBy')?.value || '',
-        bank_txn_id: _depositBankTxnId
+        bank_txn_id: null
     };
 
     if (!data.date) { showToast('Date is required', 'error'); return; }

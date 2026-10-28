@@ -286,17 +286,15 @@ function renderStatementResult(data) {
             <td>${escapeHtml(e.reference_no || '')}</td>
             <td>${statementModuleName(e.reference_type)}${e.is_pdc ? ' 🏛' : ''}</td>
             <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
-            <td>${cells.item}</td>
-            <td class="text-right">${cells.qty}</td>
-            <td>${cells.unit}</td>
-            <td class="text-right">${cells.rate}</td>
+            <td class="text-right">${cells.qty === ST_DASH ? '' : cells.qty}</td>
+            <td class="text-right">${cells.rate === ST_DASH ? '' : cells.rate}</td>
             <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? ST_DASH : '')}</td>
             <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? ST_DASH : '')}</td>
             <td class="text-right"><strong>${formatCurrency(e.running_balance)}</strong></td>
             <td>${statementStatusCell(e)}</td>
         </tr>
         <tr id="${detailId}" style="display:none">
-            <td colspan="12" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
+            <td colspan="10" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
                 <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
                     <span><strong>${rl('Date', 'मिति')}:</strong> ${formatDate(e.date)}</span>
                     <span><strong>${rlt('reference')}:</strong> ${escapeHtml(e.reference_no || '—')}</span>
@@ -352,9 +350,7 @@ function renderStatementResult(data) {
                         <th>${rlt('reference')}</th>
                         <th>${rlt('transaction_type')}</th>
                         <th>${rlt('particulars')}</th>
-                        <th>${rlt('item')}</th>
                         <th class="text-right">${rlt('quantity')}</th>
-                        <th>${rlt('unit')}</th>
                         <th class="text-right">${rlt('rate')}</th>
                         <th class="text-right">${rlt('debit')}</th>
                         <th class="text-right">${rlt('credit')}</th>
@@ -364,16 +360,16 @@ function renderStatementResult(data) {
                 </thead>
                 <tbody>
                     <tr style="background:#f0f4f8;font-weight:600">
-                        <td colspan="10">${rlt('opening_balance')}</td>
+                        <td colspan="8">${rlt('opening_balance')}</td>
                         <td class="text-right">${formatCurrency(data.opening_balance)}</td>
                         <td></td>
                     </tr>
                     ${rows}
-                    ${data.entries.length === 0 ? `<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
+                    ${data.entries.length === 0 ? `<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="8"><strong>${rlt('total')}</strong></td>
+                        <td colspan="6"><strong>${rlt('total')}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td>
@@ -424,8 +420,7 @@ function showSupplierStatements() {
 function buildStatementHtml(data, settings) {
     return `
         <style>
-            /* 12 columns need the wide side of the sheet; later @page rules
-               override the portrait default written by printHTML(). */
+            /* 10 columns; later @page rules override the portrait default. */
             @page { size: A4 landscape; }
             table { font-size: 8pt; }
             th, td { padding: 3px 5px; }
@@ -449,12 +444,12 @@ function buildStatementHtml(data, settings) {
             ${data.pdc.issued_held ? ` Issued ${formatCurrency(data.pdc.issued_held)} (${data.pdc.issued_held_count} cheque(s));` : ''}
         </div>` : ''}
         <table>
-            <thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th>${rlt('item')}</th><th class="text-right">${rlt('quantity')}</th><th>${rlt('unit')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
+            <thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
             <tbody>
-                <tr><td colspan="10">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
-                ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td>${c.item}</td><td class="text-right">${c.qty}</td><td>${c.unit}</td><td class="text-right">${c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
+                <tr><td colspan="8">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
+                ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === ST_DASH ? '' : c.qty}</td><td class="text-right">${c.rate === ST_DASH ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
             </tbody>
-            <tfoot><tr><td colspan="8"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
+            <tfoot><tr><td colspan="6"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
         </table>
         <div class="footer"><div>${rl('Printed', 'प्रिन्ट')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
@@ -565,12 +560,13 @@ async function exportStatementPDF() {
             tfoot tr td { background: #eef2f7; font-weight: 700; }
         </style>
         <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>${escapeHtml(data.party.name)} — ${rl('Statement of Account', 'खाताको विवरण')}</h2><p>${rlt('period')}: ${data.from_date} → ${data.to_date}</p></div>
-        <table><thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th>${rlt('item')}</th><th class="text-right">${rlt('quantity')}</th><th>${rlt('unit')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
+        <table><thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
         <tbody>
-            <tr><td colspan="10">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
-            ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td>${c.item}</td><td class="text-right">${c.qty}</td><td>${c.unit}</td><td class="text-right">${c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
+            <tr><td colspan="8">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
+            ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === ST_DASH ? '' : c.qty}</td><td class="text-right">${c.rate === ST_DASH ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
         </tbody>
-        <tfoot><tr><td colspan="8"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot></table>
+        <tfoot><tr><td colspan="6"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
+        </table>
         <div class="footer"><div>${rl('Generated', 'बनाइएको मिति')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
     await window.api.printToPDF({ html });

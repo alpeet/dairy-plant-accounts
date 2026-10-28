@@ -92,7 +92,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     const totalPettyCash = { total: opEx.petty_cash, count: 0 };
     const totalSalary = { total: opEx.salary, count: 0 };
     const totalVehicle = { total: opEx.vehicle_expenses, count: 0 };
-    const totalBankExpenses = { total: opEx.bank_expenses, count: opEx.bank_expense_rows.length };
+    const totalBankExpenses = { total: 0, count: 0 };
     // Typed payments that ARE genuine expenses (actual_expense +
     // advance_adjustment). Advances/loans/repayments never appear here.
     const totalTypedExpenses = { total: opEx.typed_payment_expenses || 0, count: opEx.typed_payment_expense_count || 0 };
@@ -282,15 +282,8 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         db.prepare(`SELECT date, amount FROM other_expenses WHERE date >= ? AND date <= ?`)
             .all(from, to).map(r => `${r.date}|${Math.round((Number(r.amount) + Number.EPSILON) * 100) / 100}`)
     );
-    const bankExpenseRows = accounting.listClassifiedBankRows(db, { from_date: from, to_date: to })
-        .filter(r => r.is_expense)
-        .filter(r => {
-            const amount = Math.round((Number(r.debit) + Number.EPSILON) * 100) / 100;
-            if (!(amount > 0)) return false;
-            const ref = String(r.reference_no || '').trim();
-            if (ref) return !registeredRefs.has(ref);
-            return !registeredAmounts.has(`${r.date}|${amount}`);
-        });
+    // Bank transactions are standalone and never contribute expense rows here.
+    const bankExpenseRows = [];
 
     const byMonth = {};   // ym -> component map
     const ensure = (ym) => {
@@ -522,9 +515,7 @@ function getEnhancedDaybook(db, { from_date, to_date } = {}) {
     // Bank statement rows that are internal transfers (cash/own-account deposits)
     // or office expenses paid from the bank. Rows matching a cash_deposits record
     // are skipped so the same deposit is not listed twice.
-    const bankRows = accounting.listClassifiedBankRows(db, { from_date: from, to_date: to })
-        .filter(r => r.is_transfer || r.is_expense)
-        .filter(r => !(r.reference_no && depositRefs.has(String(r.reference_no).trim())));
+    const bankRows = []; // Standalone bank register is excluded from this report.
 
     bankRows.forEach(r => {
         const isTransfer = r.is_transfer;

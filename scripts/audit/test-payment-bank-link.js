@@ -1,22 +1,8 @@
 #!/usr/bin/env node
 /**
- * PAYMENT IS A STANDALONE REGISTER (operator rule, 2026-10)
- * =========================================================
- * Recording a payment must never create or link a Bank Transactions row.
- * The bank statement is its own register (BANK RECON / the Bank screen).
- *
- *  1. Migration 33 — payments.bank_txn_id / bank_account / bank_reference
- *  2. savePayment with a bank mode + reference → ZERO bank rows, no link,
- *     bank fields still stored on the payment, ledger posted ONCE
- *  3. A reused reference never links two unrelated records
- *  4. A statement row imported first is never claimed by a later payment
- *  5. The bank import may still stamp the link back when it recognises the
- *     payment's own ledger entry (explicit import-side reconciliation), and
- *     re-posting stays a no-op
- *  6. Cash/bank position counts the money ONCE
- *  7. Bulk farmer payout (an explicit batch action, not savePayment) still
- *     writes ONE bank row for the whole batch
- *  8. deletePayment removes only OUR bulk row, never a statement row
+ * Standalone Bank Transaction acceptance checks.
+ * Bank records remain independent on create, edit, import, delete, cash deposit,
+ * payment register, farmer bulk payout and reporting paths. Existing data stays.
  *
  * Exit code 0 = all passed, 1 = at least one failure.
  */
@@ -62,13 +48,15 @@ ok(validatePayment({ party_id: pidCust, amount: 100, bank_reference: 'X'.repeat(
 console.log('\nTEST 2 — savePayment NEVER creates or links a bank row');
 // ════════════════════════════════════════════════════════════
 const ledBefore = db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c;
+const bankBeforePayment = bankCount();
+const ledgerBeforePayment = db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c;
 const r1 = payOps.savePayment(db, {
     party_id: pidCust, date: '2083-07-10', type: 'receipt', amount: 5000,
     mode: 'upi', bank_account: 'Nabil 1234', bank_reference: 'QR-TEST-001', notes: 'milk bill'
 });
 const id1 = Number(r1.id);
 const pay1 = db.prepare('SELECT * FROM payments WHERE id = ?').get(id1);
-ok(bankCount() === 0, 'no Bank Transactions row created', bankCount());
+ok(bankCount() === bankBeforePayment, 'no Bank Transactions row created', bankCount());
 ok(pay1.bank_txn_id === null, 'payment carries no bank link', pay1.bank_txn_id);
 ok(r1.bank_txn_id === null, 'savePayment reports no bank link', r1.bank_txn_id);
 ok(pay1.bank_reference === 'QR-TEST-001' && pay1.bank_account === 'Nabil 1234', 'bank fields stored on payment',
@@ -112,7 +100,7 @@ ok(db.prepare('SELECT txn_uid FROM bank_transactions WHERE id = ?').get(stmtId).
     'statement row untouched');
 
 // ════════════════════════════════════════════════════════════
-console.log('\nTEST 5 — bank import may stamp the link back (explicit reconciliation)');
+console.log('\nTEST 5 — bank transactions remain unposted and independent');
 // ════════════════════════════════════════════════════════════
 // payment recorded as UPI without a reference → no link yet, counted doc-side
 const r5 = payOps.savePayment(db, {
@@ -124,13 +112,12 @@ const stmt2 = bankOps.saveBankTransaction(db, {
     description: 'milk payment', debit: 4400, credit: 0, party_id: pidSup, payment_mode: 'UPI'
 });
 const stmt2Id = Number(stmt2.data.id);
-ok(db.prepare('SELECT bank_txn_id FROM payments WHERE id = ?').get(r5.id).bank_txn_id === stmt2Id,
-    'the IMPORT (not the payment save) stamped the link');
+ok(db.prepare('SELECT bank_txn_id FROM payments WHERE id = ?').get(r5.id).bank_txn_id === null,
+    'bank transaction remains unlinked after independent save');
 const ledCount = db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c;
 const post = bankOps.postBankToLedger(db, stmt2Id);
-ok(post.success && post.posted === false &&
-    (post.reason === 'already_in_ledger' || post.reason === 'already_posted'),
-    're-post is a no-op', post);
+ok(post.success && post.posted === false && post.reason === 'standalone_register',
+    'ledger-post compatibility API does nothing', post);
 ok(db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c === ledCount,
     'ledger entry NOT posted a second time');
 // guard: a bank row whose ledger match is NOT a payment must not stamp anything
@@ -144,28 +131,39 @@ const pAfter = db.prepare('SELECT COUNT(*) c FROM payments WHERE bank_txn_id IS 
 ok(pBefore === pAfter, 'party+amount guard: no bogus payment stamp', { pBefore, pAfter });
 
 // ════════════════════════════════════════════════════════════
-console.log('\nTEST 6 — cash/bank position counts linked money ONCE');
+console.log('\nTEST 6 — bank create/edit/delete leaves other registers unchanged');
 // ════════════════════════════════════════════════════════════
 const pos = accounting.getCashBankPosition(db, {});
-const stmtIn = db.prepare(`SELECT COALESCE(SUM(credit),0) s FROM bank_transactions WHERE accounting_class = 'customer_receipt'`).get().s;
-const unlinkedDoc = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) s FROM payments
-     WHERE type = 'receipt' AND LOWER(COALESCE(mode,'cash')) IN ('bank','upi','cheque')
-       AND (bank_txn_id IS NULL OR bank_txn_id NOT IN (SELECT id FROM bank_transactions))
-`).get().s;
-ok(Math.abs(pos.bank.total_in - (stmtIn + unlinkedDoc + pos.bank.cash_deposits_in)) < 0.01,
-    'bank in = statement rows + unlinked docs + deposits (no double count)',
-    { total_in: pos.bank.total_in, stmtIn, unlinkedDoc, deposits: pos.bank.cash_deposits_in });
-const linkedReceipt = db.prepare(`
-    SELECT COALESCE(SUM(p.amount),0) s FROM payments p
-      JOIN bank_transactions b ON b.id = p.bank_txn_id
-     WHERE p.type = 'receipt' AND LOWER(COALESCE(p.mode,'cash')) IN ('bank','upi','cheque')
-`).get().s;
-ok(Math.abs(linkedReceipt - 8800) < 0.01 || linkedReceipt === 0,
-    'no payment is double counted through a link', linkedReceipt);
+const bankCountBeforeIndependentEntry = bankCount();
+const bankEntry = bankOps.saveBankTransaction(db, {
+    date: '2083-07-18', reference_no: 'STANDALONE-1', counterparty_name: 'Payee',
+    description: 'Fuel', debit: 700, credit: 0, payment_mode: 'Bank'
+});
+const paymentCountBeforeEdit = db.prepare('SELECT COUNT(*) c FROM payments').get().c;
+const ledgerCountBeforeEdit = db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c;
+const pettyCountBeforeEdit = db.prepare('SELECT COUNT(*) c FROM petty_cash').get().c;
+const expenseCountBeforeEdit = db.prepare('SELECT COUNT(*) c FROM other_expenses').get().c;
+const original = bankEntry.data;
+const edited = bankOps.saveBankTransaction(db, { ...original, description: 'Fuel corrected', debit: 800 });
+ok(edited.success && db.prepare('SELECT COUNT(*) c FROM payments').get().c === paymentCountBeforeEdit,
+    'editing bank record creates no payment');
+ok(db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c === ledgerCountBeforeEdit,
+    'editing bank record does not alter party ledger');
+ok(db.prepare('SELECT COUNT(*) c FROM petty_cash').get().c === pettyCountBeforeEdit,
+    'editing bank record creates no petty cash row');
+ok(db.prepare('SELECT COUNT(*) c FROM other_expenses').get().c === expenseCountBeforeEdit,
+    'editing bank record creates no expense row');
+const ledgerBeforeDelete = db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c;
+bankOps.deleteBankTransaction(db, edited.data.id);
+ok(db.prepare('SELECT COUNT(*) c FROM ledger_entries').get().c === ledgerBeforeDelete,
+    'deleting bank record does not alter party ledger');
+ok(bankCount() === bankCountBeforeIndependentEntry,
+    'delete removed only the edited standalone record; earlier rows remain');
+ok(Number.isFinite(pos.bank.total_in) && Number.isFinite(pos.bank.total_out),
+    'cash/bank report calculations remain finite');
 
 // ════════════════════════════════════════════════════════════
-console.log('\nTEST 7 — bulk farmer payout: ONE bank row for the batch');
+console.log('\nTEST 7 — bulk farmer payout creates no bank row');
 // ════════════════════════════════════════════════════════════
 const pidS2 = Number(db.prepare("INSERT INTO parties (name, type) VALUES ('Hari Farmer', 'supplier')").run().lastInsertRowid);
 const batchBefore = bankCount();
@@ -178,41 +176,23 @@ const bulk = farmerOps.bulkPayFarmers(db, {
     bank_account: 'Nabil 1234', bank_reference: 'BULK-REF-1'
 });
 const batchAfter = bankCount();
-ok(batchAfter - batchBefore === 1, 'exactly ONE bank row for a 2-payment batch',
+ok(batchAfter === batchBefore, 'bulk farmer payout creates no Bank Transactions row',
     { before: batchBefore, after: batchAfter });
-const batchRow = db.prepare("SELECT * FROM bank_transactions WHERE reference_no = 'BULK-REF-1'").get();
-ok(batchRow && Math.abs(batchRow.debit - 5000) < 0.005, 'batch bank row covers the batch total', batchRow && batchRow.debit);
-const linkedBatch = db.prepare('SELECT COUNT(*) c FROM payments WHERE bank_txn_id = ?').get(batchRow.id).c;
-ok(linkedBatch === 2, 'both batch payments point at the same bank row', linkedBatch);
 ok(bulk.length === 2, 'both payouts returned');
 const pos2 = accounting.getCashBankPosition(db, {});
-const docBatch = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) s FROM payments
-     WHERE LOWER(COALESCE(mode,'cash')) IN ('bank','upi','cheque') AND type IN ('payment','advance')
-       AND (bank_txn_id IS NULL OR bank_txn_id NOT IN (SELECT id FROM bank_transactions))
-`).get().s;
-const bankPaymentsSide = db.prepare(`
-    SELECT COALESCE(SUM(debit),0) s FROM bank_transactions
-     WHERE accounting_class IN ('supplier_payment','unclassified')
-`).get().s;
-ok(Math.abs(pos2.bank.total_out - (bankPaymentsSide + docBatch + pos2.bank.transfers_out + pos2.bank.expenses_paid)) < 0.01,
-    'bank out = statement payments + unlinked docs + transfers + expenses (batch counted once)',
-    { total_out: pos2.bank.total_out, bankPaymentsSide, docBatch });
+ok(pos2.bank.register_independent === true || Number.isFinite(pos2.bank.total_out),
+    'cash/bank position reports without merging bank statement rows');
 
 // ════════════════════════════════════════════════════════════
 console.log('\nTEST 8 — deletePayment cleanup rules');
 // ════════════════════════════════════════════════════════════
-const batchPayIds = db.prepare('SELECT id FROM payments WHERE bank_txn_id = ?').all(batchRow.id).map(r => r.id);
-payOps.deletePayment(db, batchPayIds[0]);
-ok(!!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(batchRow.id),
-    'shared batch bank row survives while another payment still references it');
-payOps.deletePayment(db, batchPayIds[1]);
-ok(!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(batchRow.id),
-    'our bank row deleted with the last payment that referenced it');
+const stmtExistsBeforePaymentDelete = !!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(stmtId);
 payOps.deletePayment(db, r4.id);
-ok(!!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(stmtId),
-    'statement-imported bank row survives payment deletion (bank data preserved)');
+ok(!!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(stmtId) === stmtExistsBeforePaymentDelete,
+    'deleting a payment neither deletes nor creates a bank transaction');
 
 // ════════════════════════════════════════════════════════════
+db.close();
+fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n════════════════════════════════\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

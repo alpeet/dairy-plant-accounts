@@ -255,12 +255,25 @@ for (const name of ['Sales invoices vs income heads', 'Milk procurement vs colle
     ok(R.reconciliation.checks.some(c => c.check === name), `reconciliation includes "${name}"`);
 }
 ok(R.reconciliation.checks.some(c => /Continuity/.test(c.check)), 'reconciliation includes month continuity');
-const nonCash = R.reconciliation.differences.filter(c => c.check !== 'Cash on hand vs physical count');
-eq(nonCash.length, 0, 'every check except the operator\'s cash count agrees',
-    nonCash.map(c => `${c.check}: ${c.difference}`).join('; '));
-if (!R.reconciliation.all_ok) {
+// `differences` now holds arithmetic drift only; incomplete-books flags
+// (negative stock, cash count) travel separately in `data_flags`.
+eq(R.reconciliation.differences.length, 0, 'every arithmetic check agrees (no engine drift)',
+    R.reconciliation.differences.map(c => `${c.check}: ${c.difference}`).join('; '));
+ok(R.reconciliation.differences.every(c => c.kind === 'arithmetic'),
+    'a reconciliation difference is always an arithmetic one');
+if (R.reconciliation.data_flags.length) {
+    ok(R.reconciliation.data_flags.every(c => c.kind === 'data-quality'),
+        'incomplete-books flags are labelled data-quality, not arithmetic drift');
+    console.log('  Data-quality flags (no formula can fix these):');
+    R.reconciliation.data_flags.forEach(c => console.log(`   · ${c.check}: ${c.note}`));
+}
+if (R.reconciliation.checks.some(c => c.check === 'Cash on hand vs physical count' && !c.ok)) {
     ok(R.notes.gaps.some(g => /physical count/i.test(g)),
         'the flagged cash difference is explained in the data-gap notes');
+}
+if (R.reconciliation.checks.some(c => c.check === 'Stock valuation completeness' && !c.ok)) {
+    ok(R.notes.gaps.some(g => /negative/i.test(g)),
+        'the flagged stock incompleteness is explained in the data-gap notes');
 }
 
 // ──────────────────────────────────────────────────────────────

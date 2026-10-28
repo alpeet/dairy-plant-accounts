@@ -1,13 +1,10 @@
 /**
  * Prarambha Account & Stock Management — Bank Transactions
  * =======================================================
- * Separate module for bank transactions (Sushil QR / bank account),
- * distinct from cash & petty cash. Supports:
- *   - CRUD for bank transactions
- *   - Auto-matching to party ledger by counterparty name (exact matches post
- *     automatically; near/unmatched go to a "needs review" queue)
- *   - Idempotent ledger posting (never double-posts what the ledger already has)
- *   - Bank statement with running balance
+ * Standalone bank transaction register. Bank rows are not posted to party
+ * ledgers, payment/collection registers, petty cash, or expense registers.
+ * Supports independent CRUD, import deduplication, classification labels,
+ * and a bank statement with running balance.
  *
  * Used by both Electron (main.js) and Web (server.js).
  */
@@ -17,14 +14,8 @@ const accounting = require('./accounting');
 const { logAudit } = require('./audit');
 
 const CLASS_META = {
-    cash_to_bank_transfer: {
-        reason: 'cash_to_bank_transfer',
-        note: 'cash-to-bank transfer (internal): Bank DR / Cash CR — not income, not a customer payment'
-    },
-    expense: {
-        reason: 'expense_row',
-        note: 'office/operating expense paid from the bank: Expense DR / Bank CR — no party ledger posting'
-    }
+    cash_to_bank_transfer: { reason: 'cash_to_bank_transfer', note: 'cash-to-bank transfer (classification only; standalone bank register)' },
+    expense: { reason: 'expense_row', note: 'expense-like narration (classification only; standalone bank register)' }
 };
 
 /**
@@ -135,8 +126,8 @@ function ensureBankTable(db) {
     // Stable idempotency key (Migration 27): ref:<reference> or imp:<hash>#<n>.
     try { db.exec("ALTER TABLE bank_transactions ADD COLUMN txn_uid TEXT DEFAULT NULL"); } catch (e) { /* ok */ }
     try { _migrateTxnUid(db); } catch (e) { console.log('txn_uid migration error (non-fatal):', e.message); }
-    // Heal rows written before accounting_class existed — with class '' they
-    // were hidden from the review queue, never posted, and never surfaced.
+    // Legacy rows are classified for display only. Healing never posts to or
+    // creates a record in any other register.
     try { _healAccountingClass(db); } catch (e) { console.log('accounting_class heal error (non-fatal):', e.message); }
 }
 
@@ -158,12 +149,7 @@ function _healAccountingClass(db) {
     );
     for (const r of stale) {
         const cls = accounting.classifyBankRow(r) || 'unclassified';
-        if (cls === 'cash_to_bank_transfer' || cls === 'expense') {
-            setClass.run(cls, r.id);
-            _markNonParty(db, r.id, cls);
-        } else {
-            setClass.run(cls, r.id);
-        }
+        setClass.run(cls, r.id);
     }
 }
 
@@ -193,12 +179,10 @@ function isNonPartyRow(row) {
 function _markNonParty(db, id, cls) {
     const meta = CLASS_META[cls] || { reason: cls, note: cls };
     db.prepare(
-        `UPDATE bank_transactions
-            SET accounting_class = ?, ledger_posted = 1, ledger_entry_id = NULL, match_status = 'auto',
-                remarks = CASE WHEN COALESCE(remarks,'') = '' THEN ? ELSE remarks || '; ' || ? END,
-                updated_at = datetime('now','localtime')
-          WHERE id = ?`
-    ).run(cls, meta.note, meta.note, id);
+        `UPDATE bank_transactions SET accounting_class = ?, party_id = NULL,
+            ledger_posted = 0, ledger_entry_id = NULL,
+            updated_at = datetime('now','localtime') WHERE id = ?`
+    ).run(cls, id);
     return { success: true, posted: false, reason: meta.reason, ledger_entry_id: null };
 }
 
@@ -255,68 +239,11 @@ function findExistingLedgerEntry(db, { party_id, date, debit, credit, reference_
  */
 function postBankToLedger(db, id) {
     ensureBankTable(db);
-    const txn = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
-    if (!txn) return { success: false, error: 'Bank transaction not found' };
-    // Cash→Bank deposits and expenses paid from the bank are internal money
-    // movements: they must never become a second sale, income, receivable or
-    // customer payment in a party's ledger.
-    if (isNonPartyRow(txn)) {
-        return _markNonParty(db, id, bankRowClass(txn));
-    }
-    if (txn.ledger_posted && txn.ledger_entry_id) {
-        return { success: true, posted: false, reason: 'already_posted' };
-    }
-    if (!txn.party_id) {
-        return { success: false, error: 'No party matched — resolve from the review queue first' };
-    }
-    const isCredit = (txn.credit || 0) > 0;
-    const debit = isCredit ? 0 : (txn.debit || 0);
-    const credit = isCredit ? (txn.credit || 0) : 0;
-    const existing = findExistingLedgerEntry(db, {
-        party_id: txn.party_id, date: txn.date, debit, credit, reference_no: txn.reference_no
-    });
-    if (existing) {
-        // Mark as reflected WITHOUT claiming the pre-existing ledger entry:
-        // ledger_entry_id stays NULL so deleting this bank row can never delete
-        // an entry that the Party_Ledger import created.
-        db.prepare(
-            `UPDATE bank_transactions SET ledger_posted = 1, ledger_entry_id = NULL, match_status = 'auto',
-             remarks = CASE WHEN remarks = '' THEN 'already reflected in ledger (no new posting)' ELSE remarks || '; already reflected in ledger' END,
-             updated_at = datetime('now', 'localtime') WHERE id = ?`
-        ).run(id);
-        // D10: the matched ledger row belongs to a recorded payment → stamp the
-        // link back so payment ↔ bank row ↔ ledger share ONE transaction ID and
-        // the cash/bank position counts the money from exactly one side.
-        // Guard: ledger rows created BY a bank posting carry the bank txn id in
-        // reference_id (not a payment id), so require the candidate payment to
-        // agree on party AND amount before claiming the link.
-        let linked_payment = null;
-        if (['payment_received', 'payment_made', 'adjustment'].includes(existing.reference_type) && existing.reference_id) {
-            const cand = db.prepare('SELECT id, party_id, amount, mode FROM payments WHERE id = ?').get(existing.reference_id);
-            // Only non-cash payments: a cash-mode payment counted on the cash side
-            // of getCashBankPosition — stamping it would leave the cash side AND
-            // the bank side counting the same rupee in different pockets.
-            const nonCash = cand && ['bank', 'upi', 'cheque'].includes(String(cand.mode || 'cash').toLowerCase());
-            if (cand && nonCash && cand.party_id === txn.party_id && Math.abs(Number(cand.amount) - Number(txn.amount || 0)) < 0.005) {
-                const res = db.prepare(
-                    'UPDATE payments SET bank_txn_id = ? WHERE id = ? AND bank_txn_id IS NULL'
-                ).run(id, cand.id);
-                if (res.changes > 0) linked_payment = cand.id;
-            }
-        }
-        return { success: true, posted: false, reason: 'already_in_ledger', ledger_entry_id: null, linked_payment };
-    }
-    const refType = isCredit ? 'payment_received' : 'payment_made';
-    const desc = `${txn.counterparty_name || ''} ${txn.description || ''} [${txn.reference_no || 'BANK'}]`.trim();
-    const ins = db.prepare(
-        `INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
-    ).run(txn.party_id, txn.date, refType, id, desc, debit, credit);
-    db.prepare(
-        `UPDATE bank_transactions SET ledger_posted = 1, ledger_entry_id = ?, match_status = 'auto',
-         updated_at = datetime('now', 'localtime') WHERE id = ?`
-    ).run(ins.lastInsertRowid, id);
-    return { success: true, posted: true, ledger_entry_id: ins.lastInsertRowid };
+    const exists = db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(id);
+    if (!exists) return { success: false, error: 'Bank transaction not found' };
+    // Retained as a compatibility API for older clients; standalone bank rows
+    // must never create, modify, or claim ledger/payment records.
+    return { success: true, posted: false, reason: 'standalone_register' };
 }
 
 /**
@@ -332,9 +259,8 @@ function listBankTransactions(db, { from_date, to_date, search, match_status, ba
     if (match_status) { where.push('match_status = ?'); params.push(match_status); }
     if (bank_account) { where.push('bank_account = ?'); params.push(bank_account); }
     const sql = `
-        SELECT b.*, p.name AS party_name
+        SELECT b.*, '' AS party_name
         FROM bank_transactions b
-        LEFT JOIN parties p ON p.id = b.party_id
         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
         ORDER BY b.date, b.id
     `;
@@ -347,28 +273,11 @@ function listBankTransactions(db, { from_date, to_date, search, match_status, ba
 }
 
 /**
- * Review queue: near-match / unmatched rows awaiting human decision.
+ * Review queue is retained for compatibility but standalone bank rows are not party-matched.
  */
 function getBankReviewQueue(db) {
     ensureBankTable(db);
-    // Internal transfers and bank-paid expenses need no party, so they are not
-    // "needs review" items: resolving them to a party would invent a customer
-    // receipt / supplier payment that does not exist.
-    return db.prepare(`
-        SELECT b.*, p.name AS party_name
-        FROM bank_transactions b
-        LEFT JOIN parties p ON p.id = b.party_id
-        WHERE b.match_status IN ('review', 'unmatched')
-          AND COALESCE(b.accounting_class, '') NOT IN ('cash_to_bank_transfer', 'expense')
-          AND b.id NOT IN (
-              SELECT id FROM bank_transactions
-               WHERE accounting_class = '' AND (
-                   UPPER(COALESCE(txn_type,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(counterparty_name,'')) LIKE '%DEPOSIT%'
-                OR UPPER(COALESCE(txn_type,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(counterparty_name,'')) LIKE '%OFFICE EXPENSE%'
-               )
-          )
-        ORDER BY b.date, b.id
-    `).all();
+    return [];
 }
 
 /**
@@ -376,16 +285,12 @@ function getBankReviewQueue(db) {
  */
 function getBankTransaction(db, id) {
     ensureBankTable(db);
-    return db.prepare(`
-        SELECT b.*, p.name AS party_name FROM bank_transactions b
-        LEFT JOIN parties p ON p.id = b.party_id WHERE b.id = ?
-    `).get(id);
+    return db.prepare('SELECT b.*, \'\' AS party_name FROM bank_transactions b WHERE b.id = ?').get(id);
 }
 
 /**
  * Save (insert or update) a bank transaction.
- * On insert with a party_id, posts to the ledger idempotently.
- * Editing an already-posted row re-syncs its ledger entry.
+ * Bank rows remain self-contained: no party match or cross-module posting.
  */
 function saveBankTransaction(db, data, userId = null) {
     ensureBankTable(db);
@@ -398,8 +303,7 @@ function saveBankTransaction(db, data, userId = null) {
     const cls = accounting.classifyBankRow({
         txn_type, description, counterparty_name, reference_no, remarks, debit, credit
     });
-    const nonParty = cls === 'cash_to_bank_transfer' || cls === 'expense';
-    const status = nonParty ? 'auto' : (match_status || (party_id ? 'auto' : 'review'));
+    const status = match_status || 'none';
 
     const oldRow = id ? db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id) : null;
     const refTrim = String(reference_no || '').trim();
@@ -421,17 +325,16 @@ function saveBankTransaction(db, data, userId = null) {
             UPDATE bank_transactions SET
                 date = ?, reference_no = ?, counterparty_name = ?, description = ?,
                 debit = ?, credit = ?, amount = ?, payment_mode = ?, bank_account = ?,
-                txn_type = ?, party_id = ?, match_status = ?, accounting_class = ?, remarks = ?,
+                txn_type = ?, party_id = NULL, match_status = ?, accounting_class = ?, remarks = ?,
                 txn_uid = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
         `).run(date, reference_no || '', counterparty_name || '', description || '',
               debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-              txn_type || '', party_id || null, status, cls, remarks || '', uid, id);
+              txn_type || '', status, cls, remarks || '', uid, id);
         logAudit(db, 'bank_transactions', id, 'update', oldRow || null,
             getBankTransaction(db, id), userId);
-        if (nonParty) return { success: true, data: getBankTransaction(db, id), accounting_class: cls };
-        return { success: true, data: getBankTransaction(db, id) };
+        return { success: true, data: getBankTransaction(db, id), accounting_class: cls };
     }
 
     // Idempotency (insert): a reference is the source transaction's identity —
@@ -462,62 +365,38 @@ function saveBankTransaction(db, data, userId = null) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(date, reference_no || '', counterparty_name || '', description || '',
            debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-           txn_type || '', nonParty ? null : (party_id || null), status, cls, remarks || '', userId, uid);
+           txn_type || '', null, status, cls, remarks || '', userId, uid);
     const newId = Number(ins.lastInsertRowid);
-    if (nonParty) {
-        _markNonParty(db, newId, cls);
-    } else if (party_id) {
-        postBankToLedger(db, newId);
-    }
+    db.prepare(`UPDATE bank_transactions SET party_id = NULL, ledger_posted = 0, ledger_entry_id = NULL WHERE id = ?`).run(newId);
     logAudit(db, 'bank_transactions', newId, 'create', null, getBankTransaction(db, newId), userId);
     return { success: true, data: getBankTransaction(db, newId), accounting_class: cls };
 }
 
 /**
- * Delete a bank transaction and, if we created its ledger entry, remove it too.
+ * Delete only the standalone bank row. Never modify another register.
  */
 function deleteBankTransaction(db, id, userId = null) {
     ensureBankTable(db);
     const txn = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
     if (!txn) return { success: false, error: 'Bank transaction not found' };
-    if (txn.ledger_entry_id) {
-        // Only delete the ledger entry if WE created it (its reference points back
-        // to this bank transaction). Never delete pre-existing Party_Ledger rows.
-        const ours = db.prepare('SELECT id FROM ledger_entries WHERE id = ? AND reference_id = ?').get(txn.ledger_entry_id, id);
-        if (ours) {
-            db.prepare('DELETE FROM ledger_entries WHERE id = ?').run(txn.ledger_entry_id);
-        } else {
-            db.prepare("UPDATE bank_transactions SET ledger_entry_id = NULL WHERE id = ?").run(id);
-        }
-    }
     db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(id);
     logAudit(db, 'bank_transactions', id, 'delete', txn, null, userId);
     return { success: true };
 }
 
 /**
- * Manually resolve a review-queue row: set party + status, then post if requested.
+ * Legacy matcher compatibility API: cannot connect a standalone bank row elsewhere.
  */
 function setBankMatch(db, id, { party_id, match_status, post } = {}, userId = null) {
     ensureBankTable(db);
     const oldRow = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
-    db.prepare(`
-        UPDATE bank_transactions SET party_id = ?, match_status = ?, updated_at = datetime('now', 'localtime')
-        WHERE id = ?
-    `).run(party_id || null, match_status || 'review', id);
-    const result = { success: true, data: getBankTransaction(db, id) };
-    if (post && party_id) {
-        result.post = postBankToLedger(db, id);
-    }
-    logAudit(db, 'bank_transactions', id, 'update', oldRow || null, result.data, userId);
-    return result;
+    if (!oldRow) return { success: false, error: 'Bank transaction not found' };
+    if (party_id || post) return { success: false, error: 'Bank transactions are standalone and cannot be matched or posted to a party ledger.' };
+    return { success: true, data: getBankTransaction(db, id), standalone: true };
 }
 
 /**
- * Manually override a bank row's accounting classification (audited).
- * Automatic classification from wording is the default; this exists for the
- * cases where the narration is ambiguous. Switching away from a non-party
- * class re-opens party matching so the row can post as a receipt/payment.
+ * Manually override the bank-only classification label (audited). This never posts to other modules.
  */
 function setBankAccountingClass(db, id, accounting_class, userId = null) {
     ensureBankTable(db);
@@ -525,25 +404,11 @@ function setBankAccountingClass(db, id, accounting_class, userId = null) {
     if (!allowed.includes(accounting_class)) return { success: false, error: 'Unknown classification: ' + accounting_class };
     const oldRow = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
     if (!oldRow) return { success: false, error: 'Bank transaction not found' };
-    const wasNonParty = isNonPartyRow(oldRow);
-    const isNonParty = accounting_class === 'cash_to_bank_transfer' || accounting_class === 'expense';
-
     db.prepare(
-        `UPDATE bank_transactions SET accounting_class = ?, updated_at = datetime('now','localtime') WHERE id = ?`
+        `UPDATE bank_transactions SET accounting_class = ?, party_id = NULL, ledger_posted = 0,
+            ledger_entry_id = NULL, match_status = 'none',
+            updated_at = datetime('now','localtime') WHERE id = ?`
     ).run(accounting_class, id);
-    if (isNonParty) {
-        _markNonParty(db, id, accounting_class);
-    } else if (wasNonParty) {
-        // Previously treated as internal: re-open party matching so it can be
-        // matched and posted as a customer receipt / supplier payment again.
-        db.prepare(`
-            UPDATE bank_transactions SET ledger_posted = 0,
-                match_status = CASE WHEN COALESCE(party_id, '') != '' THEN 'auto' ELSE 'review' END,
-                updated_at = datetime('now','localtime')
-            WHERE id = ?
-        `).run(id);
-        if (oldRow.party_id) postBankToLedger(db, id);
-    }
     const after = getBankTransaction(db, id);
     logAudit(db, 'bank_transactions', id, 'update', oldRow, after, userId);
     return { success: true, data: after };
@@ -622,9 +487,6 @@ function importBankRows(db, rows) {
     // legitimately containing two identical no-reference rows still imports
     // both, while re-importing the same file imports neither twice.
     const fileOcc = new Map();
-    const allParties = db.prepare('SELECT id, name FROM parties WHERE archived = 0').all();
-    const exactNameMap = new Map();
-    for (const p of allParties) exactNameMap.set(normalizeName(p.name), p.id);
 
     const insert = db.prepare(`
         INSERT INTO bank_transactions
@@ -667,36 +529,19 @@ function importBankRows(db, rows) {
             // expense paid from it) carries no customer/supplier relationship,
             // so it is never auto-matched to a party by name.
             const cls = accounting.classifyBankRow(r);
-            const nonParty = cls === 'cash_to_bank_transfer' || cls === 'expense';
-            const partyId = nonParty ? null : (exactNameMap.get(normalizeName(r.counterparty_name)) || null);
-            const status = nonParty ? 'auto' : (partyId ? 'auto' : (r.counterparty_name ? 'review' : 'none'));
-
+                    const status = 'none';
             const res = insert.run(r.date, ref, r.counterparty_name || '', r.description || '',
                 debit, credit, amount, r.payment_mode || 'QR/Bank', r.bank_account || '',
-                r.txn_type || '', partyId, status, cls, uid);
+                r.txn_type || '', null, status, cls, uid);
             const newId = Number(res.lastInsertRowid);
             takenUids.add(uid);
             if (refIsUnique) refUidTxn.set(`ref:${ref}`, key);
             dbTxn.set(key, (dbTxn.get(key) || 0) + 1);
             report.inserted++;
 
-            if (nonParty) {
-                _markNonParty(db, newId, cls);
-                if (cls === 'cash_to_bank_transfer') report.transfers++;
-                else report.expenses++;
-                continue;
-            }
-
-            if (partyId) {
-                const posted = postBankToLedger(db, newId);
-                if (posted.success && posted.posted) report.auto_posted++;
-                else if (posted.success && !posted.posted && posted.reason === 'already_in_ledger') report.already_in_ledger++;
-                else if (!posted.success) report.errors.push({ ref: ref || newId, reason: posted.error });
-            } else if (status === 'review') {
-                report.review_queue++;
-            } else {
-                report.unmatched++;
-            }
+            if (cls === 'cash_to_bank_transfer') report.transfers++;
+            else if (cls === 'expense') report.expenses++;
+            else report.unmatched++;
         }
     });
     doImport();

@@ -559,16 +559,11 @@ function expenseRows(db, from, to) {
         }));
     }
 
+    // Bank statement rows are NOT expense rows: the standalone bank register is
+    // never an expense source (a row that looks like an expense is disclosed in
+    // the Monthly Report's data gaps so it can be entered in its own module).
     const opEx = accounting.getExpenseSummary(db, { from_date: from, to_date: to });
-    for (const r of opEx.bank_expense_rows || []) {
-        rows.push(makeRow({
-            date: r.date, voucher: r.reference_no || `BT-${r.id}`, party: r.counterparty_name,
-            description: r.description || 'Expense paid from the bank',
-            amount: r.amount, direction: 'out',
-            category: mr.classifyExpenseHead(`${r.description || ''} ${r.reference_no || ''}`),
-            status: 'bank', table: 'bank_transactions', id: r.id
-        }));
-    }
+    void opEx;
 
     for (const r of db.prepare(`
         SELECT pm.id, pm.date, pm.amount, pm.transaction_type, pm.notes, p.name AS party

@@ -249,14 +249,8 @@ function _expenseRows(db, from, to) {
             particular: `${r.vehicle_name} — ${r.expense_type}${r.remarks ? ' — ' + r.remarks : ''}`
         });
     }
+    // Bank Transactions is an independent register, not an expense source.
     const opEx = accounting.getExpenseSummary(db, { from_date: from, to_date: to });
-    for (const r of (opEx.bank_expense_rows || [])) {
-        push({
-            date: r.date, amount: round2(r.amount), kind: 'operating',
-            category: normalizeExpenseCategory(r), party: '',
-            method: 'bank', source: 'bank_transactions', particular: r.description || 'Bank expense'
-        });
-    }
     for (const r of db.prepare(`
         SELECT pm.id, pm.date, pm.amount, pm.notes, pm.mode, pm.transaction_type, pn.name AS party_name
           FROM payments pm LEFT JOIN parties pn ON pn.id = pm.party_id

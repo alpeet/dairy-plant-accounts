@@ -300,13 +300,8 @@ function getExpenseHeads(db, from, to) {
     for (const r of vehicle) addHead(map, 'Vehicle Expenses', r.total, r.n);
     sources.vehicle_expenses = round2(vehicle.reduce((s, r) => s + Number(r.total || 0), 0));
 
-    // 5. Office expenses paid straight from the bank that never reached the
-    //    Expenses register — exactly the rows getExpenseSummary adds.
-    const opEx = accounting.getExpenseSummary(db, { from_date: from, to_date: to });
-    for (const r of opEx.bank_expense_rows || []) {
-        addHead(map, classifyExpenseHead((r.description || '') + ' ' + (r.reference_no || '')), r.amount, 1);
-    }
-    sources.bank_expenses = round2((opEx.bank_expense_rows || []).reduce((s, r) => s + Number(r.amount || 0), 0));
+    // Standalone bank transactions never become P&L expense sources.
+    sources.bank_expenses = 0;
 
     // 6. Payments typed as real expenses (rent/salary paid as a payment).
     const typed = db.prepare(`
@@ -394,35 +389,77 @@ function getBalancesAsOf(db, asOf) {
         WHERE date <= ? ORDER BY date DESC LIMIT 1
     `).get(as_of);
 
-    // Inventory at the master rate (no lot costs exist in this workbook yet).
-    const products = db.prepare('SELECT id, name, unit, rate FROM products').all();
+    // Point-in-time weighted-average inventory value from stock movements.
+    // This is a conservative actual-cost basis: each positive receipt uses its
+    // recorded movement rate, while production output must have a valid recorded
+    // batch/output cost. A product-level master selling rate is never substituted.
+    const products = db.prepare('SELECT id, name, unit, opening_stock FROM products').all();
     let invValue = 0, invQty = 0;
-    let lotValue = 0, lotAvailable = true;
+    let inventoryComplete = true;
     const invLines = [];
     const negativeLines = [];
+    const unvaluedLines = [];
     for (const p of products) {
-        const qty = round2(Number(db.prepare(
-            'SELECT COALESCE(SUM(inward_qty - outward_qty), 0) s FROM stock_movements WHERE product_id = ? AND date <= ?'
-        ).get(p.id, as_of).s) || 0);
-        if (qty === 0) continue;
-        const rate = Number(p.rate) || 0;
-        const value = round2(qty * rate);
-        // A NEGATIVE closing quantity means more was sold/used than the ledger
-        // ever brought in (opening stock or purchases missing). It is reported
-        // as a stock gap — never valued, and never netted off real stock.
-        if (qty < 0) {
+        const rows = db.prepare(`
+            SELECT type, reference_id, inward_qty, outward_qty, rate, date
+              FROM stock_movements WHERE product_id = ? AND date <= ? ORDER BY date, id
+        `).all(p.id, as_of);
+        const hasOpeningMovement = rows.some(m => m.type === 'opening');
+        let qty = !hasOpeningMovement ? Math.max(0, Number(p.opening_stock) || 0) : 0;
+        let value = 0;
+        let unvaluedQty = !hasOpeningMovement ? qty : 0;
+        if (unvaluedQty > 0.005) inventoryComplete = false;
+        for (const m of rows) {
+            const inward = Number(m.inward_qty) || 0;
+            const outward = Number(m.outward_qty) || 0;
+            const rate = Number(m.rate) || 0;
+            if (inward > 0) {
+                qty = round2(qty + inward);
+                if (m.type === 'production_output' && m.reference_id != null) {
+                    const productOutput = db.prepare('SELECT COALESCE(SUM(quantity),0) q, COALESCE(SUM(amount),0) v, COALESCE(SUM(rate * quantity),0) rate_value FROM production_outputs WHERE batch_id = ? AND product_id = ?').get(m.reference_id, p.id);
+                    const outputUnitCost = productOutput && Number(productOutput.q) > 0
+                        ? (Number(productOutput.v) > 0 ? Number(productOutput.v) : Number(productOutput.rate_value)) / Number(productOutput.q)
+                        : 0;
+                    if (outputUnitCost > 0) value = round2(value + inward * outputUnitCost);
+                    else { unvaluedQty = round2(unvaluedQty + inward); inventoryComplete = false; }
+                } else if (rate > 0) {
+                    value = round2(value + inward * rate);
+                } else {
+                    unvaluedQty = round2(unvaluedQty + inward);
+                }
+            }
+            if (outward > 0) {
+                const availableQty = qty;
+                const costableQty = Math.max(0, availableQty - unvaluedQty);
+                const avgCost = costableQty > 0 ? value / costableQty : 0;
+                qty = round2(qty - outward);
+                const costedOut = Math.min(outward, costableQty);
+                if (costedOut > 0 && avgCost > 0) value = round2(Math.max(0, value - costedOut * avgCost));
+                const uncostedOut = Math.max(0, outward - costedOut);
+                if (uncostedOut > 0) unvaluedQty = round2(Math.max(0, unvaluedQty - uncostedOut));
+            }
+        }
+        qty = round2(qty);
+        if (qty < -0.005) {
             negativeLines.push({ product_id: p.id, product_name: p.name, unit: p.unit, quantity: qty });
+            inventoryComplete = false;
             continue;
         }
-        invValue = round2(invValue + value);
-        invQty = round2(invQty + qty);
-        invLines.push({ product_id: p.id, product_name: p.name, unit: p.unit, quantity: qty, rate, value });
-        try {
-            const lv = round2(Number(db.prepare(
-                'SELECT COALESCE(SUM(qty_remaining * unit_cost), 0) v FROM stock_lots WHERE product_id = ?'
-            ).get(p.id).v) || 0);
-            lotValue = round2(lotValue + lv);
-        } catch (e) { lotAvailable = false; }
+        // Nothing left on hand: the product holds no stock value. Without this,
+        // a fully issued product kept a residual cost (valued receipts minus
+        // costed issues), which inflated Closing Stock Value above the sum of
+        // its own valuation lines — the figure could not be traced row by row.
+        if (qty <= 0.005) { qty = 0; value = 0; }
+        const lineValue = round2(value);
+        if (qty > 0 && unvaluedQty > 0.005) {
+            inventoryComplete = false;
+            unvaluedLines.push({ product_id: p.id, product_name: p.name, unit: p.unit, quantity: round2(unvaluedQty) });
+        }
+        invQty = round2(invQty + Math.max(0, qty));
+        invValue = round2(invValue + lineValue);
+        if (qty !== 0) invLines.push({ product_id: p.id, product_name: p.name, unit: p.unit, quantity: qty,
+            rate: qty > 0 ? round2(value / Math.max(0, qty - unvaluedQty)) : 0, value: lineValue,
+            unvalued_quantity: round2(unvaluedQty) });
     }
 
     // Receivables / payables — the party ledger, same source as the Parties tab.
@@ -469,8 +506,9 @@ function getBalancesAsOf(db, asOf) {
         inventory_quantity: invQty,
         inventory_lines: invLines,
         negative_stock_lines: negativeLines,
-        inventory_basis: lotValue > 0 ? 'lot (FIFO actual cost) where lots exist, master rate otherwise' : 'master rate (no lot costs recorded yet)',
-        inventory_lot_value: lotAvailable ? lotValue : null,
+        unvalued_stock_lines: unvaluedLines,
+        inventory_complete: inventoryComplete && negativeLines.length === 0 && unvaluedLines.length === 0,
+        inventory_basis: 'recorded stock movement rates with weighted-average issue costing; unvalued quantities are excluded and flagged',
         receivables: receivable,
         payables: payable,
         top_debtors: topDebtors,
@@ -494,12 +532,19 @@ function getPeriodActivity(db, from, to) {
     const income = getIncomeHeads(db, from, to);
     const cogs = getCogs(db, from, to);
     const exp = getExpenseHeads(db, from, to);
+    const inventoryOpening = getBalancesAsOf(db, bs.addBSDays(from, -1));
+    const inventoryClosing = getBalancesAsOf(db, to);
+    const stockAdjustedCogs = inventoryOpening.inventory_complete && inventoryClosing.inventory_complete
+        ? round2(inventoryOpening.inventory_value + cogs.cogs - inventoryClosing.inventory_value)
+        : null;
+    const recognizedCogs = stockAdjustedCogs !== null ? stockAdjustedCogs : cogs.cogs;
+    const cogsIsActual = stockAdjustedCogs !== null;
 
     const otherIncome = income.other_income;
     const totalIncome = round2(revenue.revenue + otherIncome);
-    const grossProfit = round2(revenue.revenue - cogs.cogs);
+    const grossProfit = round2(revenue.revenue - recognizedCogs);
     const totalOperating = round2(exp.heads_total);
-    const netProfit = round2(totalIncome - cogs.cogs - totalOperating);
+    const netProfit = round2(totalIncome - recognizedCogs - totalOperating);
 
     return {
         from_date: from,
@@ -513,16 +558,23 @@ function getPeriodActivity(db, from, to) {
         income_heads: income.heads,
         income_heads_total: income.heads_total,
         income_unexplained: income.unexplained_difference,
-        cogs: cogs.cogs,
-        cogs_detail: cogs,
+        cogs: recognizedCogs,
+        cogs_detail: { ...cogs, purchase_based_cogs: cogs.cogs, stock_adjusted_cogs: stockAdjustedCogs,
+            opening_stock_value: inventoryOpening.inventory_value, closing_stock_value: inventoryClosing.inventory_value,
+            opening_stock_quantity: inventoryOpening.inventory_quantity, closing_stock_quantity: inventoryClosing.inventory_quantity,
+            stock_valuation_complete: cogsIsActual, method: cogsIsActual
+                ? 'Opening stock value + eligible milk/purchase cost − closing stock value (weighted-average movement cost)'
+                : 'Purchase-based provisional COGS; stock values or quantities are incomplete' },
+        cogs_is_actual: cogsIsActual,
         gross_profit: grossProfit,
         gross_margin_percent: revenue.revenue > 0 ? round2((grossProfit / revenue.revenue) * 100) : null,
         operating_expenses: totalOperating,
         expense_heads: exp.heads,
         expense_sources: exp.sources,
         prepaid: exp.prepaid,
-        total_expenses: round2(cogs.cogs + totalOperating),
-        net_profit: netProfit
+        total_expenses: round2(recognizedCogs + totalOperating),
+        net_profit: netProfit,
+        profit_is_actual: cogsIsActual
     };
 }
 
@@ -561,6 +613,7 @@ function getMonthlyReport(db, opts = {}) {
     const activity = getPeriodActivity(db, from, to);
     const opening = getBalancesAsOf(db, bs.addBSDays(from, -1));
     const closing = getBalancesAsOf(db, to);
+    const inventoryCheck = inventoryIdentity(db, from, to);
 
     // ── Month-by-month, with opening = previous month's closing ──
     const monthKeys = bs.monthsBetween(from, to);
@@ -597,6 +650,9 @@ function getMonthlyReport(db, opts = {}) {
             closing_cash: mClosing.cash,
             closing_bank: mClosing.bank,
             closing_inventory: mClosing.inventory_value,
+            opening_inventory_quantity: mOpening.inventory_quantity,
+            closing_inventory_quantity: mClosing.inventory_quantity,
+            stock_valuation_complete: mOpening.inventory_complete && mClosing.inventory_complete,
             closing_receivables: mClosing.receivables,
             closing_payables: mClosing.payables,
             closing_advances: mClosing.advance_receivable,
@@ -649,12 +705,19 @@ function getMonthlyReport(db, opts = {}) {
             opening_cash: opening.cash,
             opening_bank: opening.bank,
             opening_inventory: opening.inventory_value,
+            opening_inventory_quantity: opening.inventory_quantity,
+            closing_inventory_quantity: closing.inventory_quantity,
+            stock_valuation_complete: opening.inventory_complete && closing.inventory_complete,
+            stock_valuation_basis: closing.inventory_basis,
             sales_revenue: activity.sales_revenue,
             other_income: activity.other_income,
             total_income: activity.total_income,
             milk_cost: activity.cogs_detail.milk_cost,
             other_purchases: activity.cogs_detail.other_purchases,
             cogs: activity.cogs,
+            cogs_method: activity.cogs_detail.method,
+            actual_profit_verified: activity.profit_is_actual,
+            provisional_net_profit: activity.profit_is_actual ? null : activity.net_profit,
             gross_profit: activity.gross_profit,
             operating_expenses: activity.operating_expenses,
             total_operating_expenses: activity.operating_expenses,
@@ -662,6 +725,7 @@ function getMonthlyReport(db, opts = {}) {
             closing_cash: closing.cash,
             closing_bank: closing.bank,
             closing_inventory: closing.inventory_value,
+            closing_inventory_quantity: closing.inventory_quantity,
             receivables: closing.receivables,
             payables: closing.payables,
             advances: closing.advance_receivable,
@@ -676,7 +740,7 @@ function getMonthlyReport(db, opts = {}) {
         prepaid_rent: activity.prepaid,
         reconciliation,
         data_window: latest,
-        notes: buildNotes(db, { activity, opening, closing, latest })
+        notes: buildNotes(db, { activity, opening, closing, latest, inventoryCheck })
     };
 }
 
@@ -694,7 +758,6 @@ function latestDocumentDate(db) {
         pick('SELECT MAX(date) d FROM milk_collections'),
         pick('SELECT MAX(date) d FROM payments'),
         pick('SELECT MAX(date) d FROM petty_cash'),
-        pick('SELECT MAX(date) d FROM bank_transactions'),
         pick('SELECT MAX(payment_date) d FROM salary_records'),
         pick('SELECT MAX(date) d FROM stock_movements'),
         pick('SELECT MAX(payment_date) d FROM prepaid_expenses')
@@ -735,11 +798,16 @@ function getBusiness(db) {
  */
 function buildReconciliation(db, { from, to, activity, opening, closing, months }) {
     const out = [];
-    const push = (check, expected, actual, note, tolerance = 0.05) => {
+    // `kind` separates two different things a reader sees in this section:
+    //   'arithmetic'   — two independent computations of the same figure must agree;
+    //   'data-quality' — the books themselves are incomplete (negative stock, a cash
+    //                    count that disagrees), so the figure is flagged, not "drifted".
+    // Only arithmetic disagreements mean the engine is wrong.
+    const push = (check, expected, actual, note, tolerance = 0.05, kind = 'arithmetic') => {
         const difference = round2((Number(actual) || 0) - (Number(expected) || 0));
         out.push({
             check, expected: round2(expected), actual: round2(actual),
-            difference, ok: Math.abs(difference) <= tolerance, note: note || ''
+            difference, ok: Math.abs(difference) <= tolerance, note: note || '', kind
         });
     };
 
@@ -768,6 +836,10 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
     const invCheck = inventoryIdentity(db, from, to);
     push('Inventory opening + IN − OUT = closing (litres/kg)', invCheck.expected, invCheck.actual,
         `Across ${invCheck.products} product(s) with movement in the period.`);
+    push('Stock valuation completeness', 0, closing.inventory_complete ? 0 : 1,
+        closing.inventory_complete ? 'All positive closing quantities have recorded rates and no negative stock.'
+            : `${closing.unvalued_stock_lines.length} product(s) have unvalued stock; ${closing.negative_stock_lines.length} have negative closing stock.`,
+        0.05, 'data-quality');
 
     // 5. Cash: ledger cash vs the operator's physical count.
     if (closing.counted_cash !== null && closing.counted_cash !== undefined) {
@@ -777,6 +849,7 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
             actual: round2(closing.cash),
             difference: round2(closing.cash_vs_counted),
             ok: Math.abs(closing.cash_vs_counted) <= 0.05,
+            kind: 'data-quality',
             note: `Counted ${closing.counted_cash} on ${closing.counted_cash_date}. A difference is cash `
                 + 'paid out without a cash document (supplier/farmer payments recorded only in the ledger '
                 + 'or in the workbook), or unrecorded receipts.'
@@ -830,7 +903,8 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
     push('Net profit = income − (COGS + operating expenses)',
         round2(activity.total_income - activity.cogs - activity.operating_expenses),
         activity.net_profit,
-        'The report\'s own arithmetic, checked against the components it shows.');
+        activity.profit_is_actual ? 'Stock-adjusted COGS basis; check the underlying inventory valuation.'
+            : 'Arithmetic matches the provisional purchase-based COGS; inventory data is incomplete, so this is not verified actual profit.');
 
     // 11. Month continuity: previous month's closing = this month's opening.
     for (let i = 1; i < months.length; i++) {
@@ -859,7 +933,11 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
 
     return {
         checks: out,
-        differences: out.filter(c => !c.ok),
+        // Arithmetic drift only — the engine disagreeing with itself.
+        differences: out.filter(c => !c.ok && c.kind !== 'data-quality'),
+        // Material gaps in the books that no formula can fix; each one is also
+        // written into notes.gaps by buildNotes().
+        data_flags: out.filter(c => !c.ok && c.kind === 'data-quality'),
         all_ok: out.every(c => c.ok)
     };
 }
@@ -887,7 +965,7 @@ function inventoryIdentity(db, from, to) {
 }
 
 /** Gaps the reader must know about before trusting the numbers. */
-function buildNotes(db, { activity, opening, closing, latest }) {
+function buildNotes(db, { activity, opening, closing, latest, inventoryCheck }) {
     const notes = [];
     const missing = [];
 
@@ -907,6 +985,15 @@ function buildNotes(db, { activity, opening, closing, latest }) {
             + `${lastPrepaid.recognized_to_date} is used up, ${lastPrepaid.prepaid_balance} is still an asset.`
         );
     }
+    if (closing.unvalued_stock_lines.length) {
+        missing.push(
+            `Stock value is incomplete for ${closing.unvalued_stock_lines.length} product(s) `
+            + `(${closing.unvalued_stock_lines.map(l => `${l.product_name} ${l.quantity} ${l.unit}`).join(', ')}): source movements or production batches lack defensible unit costs.`
+        );
+    }
+    if (inventoryCheck && Math.abs(inventoryCheck.expected - inventoryCheck.actual) > 0.05) {
+        missing.push(`Stock quantity reconciliation differs by ${round2(inventoryCheck.actual - inventoryCheck.expected)} across the period; inspect stock movements before relying on profit.`);
+    }
     if (closing.negative_stock_lines.length) {
         missing.push(
             `Closing stock is negative for ${closing.negative_stock_lines.length} product(s) `
@@ -915,6 +1002,9 @@ function buildNotes(db, { activity, opening, closing, latest }) {
             + 'cannot be valued until the missing opening stock/purchases are entered.'
         );
     }
+    missing.push(
+        'Reported COGS remains the existing milk-and-purchase recognition basis and is not a stock-adjusted actual COGS. Inventory quantities/costs do not currently reconcile; net profit is therefore provisional, not verified actual profit/loss.'
+    );
     missing.push(
         'Opening cash and bank balances at the start of the books are not recorded in the app, so every '
         + 'cumulative cash/bank figure starts from zero and is a movement, not a verified bank balance.'

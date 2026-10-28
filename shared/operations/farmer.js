@@ -79,37 +79,8 @@ function bulkPayFarmers(db, { payments, date, mode, notes, bank_account, bank_re
                 collections_cleared: collection_ids ? collection_ids.length : 0
             });
         }
-        // D10: a batch payout made by one bank transfer is ONE bank transaction.
-        // Create it for the batch total with txn_uid 'pay:<firstPaymentId>' and
-        // point EVERY payment of the batch at it, so the cash/bank position
-        // counts the transfer once (never once per farmer).
-        const ref = String(bank_reference || '').trim();
-        if (ref && ['bank', 'upi', 'cheque'].includes(String(mode || 'cash').toLowerCase()) && createdIds.length) {
-            const { ensureBankTable } = require('./bank');
-            ensureBankTable(db);
-            const existing = db.prepare('SELECT id FROM bank_transactions WHERE reference_no = ?').get(ref)
-                || db.prepare('SELECT id FROM bank_transactions WHERE txn_uid = ?').get(`pay:${createdIds[0]}`);
-            let bankId = existing ? existing.id : null;
-            if (!bankId) {
-                const total = db.prepare(
-                    `SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE id IN (${createdIds.map(() => '?').join(',')})`
-                ).get(...createdIds).s;
-                const ins = db.prepare(`
-                    INSERT INTO bank_transactions
-                        (date, reference_no, counterparty_name, description, debit, credit, amount,
-                         payment_mode, bank_account, txn_type, match_status, accounting_class,
-                         remarks, created_by, ledger_posted, ledger_entry_id, txn_uid)
-                    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 'payment', 'auto', 'supplier_payment', ?, ?, 1, NULL, ?)
-                `).run(date, ref, '', `Bulk farmer payout (${createdIds.length} payments)`,
-                    total, total, mode, bank_account || '',
-                    `linked to ${createdIds.length} milk-collection payments (ledger posted by the payments)`,
-                    userId, `pay:${createdIds[0]}`);
-                bankId = Number(ins.lastInsertRowid);
-            }
-            db.prepare(
-                `UPDATE payments SET bank_txn_id = ? WHERE id IN (${createdIds.map(() => '?').join(',')})`
-            ).run(bankId, ...createdIds);
-        }
+        // Bulk payout details (bank account/reference) remain on each payment;
+        // Bank Transactions is a separate register and receives no side effect.
         return results;
     });
     const paid = trx();

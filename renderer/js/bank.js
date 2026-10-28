@@ -1,16 +1,14 @@
 /**
  * Bank Transactions Module
  * ========================
- * Manages bank transactions (Sushil QR / bank account) separate from cash & petty cash.
- * Features: list with running balance, add/edit/delete, auto-matching to party ledger,
- * and a "Needs Review" queue for near/unmatched transactions.
+ * Manages the standalone bank transaction register. These records never post
+ * to cash, expenses, payments, collections or party ledgers.
  */
 
 async function renderBank() {
     const container = document.getElementById('page-bank');
     document.getElementById('topActions').innerHTML = `
         <button class="btn btn-success btn-sm" onclick="showAddBank()">+ New Transaction</button>
-        <button class="btn btn-warning btn-sm" onclick="showBankReviewQueue()">🔍 Needs Review <span id="bankReviewCount" style="margin-left:4px"></span></button>
     `;
 
     // Open range by default — imported bank history spans earlier BS months and
@@ -20,10 +18,7 @@ async function renderBank() {
     if (!result.success && typeof showToast === 'function') showToast(result.error, 'error');
     const rows = result.success ? result.data : [];
 
-    const review = await window.api.getBankReviewQueue();
-    const reviewCount = review.success ? review.data.length : 0;
-    const reviewBadge = document.getElementById('bankReviewCount');
-    if (reviewBadge) reviewBadge.textContent = reviewCount > 0 ? `(${reviewCount})` : '';
+    const reviewCount = 0;
 
     const totalIn = rows.reduce((s, r) => s + (r.credit || 0), 0);
     const totalOut = rows.reduce((s, r) => s + (r.debit || 0), 0);
@@ -44,8 +39,8 @@ async function renderBank() {
                 <span class="value" style="font-size:20px">${formatCurrency(closing)}</span>
             </div>
             <div class="summary-card card-warning" style="margin:0;padding:12px">
-                <span class="label">Needs Review</span>
-                <span class="value" style="font-size:20px">${reviewCount}</span>
+                <span class="label">Standalone Register</span>
+                <span class="value" style="font-size:18px">Independent</span>
             </div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
@@ -82,7 +77,7 @@ async function renderBank() {
                     <tr>
                         <th>Date</th><th>Ref</th><th>Counterparty</th><th>Description</th><th>Type</th>
                         <th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th>
-                        <th>Party</th><th>Class</th><th>Status</th><th class="actions">Actions</th>
+                        <th>Record Type</th><th class="actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -96,9 +91,7 @@ async function renderBank() {
                             <td class="text-right">${r.debit > 0 ? formatCurrency(r.debit) : '-'}</td>
                             <td class="text-right">${r.credit > 0 ? formatCurrency(r.credit) : '-'}</td>
                             <td class="text-right">${formatCurrency(r.running_balance)}</td>
-                            <td>${escapeHtml(r.party_name || '')}</td>
-                            <td>${classifyBadge(r)}</td>
-                            <td>${bankStatusBadge(r)}</td>
+                            <td>${escapeHtml(r.accounting_class || 'Standalone')}</td>
                             <td class="actions">
                                 <button class="btn btn-secondary btn-sm" onclick="showClassifyBank(${r.id})" title="Set accounting classification">🏷</button>
                                 <button class="btn btn-info btn-sm" onclick="editBank(${r.id})">✏️</button>
@@ -106,7 +99,7 @@ async function renderBank() {
                             </td>
                         </tr>
                     `).join('')}
-                    ${rows.length === 0 ? '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">No bank transactions in this range</td></tr>' : ''}
+                    ${rows.length === 0 ? '<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">No bank transactions in this range</td></tr>' : ''}
                 </tbody>
             </table>
         </div>
@@ -152,9 +145,8 @@ function showClassifyBank(id) {
             <button class="close-btn" onclick="closeModal()">&times;</button>
         </div>
         <div class="modal-body">
-            <p style="font-size:13px;color:var(--text-light)">How should this transaction be classified? The choice is recorded in the audit log and drives posting: transfers/expenses never become income or customer payments.</p>
-            <div class="form-group">
-                <label>Accounting Classification</label>
+            <p style="font-size:13px;color:var(--text-light)">Set a descriptive label for this bank record. The label is saved in its audit history and never creates postings in another module.</p>                <div class="form-group">
+                    <label>Bank Record Label (display only)</label>
                 <select class="form-control" id="bkClass">
                     ${options.map(([v, label]) => `<option value="${v}" ${current === v ? 'selected' : ''}>${label}</option>`).join('')}
                 </select>
@@ -232,13 +224,12 @@ async function showAddBank() {
                         </select>
                     </div>
                 </div>
-                <div class="form-group"><label>Match to Party (optional)</label><select class="form-control" id="bkParty">${await getPartyOptions()}</select></div>
                 <div class="form-group"><label>Remarks</label><input type="text" class="form-control" id="bkRemarks"></div>
             </form>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveBank()">💾 Save &amp; Post to Ledger</button>
+            <button class="btn btn-primary" onclick="saveBank()">💾 Save Bank Record</button>
         </div>
     `);
 }
@@ -269,7 +260,6 @@ async function editBank(id) {
                     <div class="form-group"><label>Payment Mode</label><input type="text" class="form-control" id="bkMode" value="${escapeHtml(r.payment_mode || 'QR/Bank')}"></div>
                     <div class="form-group"><label>Transaction Type</label><input type="text" class="form-control" id="bkType" value="${escapeHtml(r.txn_type || '')}"></div>
                 </div>
-                <div class="form-group"><label>Match to Party</label><select class="form-control" id="bkParty">${await getPartyOptions(r.party_id)}</select></div>
                 <div class="form-group"><label>Remarks</label><input type="text" class="form-control" id="bkRemarks" value="${escapeHtml(r.remarks || '')}"></div>
             </form>
         </div>
@@ -294,9 +284,9 @@ async function saveBank(id) {
         credit: parseFloat(document.getElementById('bkCredit')?.value || 0),
         payment_mode: document.getElementById('bkMode')?.value,
         txn_type: document.getElementById('bkType')?.value,
-        party_id: document.getElementById('bkParty')?.value ? parseInt(document.getElementById('bkParty').value) : null,
+        party_id: null,
         remarks: document.getElementById('bkRemarks')?.value,
-        match_status: document.getElementById('bkParty')?.value ? 'auto' : 'review'
+        match_status: 'none'
     };
     if (!data.date) { showToast('Date is required', 'warning'); return; }
     if (data.debit <= 0 && data.credit <= 0) { showToast('Enter a debit or credit amount', 'warning'); return; }
@@ -313,7 +303,7 @@ async function saveBank(id) {
 }
 
 async function deleteBankEntry(id) {
-    if (!confirm('Delete this bank transaction? Its ledger posting (if any) will also be removed.')) return;
+    if (!confirm('Delete this standalone bank transaction? No other register or ledger will be changed.')) return;
     const result = await window.api.deleteBankTransaction(id);
     if (!result.success) { showToast(result.error, 'error'); return; }
     showToast('🗑 Deleted');
@@ -377,7 +367,7 @@ async function showBankReviewQueue() {
 
 async function resolveBankReview(id) {
     const partyId = document.getElementById(`reviewParty_${id}`)?.value;
-    const result = await window.api.matchBankTransaction({ id, party_id: partyId ? parseInt(partyId) : null, match_status: partyId ? 'auto' : 'unmatched', post: true });
+    const result = await window.api.matchBankTransaction({ id, party_id: null, match_status: 'none', post: false });
     if (!result.success) { showToast(result.error, 'error'); return; }
     const postInfo = result.post && !result.post.success ? ` (${result.post.error})` : '';
     showToast(`✅ Resolved — ${result.post && result.post.posted ? 'posted to ledger' : result.post && result.post.reason === 'already_in_ledger' ? 'already in ledger' : 'saved'}${postInfo}`);

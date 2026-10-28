@@ -385,7 +385,7 @@ const TRANSFER_PATTERNS = [
 const EXPENSE_PATTERNS = [
     /office\s*expense/i, /expense/i, /\bbank\s*charge/i, /\belectric/i, /water\s*bill/i,
     /\brent\b/i, /\bsalary\b/i, /\bstationery/i, /telephone/i, /internet/i,
-    /\bmobile\b/i, /maintenance/i, /repair/i, /\bfuel\b/i, /\bbill\b/i, /\btax\b/i,
+    /\bmobile\b/i, /maintenance/i, /repair/i, /\bfuel\b/i, /\bdiesel\b/i, /\bbill\b/i, /\btax\b/i,
     /license/i, /licence/i, /insurance/i, /audit\s*fee/i, /refreshment/i, /\btea\b/i
 ];
 
@@ -879,8 +879,13 @@ function getExpenseSummary(db, opts = {}) {
         WHERE date >= ? AND date <= ? AND transaction_type IN ('actual_expense', 'advance_adjustment')
     `).get(...p);
 
+    // Bank Transactions is a standalone register: a statement row is never a
+    // second expense. An expense paid from the bank belongs in Petty Cash /
+    // Other Expenses / a typed expense payment, which are the sources above.
+    // Statement rows are still listed in `bank_expense_rows` so the operator can
+    // see them and enter the missing expense deliberately.
     const operating = round2(
-        (otherExpenses.total - otherIncome.total) + petty.total + salary.total + vehicle.total + bankExpenseTotal
+        (otherExpenses.total - otherIncome.total) + petty.total + salary.total + vehicle.total
         + typedExpenses.total
     );
 
@@ -896,6 +901,7 @@ function getExpenseSummary(db, opts = {}) {
         salary: round2(salary.total),
         vehicle_expenses: round2(vehicle.total),
         bank_expenses: bankExpenseTotal,
+        bank_expenses_excluded: bankExpenseTotal,
         bank_expenses_already_in_register: round2(bankInRegister),
         typed_payment_expenses: round2(typedExpenses.total),
         typed_payment_expense_count: typedExpenses.count,
@@ -1032,8 +1038,12 @@ function getReconciliation(db, opts = {}) {
         milk.cogs);
     check('cogs_parts', 'COGS = milk cost (once) + non-milk purchases', milk.cogs,
         round2(milk.milk_cost + milk.non_milk_purchases));
+    // Parts of the operating-expense total. Bank statement rows are deliberately
+    // NOT one of them: the standalone bank register is never an expense source,
+    // and its rows are disclosed separately (`bank_expenses_excluded`).
     check('expenses_total', 'Operating expenses = sum of their parts', expenses.total_operating_expenses,
-        round2(expenses.other_expenses + expenses.petty_cash + expenses.salary + expenses.vehicle_expenses + expenses.bank_expenses));
+        round2(expenses.other_expenses + expenses.petty_cash + expenses.salary
+            + expenses.vehicle_expenses + (expenses.typed_payment_expenses || 0)));
     check('cash_balance', 'Cash receipts + other receipts − payments − deposits = cash balance', cashBank.cash.balance,
         round2(cashBank.cash.total_in - cashBank.cash.total_out));
     check('bank_balance', 'Bank receipts + cash deposits − bank payments = bank balance', cashBank.bank.balance,

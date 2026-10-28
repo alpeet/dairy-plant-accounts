@@ -995,9 +995,8 @@ function runMigrations(db) {
         console.log('Migration 32 (product master) skipped:', e32.message);
     }
 
-    // Migration 33: payment ↔ bank link (D10, req 6/7/30/31).
-    // One transaction ID across payment row ↔ bank statement row ↔ ledger entry.
-    // Additive only; existing payments keep working with NULL links.
+    // Migration 33 (legacy): retain payment bank metadata columns for compatibility.
+    // Bank rows are standalone; do not create or backfill cross-module links.
     try {
         const payCols = db.prepare('PRAGMA table_info(payments)').all().map(c => c.name);
         const added = [];
@@ -1006,34 +1005,8 @@ function runMigrations(db) {
         addPay('bank_account', "bank_account TEXT DEFAULT ''");
         addPay('bank_reference', "bank_reference TEXT DEFAULT ''");
 
-        // Backfill: stamp non-cash payments whose money already sits on the bank
-        // statement (same party, direction-aware amount, ±5 days, unique match).
-        // The statement row is counted by the cash/bank position, so the payment
-        // must be linkable to it — without the link both sides counted the money.
-        let stamped = 0;
-        try {
-            const NONCASH = "('bank','upi','cheque','qr/bank','qr','online','bank transfer')";
-            const pending = db.prepare(`
-                SELECT id, party_id, date, type, amount FROM payments
-                 WHERE bank_txn_id IS NULL
-                   AND LOWER(COALESCE(mode,'cash')) IN ${NONCASH}
-            `).all();
-            for (const p of pending) {
-                const amtCol = p.type === 'receipt' ? 'credit' : 'debit';
-                const rows = db.prepare(`
-                    SELECT id FROM bank_transactions
-                     WHERE party_id = ? AND ABS(${amtCol} - ?) < 0.005
-                       AND date BETWEEN date(?, '-5 days') AND date(?, '+5 days')
-                `).all(p.party_id, p.amount, p.date, p.date);
-                if (rows.length === 1) {
-                    db.prepare('UPDATE payments SET bank_txn_id = ? WHERE id = ? AND bank_txn_id IS NULL')
-                        .run(rows[0].id, p.id);
-                    stamped++;
-                }
-            }
-        } catch (eBackfill) { console.log('Migration 33 backfill note:', eBackfill.message); }
-        if (added.length || stamped) {
-            console.log(`Migration 33 (payment↔bank link): added ${added.join(', ') || 'nothing'}; backfilled ${stamped} payment↔bank links`);
+        if (added.length) {
+            console.log(`Migration 33 (legacy payment bank metadata): added ${added.join(', ')}`);
         }
     } catch (e33) {
         console.log('Migration 33 (payment↔bank link) skipped:', e33.message);

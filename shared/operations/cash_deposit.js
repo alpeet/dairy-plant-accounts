@@ -54,17 +54,8 @@ function getCashDeposit(db, id) {
 function saveCashDeposit(db, data, userId = null) {
     const oldRow = data.id ? db.prepare('SELECT * FROM cash_deposits WHERE id = ?').get(data.id) : null;
 
-    // Persistent statement link (audit requirement 19). An update that does not
-    // mention the link keeps the one it had; unknown transaction ids are dropped
-    // rather than stored as dangling references.
-    let bankTxnId = data.bank_txn_id !== undefined
-        ? (data.bank_txn_id || null)
-        : (oldRow ? (oldRow.bank_txn_id || null) : null);
-    if (bankTxnId != null) {
-        try {
-            if (!db.prepare('SELECT id FROM bank_transactions WHERE id = ?').get(bankTxnId)) bankTxnId = null;
-        } catch (e) { bankTxnId = null; /* bank module not present on this DB */ }
-    }
+    // Cash deposits and bank statement rows are separate registers; never link.
+    const bankTxnId = null;
 
     const trx = db.transaction(() => {
         const date = data.date || todayBSDate();
@@ -90,7 +81,7 @@ function saveCashDeposit(db, data, userId = null) {
                 data.reference_no || '',
                 data.remarks || '',
                 data.deposited_by || '',
-                bankTxnId,
+                null,
                 data.id
             );
             return { id: data.id, action: 'updated' };
@@ -125,7 +116,7 @@ function saveCashDeposit(db, data, userId = null) {
                 data.remarks || '',
                 data.deposited_by || '',
                 data.created_by || null,
-                bankTxnId
+                null
             );
             return { id: result.lastInsertRowid, action: 'created', deposit_no };
         }

@@ -211,8 +211,9 @@ console.log('\nTEST 4 — cash received from sales deposited into the bank');
     });
     const btRow = ops.getBankTransaction(db, bt.data.id);
     ok(btRow.accounting_class === 'cash_to_bank_transfer', 'T4b: an imported deposit row is stored as a transfer', btRow.accounting_class);
-    ok(Number(btRow.ledger_posted) === 1 && btRow.ledger_entry_id === null,
-        'T4b: the deposit is NOT posted to a customer ledger', { posted: btRow.ledger_posted, le: btRow.ledger_entry_id });
+    ok(Number(btRow.ledger_posted) === 0 && btRow.ledger_entry_id === null && !btRow.party_id,
+        'T4b: the deposit is NOT posted to (or matched with) a customer ledger',
+        { posted: btRow.ledger_posted, le: btRow.ledger_entry_id, party: btRow.party_id });
     ok(!db.prepare("SELECT id FROM ledger_entries WHERE reference_id = ? AND reference_type IN ('payment_received','payment_made')").get(bt.data.id),
         'T4b: no customer payment / receivable was invented for the deposit');
     const queue = ops.getBankReviewQueue(db).filter(r => /DEPOSIT/i.test(String(r.description || '')));
@@ -321,10 +322,16 @@ console.log('\nTEST 6 — office expense of Rs 5,000 paid from the bank');
         description: 'PAYMENT FOR WOOD', debit: 700, txn_type: ''
     });
     const exp3 = ops.getExpenseSummary(db, { from_date: '2083-04-13', to_date: '2083-04-13' });
-    ok(near(exp3.total_operating_expenses, 700), 'T6c: an unregistered bank-paid expense is recognised once', exp3.total_operating_expenses);
+    ok(near(exp3.total_operating_expenses, 0),
+        'T6c: a standalone bank row is never a second expense in the operating total',
+        exp3.total_operating_expenses);
+    ok(near(exp3.bank_expenses_excluded, 700),
+        'T6c: the excluded bank row is still disclosed (so the missing expense can be entered)',
+        exp3.bank_expenses_excluded);
     const after = ops.getCashBankPosition(db, ALL);
-    ok(near(after.bank.expenses_paid - before.bank.expenses_paid, 5700),
-        'T6d: the bank is credited (reduced) by the expense payments', after.bank.expenses_paid - before.bank.expenses_paid);
+    ok(near(after.bank.balance - before.bank.balance, -5700),
+        'T6d: the bank balance still falls by the two statement payments (money did leave the bank)',
+        after.bank.balance - before.bank.balance);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -473,8 +480,12 @@ if (!fs.existsSync(livePath)) {
     const bankExpenseRows = ops.listClassifiedBankRows(mdb, ALL).filter(r => r.is_expense);
     ok(bankExpenseRows.length > 0, 'B4: office expenses paid from the bank are recognised', bankExpenseRows.length);
     ok(bankExpenseRows.every(r => (Number(r.debit) || 0) >= 0), 'B4: every recognised expense row is a debit (payment side), not a credit');
-    ok(near(exp.total_operating_expenses, accounting.round2(exp.other_expenses + exp.petty_cash + exp.salary + exp.vehicle_expenses + exp.bank_expenses)),
+    ok(near(exp.total_operating_expenses, accounting.round2(exp.other_expenses + exp.petty_cash + exp.salary
+        + exp.vehicle_expenses + (exp.typed_payment_expenses || 0))),
         'B4: operating expenses are the sum of their parts — each recognised once');
+    ok(near(exp.bank_expenses_excluded, exp.bank_expenses),
+        'B4: bank statement expenses are disclosed but excluded from the operating total',
+        { excluded: exp.bank_expenses_excluded, bank: exp.bank_expenses });
     ok(!ops.getBankReviewQueue(mdb).some(r => ops.classifyBankRow(r) === 'expense'),
         'B4: expense rows are not queueing for party matching');
     const income = ops.getProfitLoss(mdb, ALL).income;
@@ -527,6 +538,59 @@ if (!fs.existsSync(livePath)) {
         'B7: difference = expected − cash received', daily.difference);
 
     mdb.close();
+}
+
+// ──────────────────────────────────────────────────────────────
+console.log('\nTEST 12 — the bank register is standalone (no cross-module records)');
+{
+    // Requirement: entering, editing, importing or deleting a bank transaction
+    // must never create/alter a petty-cash row, an expense, a collection, a
+    // payment or a party-ledger entry. Classification stays descriptive.
+    // The Part-A database is closed by now — use a fresh one so a bank row
+    // cannot be confused with earlier fixtures.
+    const bdir = path.join(TMP, 'bank-standalone');
+    fs.mkdirSync(bdir, { recursive: true });
+    const db = initDatabase(bdir, 'bank.db');
+    ops.ensureBankTable(db);
+    const tables = ['petty_cash', 'other_expenses', 'payments', 'ledger_entries', 'cash_deposits', 'milk_collections', 'sales', 'purchases'];
+    const snapshot = () => Object.fromEntries(tables.map(t => [t, Number(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n)]));
+    const before12 = snapshot();
+
+    const created = ops.saveBankTransaction(db, {
+        date: '2083-04-20', reference_no: 'SA-1', counterparty_name: 'Test Customer',
+        description: 'BANK TRANSFER RECEIVED', credit: 15000, txn_type: 'Customer Payment'
+    });
+    ok(created.success, 'T12: a bank row is saved', created.error);
+    const row = ops.getBankTransaction(db, created.data.id);
+    ok(row.party_id === null, 'T12: the bank row carries no party link', row.party_id);
+    ok(Number(row.ledger_posted) === 0 && row.ledger_entry_id === null,
+        'T12: the bank row is not posted to a party ledger', { posted: row.ledger_posted, le: row.ledger_entry_id });
+    ok(JSON.stringify(snapshot()) === JSON.stringify(before12),
+        'T12: saving a bank row changes no other register', { before: before12, after: snapshot() });
+
+    const edited = ops.saveBankTransaction(db, { ...row, description: 'BANK TRANSFER RECEIVED (corrected)', credit: 16000 });
+    ok(edited.success && edited.data.description.includes('corrected'), 'T12: the bank row can be edited');
+    ok(JSON.stringify(snapshot()) === JSON.stringify(before12), 'T12: editing changes no other register', snapshot());
+
+    ops.importBankRows(db, [
+        { date: '2083-04-21', reference_no: 'SA-2', counterparty_name: 'Test Supplier', description: 'DIESEL PAYMENT', debit: 4000 },
+        { date: '2083-04-21', reference_no: 'SA-3', counterparty_name: 'OWN ACCOUNT', description: 'CASH DEPOSIT BY OWNER', credit: 9000 }
+    ]);
+    ok(JSON.stringify(snapshot()) === JSON.stringify(before12),
+        'T12: importing bank rows changes no other register', snapshot());
+
+    ok(ops.classifyBankRow({ description: 'DIESEL PAYMENT', debit: 4000 }) === 'expense',
+        'T12: a bank row is still classified for display (expense)');
+    ok(ops.classifyBankRow({ description: 'CASH DEPOSIT BY OWNER', credit: 9000 }) === 'cash_to_bank_transfer',
+        'T12: a deposit narration classifies as a transfer, not income');
+    ok(ops.postBankToLedger(db, created.data.id).posted === false,
+        'T12: the legacy posting API is a no-op');
+
+    const del = ops.deleteBankTransaction(db, created.data.id);
+    ok(del.success && ops.getBankTransaction(db, created.data.id) === undefined, 'T12: the bank row can be deleted');
+    ok(JSON.stringify(snapshot()) === JSON.stringify(before12),
+        'T12: deleting a bank row changes no other register', snapshot());
+    db.close();
 }
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);

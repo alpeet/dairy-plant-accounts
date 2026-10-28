@@ -223,6 +223,28 @@ console.log('\n— 8. listPartiesWithBalance unaffected —');
     check('balances are numbers', parties.every(p => typeof p.balance === 'number' || p.balance == null));
 }
 
+console.log('\n— 9. Statement columns: Qty/Rate kept, Item/Unit columns gone —');
+{
+    const src = fs.readFileSync(path.join(ROOT, 'renderer', 'js', 'statements.js'), 'utf8');
+    // The on-screen table and the print/PDF table both build from the same
+    // header list; assert on every header row found in the file.
+    const headers = src.match(/<thead><tr><th>[^`]*?<\/tr><\/thead>/g) || [];
+    check('the statement has at least one header row', headers.length > 0, headers.length);
+    const joiner = headers.join('\n');
+    check('Quantity column is present', /rlt\('quantity'\)/.test(joiner));
+    check('Rate column is present', /rlt\('rate'\)/.test(joiner));
+    check('Debit column is present', /rlt\('debit'\)/.test(joiner));
+    check('Credit column is present', /rlt\('credit'\)/.test(joiner));
+    check('Running-balance column is present', /rlt\('balance'\)/.test(joiner));
+    check('no Item/Product column', !/rlt\('item'\)|Item \/ Product|<th[^>]*>Item<\/th>/.test(joiner));
+    check('no Unit column', !/rlt\('unit'\)|<th[^>]*>Unit<\/th>/.test(joiner));
+    check('rows still print qty and rate cells', /c\.qty/.test(src) && /c\.rate/.test(src));
+    const pj = fs.readFileSync(path.join(ROOT, 'renderer', 'js', 'party.js'), 'utf8');
+    check('party ledger modal prints qty and rate', /c\.qty/.test(pj) && /c\.rate/.test(pj));
+    check('party ledger modal has no Item/Unit columns',
+        !/<th[^>]*>\s*(Item|Unit)\s*<\/th>/.test(pj));
+}
+
 db.close();
 fs.unlinkSync(TMP_DB);
 

@@ -498,20 +498,9 @@ function getPdcPosition(db) {
     const sum = o => round2(o.held.amount + o.deposited.amount);
     const count = o => o.held.count + o.deposited.count;
 
-    // ── Cleared-but-not-reconciled (bank statement has no matching row yet) ──
-    const clearedRows = rows.filter(r => r.status === 'CLEARED');
+    // Bank Transactions is a standalone register; cleared cheques are not
+    // automatically matched against it. Keep the legacy response shape empty.
     const unreconciled = [];
-    for (const r of clearedRows) {
-        let hit = null;
-        try {
-            hit = db.prepare(
-                `SELECT id FROM bank_transactions
-                  WHERE reference_no LIKE ? OR (date = ? AND ABS(ABS(COALESCE(credit, 0)) - ABS(COALESCE(debit, 0))) - ? <= 0.01)
-                  LIMIT 1`
-            ).get(`%${r.cheque_no}%`, r.clearance_date, Number(r.amount) || 0);
-        } catch (e) { /* bank table missing on very old DBs */ }
-        if (!hit) unreconciled.push({ id: r.id, pdc_no: r.pdc_no, cheque_no: r.cheque_no, clearance_date: r.clearance_date, amount: round2(r.amount), pdc_type: r.pdc_type });
-    }
 
     // ── Evidence the model holds: every money row a PDC created belongs to a
     //    CLEARED cheque, and the money posted equals the cleared total exactly

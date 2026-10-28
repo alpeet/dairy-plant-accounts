@@ -408,9 +408,7 @@ async function viewLedger(partyId, fromDate = '', toDate = '') {
                         <tr>
                             <th>${rlt('date')}</th>
                             <th>${rlt('particulars')}</th>
-                            <th>${rlt('item')}</th>
                             <th class="text-right">${rlt('quantity')}</th>
-                            <th>${rlt('unit')}</th>
                             <th class="text-right">${rlt('rate')}</th>
                             <th class="text-right">${rlt('debit')}</th>
                             <th class="text-right">${rlt('credit')}</th>
@@ -420,9 +418,9 @@ async function viewLedger(partyId, fromDate = '', toDate = '') {
                     </thead>
                     <tbody>
                         ${entries.length === 0
-                            ? '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text-light)">No ledger entries found</td></tr>'
+                            ? '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-light)">No ledger entries found</td></tr>'
                             : entries.map(e => {
-                                const c = (typeof statementItemCells === 'function') ? statementItemCells(e) : { item: '-', qty: '-', unit: '-', rate: '-' };
+                                const c = (typeof statementItemCells === 'function') ? statementItemCells(e) : { qty: '', rate: '' };
                                 const st = (typeof statementStatusCell === 'function') ? statementStatusCell(e) : '';
                                 return `
                                 <tr>
@@ -431,9 +429,7 @@ async function viewLedger(partyId, fromDate = '', toDate = '') {
                                         ${escapeHtml(e.description)}
                                         <span style="font-size:11px;color:var(--text-light)">(${escapeHtml(e.reference_type)})</span>
                                     </td>
-                                    <td>${c.item}</td>
-                                    <td class="text-right">${c.qty}</td>
-                                    <td>${c.unit}</td>
+                                    <td class="text-right">${c.qty === '-' ? '' : c.qty}</td>
                                     <td class="text-right">${c.rate}</td>
                                     <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td>
                                     <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td>
@@ -486,9 +482,9 @@ async function printLedger(partyId, fromDate, toDate) {
             <span><strong>Balance:</strong> ${formatCurrency(Math.abs(balance))} ${balance >= 0 ? '(Dr)' : '(Cr)'}</span>
         </div>
         <table>
-            <thead><tr><th>${rlt('date')}</th><th>${rlt('particulars')}</th><th>${rlt('item')}</th><th class="text-right">${rlt('quantity')}</th><th>${rlt('unit')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
+            <thead><tr><th>${rlt('date')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
             <tbody>
-                ${entries.map(e => { const c = (typeof statementItemCells === 'function') ? statementItemCells(e) : { item: '-', qty: '-', unit: '-', rate: '-' }; return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.description)}</td><td>${c.item}</td><td class="text-right">${c.qty}</td><td>${c.unit}</td><td class="text-right">${c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.balance)}</td></tr>`; }).join('')}
+                ${entries.map(e => { const c = (typeof statementItemCells === 'function') ? statementItemCells(e) : { qty: '', rate: '' }; return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === '-' ? '' : c.qty}</td><td class="text-right">${c.rate === '-' ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td>${formatCurrency(e.balance)}</td></tr>`; }).join('')}
             </tbody>
         </table>
         <div class="footer">
@@ -522,9 +518,9 @@ async function exportLedgerPDF(partyId, fromDate, toDate) {
             <span><strong>Balance:</strong> ${formatCurrency(Math.abs(balance))}</span>
         </div>
         <table>
-            <thead><tr><th>${rlt('date')}</th><th>${rlt('particulars')}</th><th>${rlt('item')}</th><th class="text-right">${rlt('quantity')}</th><th>${rlt('unit')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
+            <thead><tr><th>${rlt('date')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th></tr></thead>
             <tbody>
-                ${entries.map(e => { const c = (typeof statementItemCells === 'function') ? statementItemCells(e) : { item: '-', qty: '-', unit: '-', rate: '-' }; return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.description)}</td><td>${c.item}</td><td class="text-right">${c.qty}</td><td>${c.unit}</td><td class="text-right">${c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.balance)}</td></tr>`; }).join('')}
+                ${entries.map(e => { const c = (typeof statementItemCells === 'function') ? statementItemCells(e) : { qty: '', rate: '' }; return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === '-' ? '' : c.qty}</td><td class="text-right">${c.rate === '-' ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td>${formatCurrency(e.balance)}</td></tr>`; }).join('')}
             </tbody>
         </table>
         <div class="footer">

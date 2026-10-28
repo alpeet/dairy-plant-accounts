@@ -249,15 +249,7 @@ function getCompanyLedger(db, opts = {}) {
             source: 'vehicle_expenses', source_id: r.id
         });
     }
-    // Bank expenses the register did not already carry (authoritative dedup).
-    for (const r of (opEx.bank_expense_rows || [])) {
-        push({
-            date: r.date, reference: r.reference_no || '', type: 'Bank charges',
-            particular: r.description || 'Bank expense',
-            debit: round2(r.amount), category: 'Expense', subcategory: 'Bank / finance',
-            source: 'bank_transactions', source_id: r.id
-        });
-    }
+    // Standalone bank register rows are intentionally not company-ledger postings.
     // Typed payments that are genuine P&L expenses (same rule as the P&L).
     for (const r of db.prepare(`
         SELECT pm.id, pm.date, pm.amount, pm.notes, pm.transaction_type, pn.name AS party_name
@@ -302,7 +294,10 @@ function getCompanyLedger(db, opts = {}) {
         });
     }
 
-    // ── 7. Internal transfers — visible, net zero ─────────────────────
+    // ── 7. Internal transfers — visible in the bank register's own records,
+    // net zero. A cash→bank deposit is money moving between the till and the
+    // account: it is listed so the ledger explains the bank side, but it is
+    // never income and never an expense, and it posts nothing anywhere. ──
     try {
         for (const r of accounting.listClassifiedBankRows(db, { from_date: from, to_date: to })) {
             if (!r.is_transfer) continue;
