@@ -728,6 +728,27 @@ CREATE TABLE IF NOT EXISTS petty_cash (
 );
 
 -- ============================================================
+-- MANUAL CASH COLLECTIONS (one row per day the operator records by hand)
+-- shared/operations/cash.js used to CREATE this table at query time, so a fresh
+-- install ran with a schema that differed from a migrated one. It belongs here.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cash_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    ref_no TEXT DEFAULT '',
+    payment_mode TEXT DEFAULT 'cash',
+    party_id INTEGER DEFAULT NULL,
+    cash_sales REAL DEFAULT 0.0,
+    cash_receipts REAL DEFAULT 0.0,
+    cash_payments REAL DEFAULT 0.0,
+    other_receipts REAL DEFAULT 0.0,
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (party_id) REFERENCES parties(id)
+);
+
+-- ============================================================
 -- CASH DEPOSITS (bank deposits from cash)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS cash_deposits (

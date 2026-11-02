@@ -64,6 +64,8 @@ const MANIFEST = [
     'test-bank-idempotency.js',
     // bank register must never post into another module
     'test-bank-standalone.js',
+    // ...and must stay that way across a restart (owner acceptance table)
+    'test-bank-isolation-restart.js',
     // party statement item/quantity/rate detail + column set
     'test-statement-items.js',
     // every Monthly Report figure is traceable to its rows

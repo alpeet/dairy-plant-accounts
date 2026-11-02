@@ -2,7 +2,7 @@
 
 Statuses: **Verified** (fix proven by an executed test), **Fixed-Unverified**
 (code changed, no executed proof), **Open**, **Blocked**.
-Last updated: 2026-10-28, at v1.4.50.
+Last updated: 2026-11-02, at v1.4.51.
 
 Evidence commands are relative to the repo root. Every closure below names the
 suite that proves it; a bug is never closed because code was edited.
@@ -60,6 +60,37 @@ suite that proves it; a bug is never closed because code was edited.
 | Fix | All write-side cross-posting removed; legacy APIs (`postBankToLedger`, `setBankMatch` with a party/`post`) are no-ops that refuse to link. Historical links already in the database were left untouched (nothing deleted or rewritten). |
 | Test | `test-bank-standalone.js` 11/11 (create/edit/import/delete each leave `petty_cash`, `other_expenses`, `payments`, `ledger_entries`, `cash_deposits`, `milk_collections`, `sales`, `purchases` unchanged), `test-accounting-logic.js` `T12`, `test-payment-bank-link.js` 32/32, `test-erp-acceptance.js` 63/63 |
 | Status | **Verified** |
+
+### BUG-012 — Bank isolation was never proven across a restart
+| | |
+|---|---|
+| Module | Bank Transactions → application startup |
+| Expected (owner's acceptance table) | Add / edit / delete / import a bank row → only the bank module changes. A petty-cash expense, a payment collection and a party payment → no bank row. A restart → bank records stay correct, a deleted row stays deleted. |
+| Actual | Every case held, but nothing executed proved it after a restart, so "deleted records return on restart" could neither be confirmed nor ruled out. |
+| Root cause of the *risk* | Startup runs schema + 34 migrations + backfills + `ensureBankTable()` healing. `main.js`/`server.js` call `importBundledExcelData()`, which today is an intentional no-op — the one place a resurrection could have hidden. |
+| Files | none changed (behaviour already correct); new proof added |
+| Test | `test-bank-isolation-restart.js` — **32 checks, 0 failed**: only the bank table changes on add/edit/delete/import; re-import inserts nothing; petty cash, collection and party payment create no bank row and no `bank_txn_id`; after close + `initDatabase()` + `ensureBankTable()` every bank row is byte-identical, the deleted row stays deleted, no startup backfill writes another register, nothing is re-linked, and statement totals equal the bank rows' own sums. A source-level invariant also fails the suite if any runtime module other than `shared/operations/bank.js` writes `bank_transactions`. |
+| Status | **Verified** |
+
+### BUG-013 — Existing books still carry links created by the old auto-posting
+| | |
+|---|---|
+| Module | Bank Transactions ↔ Party Ledger / Payments (historical data) |
+| Expected | A bank row claims no party and no ledger entry. |
+| Actual (measured 2026-11-02, read-only) | repo book: 120 bank rows — **92 with `party_id`**, **115 with `ledger_posted=1`**, **13 with a real `ledger_entry_id`**; 60 payments carry `bank_txn_id`. live desktop book: 136 rows — 85 / 118 / 6; 0 payments linked. |
+| Meaning | The code no longer creates these, but the rows written before the fix remain. The 13 + 6 rows with a stored `ledger_entry_id` are the ones that provably created their own ledger entry — those party balances are inflated by the bank row they duplicate. Rows merely flagged `ledger_posted=1` were matched to an entry that already existed, so they are a stale *flag*, not an extra entry. |
+| Impact | Party statements/receivables can be overstated for the affected parties until the stale links are cleared. |
+| Status | **Open (data)** — needs a targeted, backed-up cleanup (see handover §6). Not deleted automatically: identifying a bank-created ledger entry for certain is only possible where `ledger_entry_id` is stored. |
+
+### BUG-014 — The bank importer still printed "auto-posted to ledgers"
+| | |
+|---|---|
+| Module | Excel import → BANK RECON summary log |
+| Expected | A standalone register reports inserts, skips and classification only. |
+| Actual | `importBankReconSheet()` read `report.auto_posted`, `already_in_ledger` and `review_queue` — fields the standalone importer no longer returns — so the level of the wording still implied cross-module posting. |
+| Fix | The summary now states the register is standalone and reports transfers / expense-like rows / duplicates / undated rows instead. |
+| Verification | Code inspection only — log text, no behaviour; the importer itself is covered by `test-bank-isolation-restart.js` §1 and `test-bank-idempotency.js` 41/41. |
+| Status | **Fixed-Unverified** |
 
 ---
 
@@ -148,7 +179,7 @@ not lost. They were **not** re-tested here; treat the status as *reported, unver
 | CAR-05 | Invoice numbering not sequential/gap-free. | Open (reported) |
 | CAR-06 | No AD date display alongside BS; BS table ends 2090. | Open (reported) |
 | CAR-07 | PDF export has no page numbers / per-page subtotals / embedded Devanagari; `test-pdf.js` and `test-statement-pdf.js` need the Electron runtime and cannot run under plain `node`. | Blocked (verification) |
-| CAR-08 | `cash_collections` table is referenced by `shared/operations/cash.js` but does not exist in `schema.sql` (confirmed: `no such table: cash_collections` on a fresh database). | Open |
+| CAR-08 | `cash_collections` was created at query time by `shared/operations/cash.js` but was absent from `schema.sql`, so a fresh install ran a different schema from a migrated one. | **Verified** — table added to `database/schema.sql`; a fresh `initDatabase()` now reports `cash_collections: YES` and `integrity_check: ok`. |
 
 ---
 
@@ -157,6 +188,7 @@ not lost. They were **not** re-tested here; treat the status as *reported, unver
 ```bash
 node scripts/audit/run-all-tests.js        # the whole suite, one summary table
 node scripts/audit/test-bank-standalone.js # bank register creates nothing elsewhere
+node scripts/audit/test-bank-isolation-restart.js # ...and still doesn't after a restart
 node scripts/audit/test-statement-items.js # statement columns + per-product qty/rate
 node scripts/audit/test-report-drilldown.js# every report figure traces to its rows
 node scripts/audit/test-monthly-report.js  # COGS, stock valuation, reconciliation

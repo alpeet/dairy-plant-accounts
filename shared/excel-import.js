@@ -2104,11 +2104,15 @@ function importBankReconSheet(db, data, { log }) {
     }
     const report = bank.importBankRows(db, rows);
     if (undated) report.undated = undated;
-    log(`  🏦 Bank: ${report.inserted} transactions imported` +
-        (report.auto_posted ? `, ${report.auto_posted} auto-posted to ledgers` : '') +
-        (report.already_in_ledger ? `, ${report.already_in_ledger} already reflected` : '') +
-        (report.review_queue ? `, ⚠️ ${report.review_queue} need review` : '') +
-        (report.skipped_dup ? `, ${report.skipped_dup} duplicates skipped` : ''));
+    // Standalone register: the importer posts nothing, stamps nothing and queues
+    // nothing for party matching, so it must not report those counts — reading
+    // "auto-posted to ledgers" here is what made the next developer believe the
+    // cross-posting still existed.
+    log(`  🏦 Bank: ${report.inserted} transactions imported (standalone register — no ledger, payment or party posting)` +
+        (report.transfers ? `, ${report.transfers} cash-to-bank transfers` : '') +
+        (report.expenses ? `, ${report.expenses} expense-like rows` : '') +
+        (report.skipped_dup ? `, ${report.skipped_dup} duplicates skipped` : '') +
+        (undated ? `, ⚠️ ${undated} undated rows skipped` : ''));
     return report;
 }
 
