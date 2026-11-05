@@ -193,3 +193,24 @@ node scripts/audit/test-statement-items.js # statement columns + per-product qty
 node scripts/audit/test-report-drilldown.js# every report figure traces to its rows
 node scripts/audit/test-monthly-report.js  # COGS, stock valuation, reconciliation
 ```
+---
+
+## Audit 2026-11-05 — Excel data-model review, Party Ledger ownership, Collection income
+
+Measured against `Dairy_Accounts_Professional 76.xlsx` and the live book
+(`~/Library/Application Support/prarambha-account-stock/data/dairy-plant.db`, 98 parties).
+Full detail: `EXCEL_DATA_MODEL_AUDIT.md`, `DATABASE_REPAIR_PLAN.md`.
+
+| ID | Bug | Root cause | Status |
+|---|---|---|---|
+| BUG-015 | A Collection-sheet row typed **Rent** was booked as a customer receipt: it credited a tenant's account (showing as outstanding) and never reached the P&L | `importCollections()` branched on `Payment` / `Advance` / `ADVANCE RETURNED` / `Petty Cash` only; `Rent` fell through to `payType='receipt'`. The workbook's own `Profit_Loss!C8` reads `SUMIFS(Party_Ledger!H:H, Party_Ledger!D:D,"rent")` as Other Income | **Fixed, verified** — rent now writes `other_expenses(category='Income')`, idempotently; 12 checks in `test-party-ledger-derived.js` |
+| BUG-016 | Party Ledger is a second source of truth that disagrees with the modules | 11 modules write `ledger_entries`, *and* the workbook's `Party_Ledger` sheet was imported into it. Imported rows carry string references (`OPN-1001`, `BILL-5001`), so **2,815/2,838** sale rows and **1,460/1,460** purchase rows have no matching module row; purchase totals differ by **Δ 233,783.06** | **Open — designed** — `party_ledger.js` derives the ledger from the modules instead; switch blocked on owner sign-off (Phase B) |
+| BUG-017 | Supplier payments and advances never reach any party statement | `payments` has 53 payments (₹30,51,461.63) and 74 advances (₹16,67,901) but `ledger_entries` has **0** `payment_made` and **0** `advance` rows → payables overstated | **Open — surfaced** by the derived engine; needs Phase B posting decision |
+| BUG-018 | Bank rows claim `ledger_posted = 1` with no ledger entry | Pre-fix auto-posting wrote the flag before/without posting; `ledger_entry_id` values resolve to nothing (0 of 6) | **Open — display only**; bank behaviour is isolated (32/32 restart checks). Must not be trusted by any report |
+| BUG-019 | `parties.opening_balance` is 0 for all 98 parties, yet the workbook has 48 opening balances | Openings were imported as `ledger_entries` rows described `OPENING` with `reference_type='sale'`/`'purchase'` | **Open** — inflates "sales" in statements; move to `parties.opening_balance` (Phase B) |
+| BUG-020 | The workbook's `Expenses` sheet is not in the Expenses register | `REGISTER_SHEET_NAMES = ['Payment','Expenses','Advance']` all import through `importPettyCashSheet`, so `other_expenses` is **empty** and `petty_cash` holds 212 rows / ₹50,63,138 including salary, diesel and supplier transfers | **Open** — P&L heads become indistinguishable |
+| BUG-021 | 74 advances exist twice (petty cash + payments, identical amounts) | Two importers both claimed the advance rows | **Open** — no double count in P&L (advances are balance sheet), but a duplicate register |
+| BUG-022 | Milk exists twice: 1,496 collections, all linked to 844 purchase bills | `Purchase_Entry` milk lines create `purchases` *and* `milk_collections` | **Mitigated, verified** — the derived ledger counts linked milk once (asserted); long-term one register should own the litres |
+| BUG-023 | Workbook: one bank value leaks into the ledger's credit column inside the total range | `Party_Ledger!H8937 = 'BANK RECON'!H538`, outside every block, within `SUBTOTAL(9,H3:H8937)` | **Workbook issue** — do not import that row as a party entry |
+| BUG-024 | Workbook: Mix Milk stock is −43,404.799 L and drives the P&L stock line | `Stock_Master!F3 = C + D − E` with purchases recorded under other product names | **Open (data entry)** — matches the app's negative closing stock; the app reports it rather than hiding it |
+| BUG-025 | Workbook: `Party_Ledger` carries 20 dead `1899-12-30` rows and a `K` column referencing `$C$52` | Over-copied `Advance` formulas | **Workbook issue** — the importer must skip zero/epoch rows (it does: blank date → skipped) |

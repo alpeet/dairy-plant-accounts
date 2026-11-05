@@ -1180,7 +1180,29 @@ function importCollections(db, sheetData, opts) {
     const dateIdx = 0, adDateIdx = 1, recIdx = 2, custIdx = 3, billIdx = 4, typeIdx = 5,
           collectedIdx = 7, paidIdx = 8, modeIdx = 9, transTypeIdx = 11, remarkIdx = 11;
 
-    let inserted = 0, unchanged = 0, skipped = 0, skippedPetty = 0;
+    // Collection-sheet rows typed "Rent" are INCOME, not a customer receipt.
+    // The workbook's own P&L proves the intent: Profit_Loss!C8 is
+    //   SUMIFS(Party_Ledger!H:H, Party_Ledger!D:D, "rent", ...)
+    // i.e. rent is read from the ledger's credit column as Other Income. Booking
+    // it as a `payment_received` instead credited a tenant's account (which is
+    // what made a rent receipt show up as outstanding) AND kept it out of the
+    // P&L, so the money was wrong in both directions. It now goes to the income
+    // register (`other_expenses` with category exactly 'Income'), which is what
+    // accounting.js / monthly_report.js read.
+    const RENT_TYPES = new Set(['rent', 'rent received', 'rent_received', 'rent income', 'rent_income']);
+    const incomeKey = (date, head, amount) => `${date}|${head}|${Math.round((Number(amount) || 0) * 100)}`;
+    const storedIncome = new Map();
+    for (const r of db.prepare("SELECT date, expense_head, amount FROM other_expenses WHERE category = 'Income'").all()) {
+        const k = incomeKey(r.date, r.expense_head, r.amount);
+        storedIncome.set(k, (storedIncome.get(k) || 0) + 1);
+    }
+    const seenIncome = new Map();
+    const insertIncome = db.prepare(`
+        INSERT INTO other_expenses (date, category, expense_head, description, amount, paid_to, payment_mode, reference_no, remarks, created_at)
+        VALUES (?, 'Income', ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let inserted = 0, unchanged = 0, skipped = 0, skippedPetty = 0, rentIncome = 0;
     const now = new Date().toISOString();
 
     const trx = db.transaction(() => {
@@ -1199,6 +1221,30 @@ function importCollections(db, sheetData, opts) {
             // legacy rows; this keeps them from coming back on re-import).
             if (rowType.includes('petty') || normalize(customerName) === 'petty cash') {
                 skippedPetty++;
+                continue;
+            }
+
+            // Rent received → income register. No party, no receipt, no ledger
+            // credit: a tenant is not a customer with a receivable.
+            if (RENT_TYPES.has(rowType)) {
+                const rentAmount = toNum(row[collectedIdx]) || toNum(row[paidIdx]);
+                if (rentAmount <= 0) continue;
+                const rentDate = toBSDate(row[dateIdx]) || toBSDate(row[adDateIdx]) || '2082-01-01';
+                const head = 'Rent Received';
+                const recNo = toNum(row[recIdx]) > 0 ? String(toNum(row[recIdx])) : '';
+                const k = incomeKey(rentDate, head, rentAmount);
+                seenIncome.set(k, (seenIncome.get(k) || 0) + 1);
+                if ((storedIncome.get(k) || 0) >= seenIncome.get(k)) { unchanged++; continue; }
+                const rentNote = toStr(row[remarkIdx]) || 'Rent received';
+                insertIncome.run(
+                    rentDate, head,
+                    `${rentNote}${customerName ? ' — ' + customerName : ''}`,
+                    rentAmount, customerName || '',
+                    mapPaymentMode(toStr(row[modeIdx])),
+                    recNo, toStr(row[billIdx]) || 'Collection sheet (Type = Rent)', now
+                );
+                storedIncome.set(k, (storedIncome.get(k) || 0) + 1);
+                rentIncome++;
                 continue;
             }
 
@@ -1253,8 +1299,8 @@ function importCollections(db, sheetData, opts) {
     });
     trx();
 
-    log(`  ✅ Collections: ${inserted} added, ${unchanged} unchanged${skipped ? `, ${skipped} no party` : ''}${skippedPetty ? `, ${skippedPetty} petty-cash mirror rows skipped (D13)` : ''}`);
-    return { added: inserted, unchanged, skipped, skipped_petty: skippedPetty };
+    log(`  ✅ Collections: ${inserted} added, ${unchanged} unchanged${skipped ? `, ${skipped} no party` : ''}${skippedPetty ? `, ${skippedPetty} petty-cash mirror rows skipped (D13)` : ''}${rentIncome ? `, ${rentIncome} rent rows booked as other income` : ''}`);
+    return { added: inserted, unchanged, skipped, skipped_petty: skippedPetty, rent_income: rentIncome };
 }
 
 // ════════════════════════════════════════════════════════════════

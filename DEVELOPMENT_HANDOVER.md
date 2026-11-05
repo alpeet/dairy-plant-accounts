@@ -158,3 +158,65 @@ or `shared/operations/data_cleanup.js`.
 - Every edit/release follows the standing policy: verify → bump version → release
   notes → commit+push → DMG + Windows installers → restore the native module →
   publish the GitHub release with all three assets.
+---
+
+## v1.4.52 — Party Ledger becomes a derived report (2026-11-05)
+
+### The rule
+**The Party Ledger is a report. It is never a write target.**
+
+Every register owns its own rows and its own CRUD. The ledger is assembled on
+read from those registers. This is not a new idea imported from outside — it is
+what the owner's workbook already does: `Party_Ledger` rows 3–4,406 are
+`=Sales_Entry!A3…`, rows 4,409–6,472 `=Purchase_Entry!…`, then `Collection`,
+`Payment`, `Expenses`, `PETTY CASH`, `Advance`. Nothing is typed into it.
+
+### New module
+`shared/operations/party_ledger.js` — read-only, exports:
+
+| Function | Use |
+|---|---|
+| `collectModuleRows(db)` | one normalised row per source transaction, with `source_table` + `source_id` |
+| `getDerivedPartyLedger(db, {party_id, from_date, to_date})` | statement rows + running balance + `opening_bf` + `by_source` |
+| `getDerivedPartyBalances(db, {as_of_date, type, search})` | receivable/payable per party |
+| `reconcileWithStoredLedger(db, {as_of_date})` | derived vs `ledger_entries`, per party, with totals |
+| `paymentSide(payment)` | the party side of every `transaction_type` (advance, loan, adjustment, receipt, payment) |
+
+Sign conventions are the workbook's: `debit` = party owes us more,
+`credit` = we owe the party more, `balance = opening + Dr − Cr`.
+
+### Rules encoded
+* A `milk_collections` row with `purchase_ref_id` set is **not** added again —
+  the purchase bill already carries those litres.
+* BS dates are compared as strings (never `Date`/`strftime`).
+* `opening_bf` includes the stored opening balance plus all rows before
+  `from_date`, so a mid-period statement still reconciles to the closing figure.
+
+### Collection income rule (implemented)
+`Collection!Type` decides the destination:
+
+| Type | Destination | Reporting |
+|---|---|---|
+| `Collection` | `payments` receipt | collection receipts, shown as money in; **not** added to revenue |
+| `Rent` | `other_expenses`, `category='Income'` | Other Income in P&L / Monthly Report / Company Ledger |
+| `Advance` | `payments` advance | advance receivable |
+| `ADVANCE RETURNED` | `payments` advance_returned | advance receivable |
+| `Petty Cash` | skipped (mirror of the petty register) | — |
+
+Rent is never a party credit and never creates a tenant party. The
+double-counting guard is structural: revenue comes from `sales`, receipts are
+reported separately, and only rent/other income is added to income.
+
+### Still to do (owner decisions pending)
+1. Move the 48 workbook opening balances into `parties.opening_balance`.
+2. Post the missing 53 supplier payments (₹30,51,461.63) and 74 advances
+   (₹16,67,901) — or switch statements to the derived engine and retire the
+   table (Phase B/C in `DATABASE_REPAIR_PLAN.md`).
+3. Point `statements.js` / `party_account.js` at `party_ledger.js`.
+4. Stop importing the `Expenses` sheet into `petty_cash` (BUG-020).
+
+### Test
+`scripts/audit/test-party-ledger-derived.js` — 30 checks: derivation from each
+register, single counting of linked milk, running-balance continuity, date-cut
+opening b/f, no writes to `ledger_entries`, payable/receivable classification,
+reconciliation maths, rent → income, and idempotent re-import.

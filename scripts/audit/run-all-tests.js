@@ -66,6 +66,9 @@ const MANIFEST = [
     'test-bank-standalone.js',
     // ...and must stay that way across a restart (owner acceptance table)
     'test-bank-isolation-restart.js',
+    // party ledger is derived from the owning modules (never a write target),
+    // milk on a purchase bill counted once, rent typed as income not as a receipt
+    'test-party-ledger-derived.js',
     // party statement item/quantity/rate detail + column set
     'test-statement-items.js',
     // every Monthly Report figure is traceable to its rows
