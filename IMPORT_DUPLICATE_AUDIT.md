@@ -45,9 +45,10 @@ Verified by `scripts/audit/test-excel-import-routing.js` (48 checks).
 |---|---|---|---|
 | D1 | Advances exist in **both** `petty_cash` (`expense_head='ADVANCE'`, 74 rows, ₹16,67,901) and `payments` (`transaction_type='advance'`, same 74, same total) | live book | choose one register: keep `payments` as the party-facing record, drop the petty row (or mark it `mirror_of_payment_id`) |
 | D2 | `Payment` sheet rows also create a `petty_cash` row | `importPettyCashSheet` writes petty for every `Payment` row, then `postPaymentRegisterRows` writes the payment | keep petty for the cash box, but tag the row `source='Payment'` so cash reports can exclude it |
+| D2b | ~~`Expenses` sheet rows went to `petty_cash`~~ | **Fixed in v1.4.55** — the sheet now writes to `other_expenses` only, and a voucher present in both sheets collapses to one row | none needed for new imports |
 | D3 | Bank rows claim `ledger_posted = 1` (118 rows) with no ledger entry | live book | set `ledger_posted = 0`, `ledger_entry_id = NULL` — nothing else changes |
 | D4 | Legacy `ledger_entries` imported from the workbook sheet in an earlier release (live book: 2,838 `sale` rows vs 2,333 sales) | live book, pre-fix | no longer produced by any import; a one-off reconciliation is needed before retiring the table |
-| D5 | `Expenses` and `PETTY CASH` both feed `petty_cash` | import design | see BUG-020 |
+| D5 | Expense vouchers imported **before** v1.4.55 still sit in `petty_cash` | live book: 222 petty rows, incl. office expenses | one-off migration to move only the `Expenses`-sheet vouchers into `other_expenses`, matched on date+amount+payee+description, after the cross-register check |
 
 None of these were deleted: each needs an owner decision, and D4 needs the 17-party reconciliation already reported.
 

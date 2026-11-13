@@ -1906,8 +1906,17 @@ function rebuildStockLedger(db, log, opts = {}) {
  * - "Collection" rows → skipped: they duplicate the Collection sheet, which
  *   already produced payments/ledger entries.
  */
-function importPettyCashSheet(db, data, { log, mode }) {
-    const report = { payment: 0, office: 0, advance: 0, advance_ledger: 0, collection_skipped: 0, unmatched: [], skipped_dup: 0 };
+function importPettyCashSheet(db, data, { log, mode, sheetName }) {
+    const report = { payment: 0, office: 0, advance: 0, advance_ledger: 0, collection_skipped: 0, unmatched: [], skipped_dup: 0, other_expense: 0 };
+    // The workbook's `Expenses` sheet is the office-expense register, which the
+    // Expenses sidebar module reads from `other_expenses`. Only the `PETTY CASH`
+    // sheet (and the Payment/Advance registers' own vouchers) belong in the
+    // petty-cash box. An expense therefore lands in exactly ONE register:
+    //   Expenses sheet  → other_expenses
+    //   PETTY CASH sheet → petty_cash
+    // Cash-on-hand subtracts both tables, and the P&L sums both, so a row in both
+    // would be counted twice — hence the cross-register check below.
+    const toOtherExpenses = sheetName === 'Expenses';
     // Fresh mode: the workbook's Party_Ledger sheet is the party-balance source
     // of truth and already carries every advance (entered at recap dates, e.g.
     // "ADVANCE BY LILA SIR" on 2083-05-24). The PETTY CASH register's daily
@@ -1923,6 +1932,10 @@ function importPettyCashSheet(db, data, { log, mode }) {
     const insertPC = db.prepare(`
         INSERT INTO petty_cash (voucher_no, date, expense_head, description, amount, paid_to, payment_mode, remarks, approved_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+    `);
+    const insertOE = db.prepare(`
+        INSERT INTO other_expenses (date, category, expense_head, description, amount, paid_to, payment_mode, reference_no, remarks, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     `);
     const insertPay = db.prepare(`
         INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, notes, created_by)
@@ -1940,6 +1953,12 @@ function importPettyCashSheet(db, data, { log, mode }) {
         .map(r => `${r.date}|${Math.round(r.amount * 100)}|${(r.paid_to || '').trim().toLowerCase()}|${(r.expense_head || '').trim().toLowerCase()}|${(r.description || '').trim().toLowerCase()}`));
     const existingAdv = new Set(db.prepare('SELECT date, party_id, debit FROM ledger_entries WHERE debit > 0').all()
         .map(r => `${r.date}|${r.party_id}|${Math.round(r.debit * 100)}`));
+    // Same key shape as existingPC, so the same voucher typed in two sheets
+    // collapses to one register instead of being counted twice.
+    const oeKey = (date, amount, payee, head, desc) =>
+        `${date}|${Math.round(amount * 100)}|${String(payee || '').trim().toLowerCase()}|${String(head || '').trim().toLowerCase()}|${String(desc || '').trim().toLowerCase()}`;
+    const existingOE = new Set(db.prepare('SELECT date, amount, paid_to, expense_head, description FROM other_expenses').all()
+        .map(r => oeKey(r.date, r.amount, r.paid_to, r.expense_head, r.description)));
 
     for (let i = 2; i < data.length; i++) {
         const r = data[i];
@@ -1970,6 +1989,18 @@ function importPettyCashSheet(db, data, { log, mode }) {
             const head = desc || 'Payment';
             const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|${head.toLowerCase()}|${desc.toLowerCase()}`;
             if (existingPC.has(key)) { report.skipped_dup++; continue; }
+            if (toOtherExpenses) {
+                // Already in the petty-cash box (same voucher typed in both sheets).
+                // Keep the one that is already recorded rather than duplicating it
+                // into a second register.
+                const oeK = oeKey(date, paid, customer, head, desc);
+                if (existingOE.has(oeK)) { report.skipped_dup++; continue; }
+                insertOE.run(date, type === 'PETTY CASH' ? 'Operating' : 'Operating', head, desc, paid, customer, payMode, receiptNo || '', '');
+                existingOE.add(oeK);
+                report.other_expense = (report.other_expense || 0) + 1;
+                report.office = (report.office || 0) + 1;
+                continue;
+            }
             seq++;
             insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, head, desc, paid, customer, payMode, '');
             existingPC.add(key);
@@ -2038,7 +2069,7 @@ function importRegisterSheets(db, workbook, { mode, log }) {
         if (data.length <= 2) { results[name] = absentSheetResult(); continue; }
 
         log(`\n  📒 Register sheet "${name}"`);
-        const r = importPettyCashSheet(db, data, { mode, log });
+        const r = importPettyCashSheet(db, data, { mode, log, sheetName: name });
         if (name === 'Payment') r.payment_register = postPaymentRegisterRows(db, data, { mode, log });
         results[name] = r;
     }

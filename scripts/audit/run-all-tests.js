@@ -71,6 +71,7 @@ const MANIFEST = [
     'test-party-ledger-derived.js',
     'test-excel-sync.js',
     'test-excel-import-routing.js',
+    'test-expenses-routing.js',
     // party statement item/quantity/rate detail + column set
     'test-statement-items.js',
     // every Monthly Report figure is traceable to its rows

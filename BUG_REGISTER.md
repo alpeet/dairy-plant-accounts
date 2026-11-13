@@ -226,3 +226,10 @@ Full detail: `EXCEL_DATA_MODEL_AUDIT.md`, `DATABASE_REPAIR_PLAN.md`.
 | BUG-029 | `bank_transactions.accounting_class` (and `txn_uid`) exist on a migrated book but **not** on a freshly initialised database | The columns were added by an ad-hoc migration, not by the base schema | **Open** — found by `test-excel-sync.js`; the sync reads the column defensively (`|| ''`) so it does not crash |
 | BUG-030 | A workbook open in Excel could be overwritten by a sync, and Excel would then overwrite the sync on its next save | No `~$` lock check existed | **Fixed, tested** — sync refuses and writes nothing |
 | BUG-031 | The register sheets do not share one layout: `Collection` has `Type` in F and `Collected` in H, while `Payment`/`Expenses`/`Advance`/`PETTY CASH` have `Description` in F, `Type` in G, `Collected` in I and `Paid` in J; `BANK RECON` and `Salary` put their header on row 3, and `Salary` has a totals banner above it | The workbook reuses a 13-column template with two variants; `Salary` was rebuilt with a banner | **Fixed** — field maps declared per sheet and columns resolved by header text, with measured layouts recorded in `EXCEL_COLUMN_MAPPING.md` |
+---
+
+## v1.4.55 — Expenses sheet routed to the Expenses module
+
+| ID | Bug | Root cause | Status |
+|---|---|---|---|
+| BUG-032 | The workbook's `Expenses` sheet imported into `petty_cash`, so the Expenses sidebar module (`other_expenses`) stayed empty and office expenses were indistinguishable from the cash box | `importRegisterSheets` fed Payment / Expenses / Advance through `importPettyCashSheet`, which only knew the petty-cash table. v1.4.54 documented this from the new routing test and left it open because changing it moves P&L figures | **Fixed, tested** — `sheetName === 'Expenses'` now writes `other_expenses` (`category='Operating'`, head = the sheet's description) and never `petty_cash`; a voucher present in both sheets collapses to one row, so cash-on-hand and the P&L count it once. `test-expenses-routing.js` (23 checks) proves one ₹900 expense raises operating expenses by exactly 900, and a ₹150 petty voucher by exactly 150 |

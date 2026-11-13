@@ -39,7 +39,7 @@ A *fresh* import read `Party_Ledger` — the consolidated, formula-driven copy �
 | 10 | `CASH FLOW` | cash narrative, no app module | **no** | — (reported) |
 | 11 | `PETTY CASH` | register | **yes** | `petty_cash` → Petty Cash |
 | 12 | `Payment` | register | **yes** | `payments` (payment) → Payment Register |
-| 13 | `Expenses` | register | **yes**, but into `petty_cash` | Expenses module reads `other_expenses` → BUG-020 |
+| 13 | `Expenses` | register | **yes** | `other_expenses` (`category='Operating'`) → Expenses |
 | 14 | `Advance` | register (in and out) | **yes** | `payments` (advance) + `petty_cash` → Advances |
 | 15 | `BANK RECON` | register | **yes** | `bank_transactions` → Bank |
 | 16 | `Party_Master` | master (parties, opening balance column all 0) | **yes** | `parties` → Parties |
@@ -74,7 +74,7 @@ A *fresh* import read `Party_Ledger` — the consolidated, formula-driven copy �
 | `Collection` (Type=Advance / ADVANCE RETURNED) | Advances | `importCollections` | `payments` (`transaction_type`) | party + date + amount + type |
 | `Collection` (Type=Petty Cash) | — | `importCollections` | skipped (mirror of `PETTY CASH`) | — |
 | `Payment` | Payment Register | `importPettyCashSheet` + `postPaymentRegisterRows` | `payments` (`type='payment'`), `ledger_entries` (`payment_made`) | party + date + amount, counted |
-| `Expenses` | Expenses | `importPettyCashSheet` | `petty_cash` *(see BUG-020)* | date + amount + payee + head + description |
+| `Expenses` | Expenses | `importPettyCashSheet` (`sheetName='Expenses'`) | `other_expenses` | date + amount + payee + head + description |
 | `Advance` | Advances | `importPettyCashSheet` | `petty_cash`, `payments` (advance), `ledger_entries` | date + party + debit |
 | `PETTY CASH` | Petty Cash | `importPettyCashSheet` | `petty_cash`, `ledger_entries` (advances) | date + amount + payee + head + description |
 | `BANK RECON` | Bank | `importBankReconSheet` | `bank_transactions` **only** | reference no / date / amount |
@@ -124,7 +124,7 @@ Two anomalies in the sheet, for the record: `Party_Ledger!H8937 = 'BANK RECON'!H
 | 1 | Fresh import read `Party_Ledger` into `ledger_entries` **and** switched off ledger posting for sales / purchases / collections | **Fixed** — `genLedger = true` in both modes; sheet skipped |
 | 2 | File header documented `Party_Ledger → ledger_entries` as a supported source | **Fixed** — header now states it is never imported |
 | 3 | `importPettyCashSheet` suppressed advance ledger posting in fresh mode *because* the ledger sheet would post it — so advances would have vanished from statements once the sheet was skipped | **Fixed** — posting enabled in both modes, still de-duplicated by `date|party|debit` |
-| 4 | `Expenses` sheet imports into `petty_cash`; the Expenses module reads `other_expenses` (empty) | **Open** — BUG-020 (changing it would move P&L figures; needs a decision) |
+| 4 | `Expenses` sheet imported into `petty_cash`; the Expenses module reads `other_expenses` | **Fixed** — routed to `other_expenses`, exclusively (v1.4.55) |
 | 5 | `Payment` sheet rows also create a `petty_cash` row, so one payment appears in two registers | **Open** — reported, not changed (existing behaviour) |
 | 6 | `Advance` sheet rows create a `petty_cash` row **and** an advance payment | **Open** — BUG-021 |
 | 7 | `export-daily-account.js` writes a `Party_Ledger` sheet from `ledger_entries` | **Open** — export only, not an import route |
@@ -181,4 +181,12 @@ Fresh import of a copy of `Dairy_Accounts_Professional 76.xlsx` into an empty da
 - Second import (upsert): **0 new rows** in sales, purchases, receipts, payments, bank, salary, petty cash or the ledger.
 - **48 passed, 0 failed.**
 
+### Expenses routing (v1.4.55)
+
+The `Expenses` sheet now writes to `other_expenses` (`category='Operating'`), and **never** to `petty_cash`. A voucher typed in both the `Expenses` and `PETTY CASH` sheets collapses to one row, so neither cash-on-hand nor the P&L counts it twice. Measured on the workbook copy: 52 paid vouchers on the sheet → **32 rows** in `other_expenses`, 20 collapsed as identical petty-cash vouchers; **0** vouchers in both registers; P&L expense heads still sum to operating expenses.
+
+`test-expenses-routing.js` — **23 passed, 0 failed**, including a controlled case where one ₹900 expense raises operating expenses by exactly 900 and a ₹150 petty voucher by exactly 150 (total 1,050).
+
 **Not tested:** an edited workbook re-imported end-to-end (the edit path is covered by the existing upsert tests), and a fresh import against the live database — deliberately not run, since fresh mode clears transactional data.
+
+**Existing live rows are not moved.** The routing applies to new imports; the Expenses vouchers already imported into `petty_cash` stay there until a one-off migration is approved (see `IMPORT_DUPLICATE_AUDIT.md` D5).

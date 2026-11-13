@@ -12,7 +12,7 @@ One worksheet per module. `Party_Ledger` is never an import source.
 | `Collection` | `importCollections` | `payments` (receipt / advance / advance return), `other_expenses` (rent income) | Payment Collection |
 | `Payment` | `importPettyCashSheet` + `postPaymentRegisterRows` | `payments` (`type='payment'`) | Payment Register |
 | `PETTY CASH` | `importPettyCashSheet` | `petty_cash` | Petty Cash |
-| `Expenses` | `importPettyCashSheet` | `petty_cash` → *should be `other_expenses`* (BUG-020) | Expenses |
+| `Expenses` | `importPettyCashSheet` (`sheetName='Expenses'`) | `other_expenses` (`category='Operating'`) | Expenses |
 | `Advance` | `importPettyCashSheet` | `payments` (advance), `petty_cash` | Advances |
 | `BANK RECON` | `importBankReconSheet` | `bank_transactions` only | Bank Transactions |
 | `Salary` | `importSalaryAdvanceSheet` | `salary_records`, `employees` | Salary |

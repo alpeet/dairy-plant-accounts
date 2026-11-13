@@ -295,3 +295,46 @@ A transaction is imported from **exactly one worksheet** — the one that owns i
 
 ### For the next maintainer
 If you are tempted to "just import the ledger as well", the test that will fail is `every sale ledger row points at a real Sales_Entry invoice`. That check exists to stop exactly that.
+---
+
+## v1.4.55 — Expenses sheet → Expenses module (2026-11-05)
+
+### The rule, now complete
+A voucher lands in exactly **one** expense register:
+
+| Sheet | Register | Read by |
+|---|---|---|
+| `Expenses` | `other_expenses` (`category='Operating'`, head = Description) | Expenses module, P&L, cash position |
+| `PETTY CASH` | `petty_cash` | Petty Cash module, P&L, cash position |
+
+`importPettyCashSheet` takes a `sheetName`; only `'Expenses'` sets `toOtherExpenses`.
+
+### Why "exclusive" matters
+`accounting.getCashBankPosition` subtracts **both** `other_expenses` and
+`petty_cash`, and `monthly_report.operatingExpenses` sums **both** (with the
+`PETTY_DUPLICATE_SQL` / settlement / salary-dup exclusions). Writing an expense to
+both tables would subtract and expense it twice. So the importer checks the other
+register first and skips rather than mirroring: an identical voucher in both
+sheets collapses to whichever register already holds it.
+
+### Test
+`scripts/audit/test-expenses-routing.js` — 23 checks, two parts:
+- controlled: one ₹900 Expenses-sheet voucher → `other_expenses`, **0** in
+  `petty_cash`, P&L operating expenses **exactly 900**, `expense_sources.petty_cash`
+  **0**; re-import adds nothing; a ₹150 `PETTY CASH` voucher stays in `petty_cash`
+  and the P&L then reads 1,050.
+- real workbook copy: 52 paid vouchers → 32 rows in `other_expenses`, 20 collapsed,
+  **0** vouchers in both registers, every expense key unique across both, P&L heads
+  sum to operating expenses.
+
+### What was NOT migrated
+Vouchers imported **before** this release are still in `petty_cash` on the live
+book. Moving them is a data change with no code requirement, so it is left for an
+explicit one-off (see `IMPORT_DUPLICATE_AUDIT.md` D5). Until then the Expenses
+screen still lists them (as "Petty Cash" rows) via the read-only UNION in
+`shared/operations/expenses.js`, so nothing is hidden.
+
+### Trap for the next maintainer
+Do not "mirror" an imported expense into both tables to make it visible in both
+screens. It is visible in both screens already (the UNION), and mirroring doubles
+the expense and the cash outflow.
