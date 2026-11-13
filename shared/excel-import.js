@@ -13,7 +13,8 @@
  *   Sales_Entry    → sales + sales_items (+ sale ledger + stock movements in fresh mode)
  *   Purchase_Entry → purchases + purchase_items (+ purchase ledger + stock movements in fresh mode)
  *   Collection     → payments (customer receipts / payments)
- *   Party_Ledger   → ledger_entries (dedup against auto-generated ones)
+ *   Party_Ledger   → NEVER imported (consolidated reporting sheet; each
+ *                    transaction is read from its own worksheet instead)
  *   Party Email    → party emails (if present)
  *
  * Modes:
@@ -1914,7 +1915,11 @@ function importPettyCashSheet(db, data, { log, mode }) {
     // double-counts (NAR BAHADUR RANA -47,828 became -116,228). Register the
     // cash movement, but post the party ledger only in upsert mode, where the
     // Party_Ledger sheet is not imported.
-    const postAdvanceLedger = mode !== 'fresh';
+    // Party_Ledger is no longer imported in fresh mode, so the advance must post
+    // its own ledger row there too; existingAdv (date|party|debit) keeps it
+    // idempotent and prevents a second post when the same advance also appears
+    // in the Advance sheet.
+    const postAdvanceLedger = true;
     const insertPC = db.prepare(`
         INSERT INTO petty_cash (voucher_no, date, expense_head, description, amount, paid_to, payment_mode, remarks, approved_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
@@ -3082,10 +3087,13 @@ function runExcelImport(db, excelPath, opts = {}) {
         buildProductIndex(db);
     }
 
-    // Upsert keeps the existing ledger representation (one entry per invoice/payment,
-    // as created by the app itself), so newly inserted sales/purchases/payments generate
-    // matching ledger entries. Fresh mode imports the Excel's own Party_Ledger sheet.
-    const genLedger = mode === 'upsert';
+    // Every module posts its own party-ledger row, in BOTH modes, from the
+    // worksheet that owns the transaction. Fresh mode used to import the
+    // workbook's Party_Ledger sheet instead and switch these off, which made the
+    // consolidated copy a second source for the same transactions: 2,815 of 2,838
+    // `sale` ledger rows had a reference_id like `OPN-1001` / `BILL-5001` and no
+    // matching `sales` / `purchases` row. One transaction, one source.
+    const genLedger = true;
 
     // 3. Sales
     const salesSheet = sheet('Sales_Entry', ['date', 'invoice', 'bill']);
@@ -3122,14 +3130,20 @@ function runExcelImport(db, excelPath, opts = {}) {
         results.milkCollections = absentSheetResult();
     }
 
-    // 6. Party ledger (fresh mode only — line-level sheet is incompatible with the
-    //    per-invoice ledger entries the app maintains)
-    if (mode === 'fresh') {
-        const ledgerSheet = sheet('Party_Ledger', ['date', 'party', 'description']);
-        if (ledgerSheet && ledgerSheet.data.length > 2) {
-            results.ledger = importPartyLedger(db, ledgerSheet.data, { mode, log });
-        }
-    }
+    // 6. Party_Ledger is a CONSOLIDATED, formula-driven copy of Sales_Entry,
+    //    Purchase_Entry, Collection, Payment, Expenses, PETTY CASH and Advance.
+    //    It is never imported: every one of those transactions is read from its
+    //    own worksheet above, so reading the ledger copy as well would double
+    //    every one of them. It stays available as a reporting view; the app
+    //    derives statements from the modules (shared/operations/party_ledger.js).
+    results.ledger = {
+        skipped: true,
+        sheet: 'Party_Ledger',
+        reason: 'Consolidated reporting sheet — its rows are copies of the register '
+            + 'sheets and are imported from those sheets instead.',
+        added: 0, updated: 0, unchanged: 0
+    };
+    log('  ⏭️  Party_Ledger skipped by design (reporting sheet, not a transaction source)');
 
     // Fresh mode: derive mixing/production batches from the imported data,
     // rebuild the stock ledger, then derive documented shortfall batches for

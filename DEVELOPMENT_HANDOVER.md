@@ -261,3 +261,37 @@ Automatic write-back needs a hook in 11 modules × create/update/delete, a lock-
 
 ### Tests
 `scripts/audit/test-excel-sync.js` — 63 checks: registry (no module may name Party_Ledger), dry run writes nothing, each module writes only its sheet, `Party_Ledger` and `Profit_Loss` parts byte-identical, column mapping against the real headers, AD-date derivation, milk→`Purchase_Entry`, rent→`Collection!Type=Rent`, bank in exactly one sheet, re-sync updates without duplicating, deletion reported as orphan, open-in-Excel refusal, and a successful retry after release.
+---
+
+## v1.4.54 — one source per transaction (import routing) (2026-11-05)
+
+### The rule
+A transaction is imported from **exactly one worksheet** — the one that owns it. `Party_Ledger` is a consolidated, formula-driven copy and is **never** imported.
+
+### What was wrong
+`runExcelImport` read `Party_Ledger` in fresh mode and set `genLedger = false`, so a fresh import took its party ledger from the workbook's copy instead of from the modules. Every ledger row then carried an Excel reference (`OPN-1001`, `BILL-5001`, `S 5963`) that resolved to no `sales` / `purchases` row — the origin of the "2,815 of 2,838 sale rows are orphans" finding.
+
+### What changed in `shared/excel-import.js`
+1. `const genLedger = true` in both modes — sales, purchases and collections post their own ledger rows.
+2. The `Party_Ledger` block is replaced by an explicit skip:
+   `results.ledger = { skipped:true, sheet:'Party_Ledger', reason:'…' }`, logged as skipped.
+3. `postAdvanceLedger` is `true` in fresh mode too (it used to rely on the ledger sheet), still de-duplicated by `date|party|debit`.
+4. The file header no longer lists `Party_Ledger` as a source.
+
+### What was deliberately not changed
+- `Expenses` still imports into `petty_cash` (BUG-020): moving it to `other_expenses` shifts operating-expense figures, which needs the owner's decision.
+- `Payment` and `Advance` still also write a `petty_cash` row (D2 / BUG-021).
+- No database was reset and no live data was touched; every test ran on a copy of the workbook in `/tmp`.
+
+### Test
+`scripts/audit/test-excel-import-routing.js` — 48 checks, full fresh import of the real workbook copy, then a second upsert import:
+- `Party_Ledger` skipped, 0 rows read
+- every sale ledger row resolves to a `Sales_Entry` invoice; every purchase row to a `Purchase_Entry` bill
+- totals match `Sales_Entry!J` and `Purchase_Entry!P`
+- opening `OPN-…` documents arrive from `Sales_Entry`, one ledger row each
+- 11 reporting/log/template sheets contribute nothing
+- bank: no ledger link, no bank-typed ledger row
+- re-import adds 0 rows in 8 tables
+
+### For the next maintainer
+If you are tempted to "just import the ledger as well", the test that will fail is `every sale ledger row points at a real Sales_Entry invoice`. That check exists to stop exactly that.
