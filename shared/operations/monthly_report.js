@@ -44,7 +44,7 @@ const BOOKS_END = '2090-12-30';         // last supported BS day
 // ══════════════════════════════════════════════════════════════
 
 const EXPENSE_HEADS = [
-    'Factory Rent',
+    'Rent',
     'Salaries and Wages',
     'Electricity',
     'Water',
@@ -69,7 +69,8 @@ const EXPENSE_RULES = [
     [/INTEREST|FINANCE|BYAJ/, 'Interest and Finance Charges'],
     [/ELECTRIC|BIJULI|LIGHT\s*BILL|NEA/, 'Electricity'],
     [/WATER/, 'Water'],
-    [/RENT|BHAADA|BHADA|LAND\s*RENT/, 'Factory Rent'],
+    [/RENT RECEIVED|RENT INCOME/, 'Other Income'],
+    [/RENT|BHAADA|BHADA|LAND\s*RENT/, 'Rent'],
     [/SALAR|SALAY|WAGES|STAFF\s*WELFARE|NASTA|BONUS|LABOUR|LABOR|EMPLOYEE/, 'Salaries and Wages'],
     [/DISEL|DIESEL|PETROL|FUEL|FIRE\s*WOOD|WOOD|COAL|KHARANI|BOILER|GAS|KEROSENE/, 'Boiler Fuel / Firewood'],
     [/PLASTIC|PACK|POUCH|LD\b|PAPER|CARTON|TAPE|LABEL/, 'Packaging'],
@@ -314,7 +315,10 @@ function getExpenseHeads(db, from, to) {
 
     // 7. Prepaid expenses used up in this period (rent of the months consumed).
     const prep = prepaid.getPrepaidSummary(db, { from_date: from, to_date: to });
-    if (prep.rent_expense) addHead(map, 'Factory Rent', prep.rent_expense, prep.records.filter(r => r.period_expense).length);
+    // Advance rent used up this period joins the same 'Rent' head as the rent
+    // vouchers above, so the month's rent is one figure and the total counts it
+    // once. The payment is an asset (head 'Advance'), never a second expense.
+    if (prep.rent_expense) addHead(map, 'Rent', prep.rent_expense, prep.records.filter(r => r.period_expense).length);
     if (prep.other_prepaid_expense) addHead(map, 'Other Operating Expenses', prep.other_prepaid_expense, 1);
     sources.prepaid_recognised = round2(prep.total_expense);
 

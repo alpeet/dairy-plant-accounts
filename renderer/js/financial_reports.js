@@ -104,6 +104,7 @@ async function showProfitLoss(preloadedData = null) {
                         <tr><td>🥛 ${rl('Milk Purchase — Milk Collection', 'दूध खरिद — दूध सङ्कलन')} (${data.milk_collection_count || 0})</td><td class="text-right">${formatCurrency(data.expenses.milk_collection.total)}</td></tr>
                         <tr><td>📦 ${rl('Purchases (non-milk)', 'खरिद (दूध बाहेक)')}${data.milk_cost_basis && data.milk_cost_basis.linked_milk_in_purchases ? `<br><span style="font-size:11px;color:var(--text-light)">${formatCurrency(data.milk_cost_basis.linked_milk_in_purchases)} ${rl('of milk already on the bills above is excluded — counted once', 'माथिको बिलमा पहिले नै रहेको दूध बाहेक — एकपटक मात्र गणना')}</span>` : ''}</td><td class="text-right">${formatCurrency(data.expenses.purchases.total)}</td></tr>
                         <tr style="background:var(--bg);font-weight:600"><td>${rlt('cogs')}</td><td class="text-right">${formatCurrency(data.cogs || 0)}</td></tr>
+                        <tr><td>🏠 ${rl('Rent', 'भाडा')}</td><td class="text-right">${formatCurrency(data.expenses.rent ? data.expenses.rent.total : 0)}</td></tr>
                         <tr><td>👷 ${rlt('salary')}</td><td class="text-right">${formatCurrency(data.expenses.salary.total)}</td></tr>
                         <tr><td>📋 ${rl('Other Expenses', 'अन्य खर्च')}</td><td class="text-right">${formatCurrency(data.expenses.other_expenses.total)}</td></tr>
                         <tr><td>💰 ${rlt('petty_cash')}</td><td class="text-right">${formatCurrency(data.expenses.petty_cash.total)}</td></tr>

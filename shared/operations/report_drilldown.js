@@ -588,7 +588,7 @@ function expenseRows(db, from, to) {
             date: to, voucher: `PP-${rec.id}`, party: rec.party_name || rec.name,
             description: `${rec.name || 'Prepaid item'} — the part of this prepayment used up in the period `
                 + `(${rec.start_month_label} onwards); recognised month by month, not on the payment date`,
-            amount: rec.period_expense, direction: 'out', category: 'Factory Rent',
+            amount: rec.period_expense, direction: 'out', category: 'Rent',
             status: 'prepaid recognition', table: 'prepaid_expenses', id: rec.id
         }));
     }

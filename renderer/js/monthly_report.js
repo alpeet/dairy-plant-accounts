@@ -385,7 +385,7 @@ const MR_HEAD_NP = {
     'Cleaning Supplies': 'सफाई सामग्री',
     'Office Expenses': 'कार्यालय खर्च',
     'Other Operating Expenses': 'अन्य सञ्चालन खर्च',
-    'Factory Rent': 'कारखाना भाडा',
+    'Rent': 'भाडा',
     'other expenses': 'अन्य खर्च',
     'petty cash': 'सानो नगद',
     'salary': 'तलब',

@@ -888,6 +888,43 @@ function getExpenseSummary(db, opts = {}) {
         WHERE date >= ? AND date <= ? AND transaction_type IN ('actual_expense', 'advance_adjustment')
     `).get(...p);
 
+    // ── Rent, as a subset of the buckets above ──
+    // These amounts are ALREADY inside other_expenses / petty_cash / typed
+    // payment expenses; this block only says how much of them is rent, so the
+    // P&L can show Rent as its own line without changing any total. An
+    // 'Advance' row is a prepaid asset, never rent expense (that is recognised
+    // month by month from prepaid_expenses), so it is excluded here too.
+    const otherText = "COALESCE(expense_head, '') || ' ' || COALESCE(description, '')";
+    const pettyText = "COALESCE(expense_head, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(paid_to, '')";
+    const rentOther = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM other_expenses
+          WHERE ${RANGE} AND category != 'Income' AND ${rentExpenseSql(otherText)}`
+    ).get(...p);
+    const rentPetty = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM petty_cash
+          WHERE ${RANGE} AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
+            AND NOT ${PETTY_DUPLICATE_SQL} AND ${rentExpenseSql(pettyText)}`
+    ).get(...p);
+    const rentTyped = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM payments
+          WHERE date >= ? AND date <= ?
+            AND transaction_type IN ('actual_expense', 'advance_adjustment')
+            AND ${rentExpenseSql("COALESCE(notes, '')")}`
+    ).get(...p);
+
+    // Advance rent used up in the period (prepaid_expenses, month by month).
+    // Kept OUT of `total_operating_expenses` deliberately: this summary is the
+    // register figure every other report reconciles to, and the prepaid
+    // recognition is reported by itself so the P&L can add it exactly once.
+    let prepaidRent = 0;
+    try {
+        const prepaid = require('./prepaid_rent');
+        const prep = prepaid.getPrepaidSummary(db, { from_date: from, to_date: to });
+        prepaidRent = round2(prep.rent_expense || 0);
+    } catch (e) { /* prepaid module absent → no advance rent */ }
+
+    const rentTotal = round2(rentOther.total + rentPetty.total + rentTyped.total);
+
     // Bank Transactions is a standalone register: a statement row is never a
     // second expense. An expense paid from the bank belongs in Petty Cash /
     // Other Expenses / a typed expense payment, which are the sources above.
@@ -901,6 +938,15 @@ function getExpenseSummary(db, opts = {}) {
     return {
         other_expenses: round2(otherExpenses.total - otherIncome.total),
         other_income: round2(otherIncome.total),
+        // Rent contained in the buckets above (never added on top of them).
+        rent: rentTotal,
+        rent_count: rentOther.count + rentPetty.count + rentTyped.count,
+        rent_sources: {
+            other_expenses: round2(rentOther.total),
+            petty_cash: round2(rentPetty.total),
+            typed_payments: round2(rentTyped.total)
+        },
+        prepaid_rent_expense: prepaidRent,
         petty_cash: round2(petty.total),
         petty_advances: round2(pettyAdvances.total),
         petty_settlements: round2(pettySettlements.total),
@@ -971,6 +1017,30 @@ const PETTY_SALARY_DUP_SQL = `EXISTS (
 
 /** Every register row whose money is already carried by another module. */
 const PETTY_DUPLICATE_SQL = `(${PETTY_SETTLEMENT_SQL} OR ${PETTY_SALARY_DUP_SQL})`;
+
+// ──────────────────────────────────────────────────────────────
+// Rent — one category, counted once
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Is this voucher text rent PAID? Rent RECEIVED is income, never an expense,
+ * so 'RENT RECEIVED' / 'RENT INCOME' are rejected. One rule for the P&L, the
+ * monthly report and the drill-downs, so they cannot disagree about what rent is.
+ */
+function isRentExpenseText(text) {
+    const t = String(text || '').toUpperCase();
+    if (!t) return false;
+    if (/RENT\s*(RECEIVED|INCOME)/.test(t)) return false;
+    return /\bRENT\b|BHAADA|BHADA/.test(t);
+}
+
+/** SQL twin of isRentExpenseText() for any column expression. */
+function rentExpenseSql(expr) {
+    const e = `UPPER(${expr})`;
+    return `((${e} LIKE '%RENT%' OR ${e} LIKE '%BHAADA%' OR ${e} LIKE '%BHADA%')
+             AND ${e} NOT LIKE '%RENT RECEIVED%'
+             AND ${e} NOT LIKE '%RENT INCOME%')`;
+}
 
 // ──────────────────────────────────────────────────────────────
 // Cross-module reconciliation
@@ -1576,6 +1646,7 @@ module.exports = {
     round2, moneyEq, moneyGte, CURRENCY_TOLERANCE, paymentStatus,
     // expense classification (shared by the P&L and the Monthly Report)
     PETTY_SETTLEMENT_SQL, PETTY_SALARY_DUP_SQL, PETTY_DUPLICATE_SQL,
+    isRentExpenseText, rentExpenseSql,
     // accounts
     ACCOUNT, TRANSACTION_TYPES, TRANSACTION_TYPE_VALUES, classifyTransaction, getPaymentPostingRule,
     getLoanAdvanceBalances,

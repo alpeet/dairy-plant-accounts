@@ -338,3 +338,80 @@ screen still lists them (as "Petty Cash" rows) via the read-only UNION in
 Do not "mirror" an imported expense into both tables to make it visible in both
 screens. It is visible in both screens already (the UNION), and mirroring doubles
 the expense and the cash outflow.
+---
+
+## v1.4.56 — Rent in the Profit & Loss (2026-11-13)
+
+### What was wrong, in two parts
+
+1. **The rent voucher was never imported.** The workbook's `Expenses` sheet types
+   the Ashwin rent row as `RENT` (Rs 165,000). `importPettyCashSheet` accepted only
+   `Payment` / `OFFICE EXPENSES` / `PETTY CASH`, so the row was silently dropped and
+   *no* report ever saw it. The same sheet's `SALARY` (12 rows) and `INVESTMENT`
+   (7 rows) rows stay out on purpose: payroll comes from `salary_records` and
+   investment from partner capital, so importing them here would double count.
+2. **Rent had no P&L line.** Even when rent did exist it was folded into
+   "Other Expenses" / "Petty Cash", so the month's rent was invisible.
+
+### The rule now
+
+Rent is one category, and a rupee is in it **once**:
+
+| Where the rent sits | How it reaches Rent |
+|---|---|
+| `other_expenses` (Expenses register), category ≠ Income | carved out |
+| `petty_cash`, head ≠ Advance | carved out |
+| typed `payments` (`actual_expense` / `advance_adjustment`) | carved out |
+| `prepaid_expenses` (advance rent), the months used | added once |
+
+"Carved out" means the amount is taken **out** of its host bucket and shown under
+Rent, so Total Operating Expenses does not move. The `.rent.sources` field reports
+each part, including `prepaid_recognised`, so the figure is auditable.
+
+### What is deliberately NOT rent
+
+- **Rent received** (`category = 'Income'`, "Rent received — …"): revenue, never
+  expense. The classifier rejects `RENT RECEIVED` / `RENT INCOME`.
+- **The Rs 910,000 six-month advance** (petty head `Advance`): an asset until the
+  month it is used. Only the recognised months reach the P&L, which is exactly what
+  the monthly report already charges — so the advance can never be expensed in full
+  on the payment date, and the payment is never rent expense as well.
+
+### Where it shows
+
+- **P&L screen → Expense Breakdown**: a `🏠 Rent` line above Salary. Rent is also in
+  Total Operating Expenses and therefore in Net Profit / Loss.
+- **Monthly table of the P&L** (`getProfitLossByMonth`): `rent` per month, so a
+  range can be read month by month.
+- **Monthly Report**: the head `Factory Rent` is renamed **`Rent`** (Nepali `भाडा`)
+  and advance rent joins the same head, so the report and the P&L show one figure.
+
+### Verification
+
+`scripts/audit/test-profit-loss-rent.js` — **39 checks**. Controlled book: one
+Rs 12,000 register rent + Rs 3,000 petty rent + Rs 20,000 of a three-month advance
+= **Rs 35,000** rent; Other Expenses holds only the non-rent voucher; adding one
+Rs 5,000 rent voucher lowers net profit by exactly 5,000 and leaves every other
+category untouched; May (prepaid only) shows 20,000; the April–May range shows
+60,000; the monthly report shows the same rent under `Rent`.
+
+Real workbook copy: the `RENT` voucher imports (**1 row, 165,000**), the P&L shows
+**165,000 under Rent** for Ashwin 2083, the monthly report agrees to the rupee, and
+rent appears once in the totals.
+
+Full suite: **40/40 files**.
+
+### Effect on existing books
+
+- Rent that was already inside Other Expenses / Petty Cash **moves line, not total**.
+- Rent that was previously dropped (the 165,000) is now an expense, so a fresh
+  re-import of the workbook raises operating expenses and lowers net profit by that
+  amount. That is the correction, not a regression.
+- **Nothing is migrated automatically.** Existing databases keep their rows as they
+  are; the new category reads them. No transaction is created and no row is changed.
+
+### Trap for the next maintainer
+
+Do not add `prepaid_rent_expense` to `getExpenseSummary().total_operating_expenses`.
+That total is the register figure every other report reconciles to (company ledger,
+expense analysis). The P&L adds the prepaid recognition itself, once.

@@ -233,3 +233,11 @@ Full detail: `EXCEL_DATA_MODEL_AUDIT.md`, `DATABASE_REPAIR_PLAN.md`.
 | ID | Bug | Root cause | Status |
 |---|---|---|---|
 | BUG-032 | The workbook's `Expenses` sheet imported into `petty_cash`, so the Expenses sidebar module (`other_expenses`) stayed empty and office expenses were indistinguishable from the cash box | `importRegisterSheets` fed Payment / Expenses / Advance through `importPettyCashSheet`, which only knew the petty-cash table. v1.4.54 documented this from the new routing test and left it open because changing it moves P&L figures | **Fixed, tested** — `sheetName === 'Expenses'` now writes `other_expenses` (`category='Operating'`, head = the sheet's description) and never `petty_cash`; a voucher present in both sheets collapses to one row, so cash-on-hand and the P&L count it once. `test-expenses-routing.js` (23 checks) proves one ₹900 expense raises operating expenses by exactly 900, and a ₹150 petty voucher by exactly 150 |
+---
+
+## v1.4.56 — Rent is its own P&L category
+
+| ID | Bug | Root cause | Status |
+|---|---|---|---|
+| BUG-033 | The workbook's rent voucher never reached any report | The `Expenses` sheet types it `RENT`, but `importPettyCashSheet` accepted only `Payment` / `OFFICE EXPENSES` / `PETTY CASH`, so the row was silently skipped (Rs 165,000, Ashwin 2083). `SALARY` and `INVESTMENT` rows on the same sheet are owned by payroll and partner capital and must stay out | **Fixed, tested** — `RENT` is imported into `other_expenses`; the other two types stay excluded with the reason in code |
+| BUG-034 | Rent had no line in the Profit & Loss Expense Breakdown; it was buried in Other Expenses / Petty Cash | `getProfitLoss` only had generic buckets and never classified rent | **Fixed, tested** — `expenses.rent` with `.sources`, carved out of the host buckets so totals do not move; advance rent recognised month by month once; `Factory Rent` head renamed `Rent` |

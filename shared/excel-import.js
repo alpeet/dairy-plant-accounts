@@ -1985,7 +1985,13 @@ function importPettyCashSheet(db, data, { log, mode, sheetName }) {
         // against legacy head='Payment' rows after Migration 30 (D8).
         // "PETTY CASH" is the same office-expense voucher typed by hand in the
         // PETTY CASH sheet (55 rows, all silently dropped before).
-        if ((type === 'Payment' || type === 'OFFICE EXPENSES' || type === 'PETTY CASH') && paid > 0) {
+        // 'RENT' is an operating expense with no other home: the workbook types
+        // the Ashwin rent voucher (Rs 165,000) that way, and before this it was
+        // silently dropped, so the P&L had no rent line at all. 'SALARY' and
+        // 'INVESTMENT' rows on the same sheet stay out on purpose — payroll is
+        // imported from salary_records and investment from partner capital, so
+        // taking them here would count the same money twice.
+        if ((type === 'Payment' || type === 'OFFICE EXPENSES' || type === 'PETTY CASH' || type === 'RENT') && paid > 0) {
             const head = desc || 'Payment';
             const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|${head.toLowerCase()}|${desc.toLowerCase()}`;
             if (existingPC.has(key)) { report.skipped_dup++; continue; }

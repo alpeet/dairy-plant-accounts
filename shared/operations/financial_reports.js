@@ -88,14 +88,31 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
     // skipping any bank row the register already carries (linked by reference,
     // or by date + amount when there is no reference).
     const opEx = accounting.getExpenseSummary(db, { from_date: from, to_date: to });
-    const totalOtherExpenses = { total: opEx.other_expenses, count: 0 };
-    const totalPettyCash = { total: opEx.petty_cash, count: 0 };
+
+    // ── Rent: its own category, carved out of the buckets that contain it ──
+    // A rent voucher already sits inside other_expenses / petty_cash / typed
+    // expense payments. Its amount is taken OUT of that bucket here and shown
+    // once under Rent, so a rupee is never in two categories and the total does
+    // not move. Advance (prepaid) rent is an asset until the month it is used:
+    // only the recognised months are expense, added once — the same amount the
+    // monthly report charges. The payment row itself is head 'Advance' and is
+    // never counted as rent.
+    const rentSources = opEx.rent_sources || { other_expenses: 0, petty_cash: 0, typed_payments: 0 };
+    const prepaidRent = round2(opEx.prepaid_rent_expense || 0);
+    const totalRent = round2(rentSources.other_expenses + rentSources.petty_cash
+        + rentSources.typed_payments + prepaidRent);
+
+    const totalOtherExpenses = { total: round2(opEx.other_expenses - rentSources.other_expenses), count: 0 };
+    const totalPettyCash = { total: round2(opEx.petty_cash - rentSources.petty_cash), count: 0 };
     const totalSalary = { total: opEx.salary, count: 0 };
     const totalVehicle = { total: opEx.vehicle_expenses, count: 0 };
     const totalBankExpenses = { total: 0, count: 0 };
     // Typed payments that ARE genuine expenses (actual_expense +
     // advance_adjustment). Advances/loans/repayments never appear here.
-    const totalTypedExpenses = { total: opEx.typed_payment_expenses || 0, count: opEx.typed_payment_expense_count || 0 };
+    const totalTypedExpenses = {
+        total: round2((opEx.typed_payment_expenses || 0) - rentSources.typed_payments),
+        count: opEx.typed_payment_expense_count || 0
+    };
 
     // Cash payments made (to suppliers/farmers) — reference only (cash flow),
     // NOT P&L expense: purchases are already expensed at invoice value.
@@ -141,6 +158,18 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         // below, so this amount is recognised exactly once.
         milk_collection: { total: totalMilkCost.total, count: totalMilkCost.count },
         purchases: { total: totalPurchases.total, count: totalPurchases.count },
+        // Rent first: it is the largest recurring fixed cost, and a separate
+        // line makes the monthly rent easy to read at a glance.
+        rent: {
+            total: totalRent,
+            count: opEx.rent_count || 0,
+            sources: {
+                other_expenses: round2(rentSources.other_expenses),
+                petty_cash: round2(rentSources.petty_cash),
+                typed_payments: round2(rentSources.typed_payments),
+                prepaid_recognised: prepaidRent
+            }
+        },
         other_expenses: { total: totalOtherExpenses.total, count: totalOtherExpenses.count },
         petty_cash: { total: totalPettyCash.total, count: totalPettyCash.count },
         salary: { total: totalSalary.total, count: totalSalary.count },
@@ -149,6 +178,7 @@ function getProfitLoss(db, { from_date, to_date } = {}) {
         cash_payments: { total: totalCashPayments.total, count: totalCashPayments.count },
         typed_payment_expenses: totalTypedExpenses,
         total_expenses: round2(totalMilkCost.total + totalPurchases.total +
+                       totalRent +
                        totalOtherExpenses.total +
                        totalPettyCash.total + totalSalary.total + totalVehicle.total +
                        totalBankExpenses.total + totalTypedExpenses.total
@@ -272,6 +302,22 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
         FROM other_expenses WHERE date >= ? AND date <= ? AND category != 'Income' GROUP BY ym
     `).all(from, to);
+    // Rent per month — the same carve-out getProfitLoss() applies, so the
+    // monthly table and the period P&L always show the same rent.
+    const rentOther = db.prepare(`
+        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM other_expenses WHERE date >= ? AND date <= ? AND category != 'Income'
+          AND ${accounting.rentExpenseSql("COALESCE(expense_head, '') || ' ' || COALESCE(description, '')")}
+        GROUP BY ym
+    `).all(from, to);
+    const rentPetty = db.prepare(`
+        SELECT substr(date, 1, 7) as ym, COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+        FROM petty_cash WHERE date >= ? AND date <= ?
+          AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
+          AND ${accounting.rentExpenseSql("COALESCE(expense_head, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(paid_to, '')")}
+        GROUP BY ym
+    `).all(from, to);
+
     // Office expenses paid straight from the bank that never reached the
     // Expenses register — added once, never on top of a register row.
     const registeredRefs = new Set(
@@ -290,7 +336,8 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         if (!byMonth[ym]) byMonth[ym] = {
             sales: 0, sales_count: 0, other_income: 0, receipts: 0, receipts_count: 0,
             milk: 0, purchases_gross: 0, linked_milk: 0, unlinked_milk_lines: 0, purchases: 0,
-            other_expense: 0, petty: 0, salary: 0, vehicle: 0, bank_expense: 0
+            other_expense: 0, petty: 0, salary: 0, vehicle: 0, bank_expense: 0,
+            rent_other: 0, rent_petty: 0, rent_prepaid: 0, rent: 0
         };
         return byMonth[ym];
     };
@@ -315,6 +362,8 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
     absorb(linkedMilk, 'linked_milk');
     absorb(otherExpense, 'other_expense');
     absorb(petty, 'petty');
+    absorb(rentOther, 'rent_other');
+    absorb(rentPetty, 'rent_petty');
     absorb(salary, 'salary');
     absorb(vehicle, 'vehicle');
     for (const row of unlinkedMilkLines) {
@@ -328,6 +377,28 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         ensure(ym).bank_expense = r2(ensure(ym).bank_expense + (Number(row.debit) || 0));
     }
 
+    // Advance rent used up in each month — the figure the monthly report charges.
+    // Walked month by month (not from the months that already have rows) because
+    // a month can contain ONLY prepaid rent, with no register voucher at all.
+    try {
+        const prepaid = require('./prepaid_rent');
+        if (prepaid.listRecords(db).some(r => String(r.category || '').toLowerCase() === 'rent')) {
+            const { bsMonthRange, shiftBSMonth } = require('../bs-calendar');
+            const lastYm = String(to).slice(0, 7);
+            let ym = String(from).slice(0, 7);
+            for (let guard = 0; ym <= lastYm && guard < 240; guard++) {
+                const range = bsMonthRange(ym);
+                if (range) {
+                    const used = prepaid.getPrepaidSummary(db, {
+                        from_date: range.from_date, to_date: range.to_date
+                    }).rent_expense || 0;
+                    if (used) ensure(ym).rent_prepaid = r2(used);
+                }
+                ym = shiftBSMonth(ym, 1);
+            }
+        }
+    } catch (e) { /* prepaid module absent */ }
+
     const BS_MONTHS = ['Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin',
         'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'];
 
@@ -337,7 +408,13 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         settleMonth(m);
         const income = m.sales + m.other_income;
         const cogs = round2(m.milk + m.purchases);
-        const opex = round2(m.other_expense + m.petty + m.salary + m.vehicle + m.bank_expense);
+        // Rent is taken out of the buckets that contain it and added back once
+        // as its own category, so the month's total is unchanged and rent is
+        // visible on its own line.
+        const monthRent = round2(m.rent_other + m.rent_petty + m.rent_prepaid);
+        const opex = round2((m.other_expense - m.rent_other) + (m.petty - m.rent_petty)
+            + m.salary + m.vehicle + m.bank_expense + monthRent);
+        m.rent = monthRent;
         const totalExpenses = round2(cogs + opex);
         const ymNum = parseInt(ym.slice(5, 7), 10);
         return {
@@ -352,6 +429,7 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
             bank_expenses: round2(m.bank_expense),
             cogs: round2(cogs),
             gross_profit: round2(income - cogs),
+            rent: round2(monthRent),
             operating_expenses: round2(opex),
             total_expenses: round2(totalExpenses),
             net_profit: round2(income - totalExpenses),
@@ -368,6 +446,7 @@ function getProfitLossByMonth(db, { from_date, to_date } = {}) {
         total_income: sum('total_income'),
         cogs: sum('cogs'),
         gross_profit: sum('gross_profit'),
+        rent: sum('rent'),
         operating_expenses: sum('operating_expenses'),
         total_expenses: sum('total_expenses'),
         net_profit: sum('net_profit'),
