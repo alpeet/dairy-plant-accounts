@@ -6,6 +6,7 @@ const ops = require('./shared/operations');
 const auth = require('./shared/auth');
 const dataCSV = require('./shared/data-csv');
 const excelImport = require('./shared/excel-import');
+const excelSync = require('./shared/excel-sync');
 const { initDatabase, safeRun } = require('./shared/db');
 
 let mainWindow;
@@ -1649,6 +1650,30 @@ authHandle('excel:import-file', async (event, { filePath, mode } = {}) => {
         return { success: true, data: { mode: importMode, results, backup } };
     } catch (err) {
         console.error('  ❌ Excel import failed:', err.message);
+        return { success: false, error: err.message };
+    }
+});
+
+/**
+ * Write the app's records back into the operator's workbook — each module into
+ * its OWN worksheet, never into Party_Ledger.
+ * opts: { module?: string, apply?: boolean }
+ */
+authHandle('excel:sync', async (event, opts = {}) => {
+    const optsSafe = opts || {};
+    const moduleId = optsSafe.module && optsSafe.module !== 'all' ? optsSafe.module : null;
+    const syncOpts = { apply: optsSafe.apply === true, backup: true };
+    try {
+        const result = moduleId
+            ? excelSync.syncModule(db, moduleId, syncOpts)
+            : excelSync.syncAll(db, syncOpts);
+        return {
+            success: result.success !== false,
+            data: result,
+            error: result.error || (result.failed && result.failed.length ? `Failed: ${result.failed.join(', ')}` : undefined)
+        };
+    } catch (err) {
+        console.error('  ❌ Excel sync failed:', err.message);
         return { success: false, error: err.message };
     }
 });

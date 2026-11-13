@@ -35,6 +35,7 @@ const { logAudit } = require('./shared/operations/audit');
 
 // ── Shared BS-aware Excel import engine ──
 const excelImport = require('./shared/excel-import');
+const excelSync = require('./shared/excel-sync');
 
 // ── Shared authentication module (hashing + user management) ──
 const auth = require('./shared/auth');
@@ -2148,6 +2149,25 @@ app.post('/api/export/daily-account', requireAuth, (req, res) => {
         } else {
             res.json(result);
         }
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/excel/sync — write the app's records back into the operator's
+// workbook, one worksheet per module. Never writes Party_Ledger.
+// Body: { module?: string ('all' or a module id), apply?: boolean }
+app.post('/api/excel/sync', requireRole('admin'), (req, res) => {
+    try {
+        const body = req.body || {};
+        const mod = body.module && body.module !== 'all' ? body.module : null;
+        const opts = { apply: body.apply === true, backup: true };
+        const result = mod ? excelSync.syncModule(db, mod, opts) : excelSync.syncAll(db, opts);
+        res.json({
+            success: result.success !== false,
+            data: result,
+            error: result.error || (result.failed && result.failed.length ? `Failed: ${result.failed.join(', ')}` : undefined)
+        });
     } catch (err) {
         res.json({ success: false, error: err.message });
     }

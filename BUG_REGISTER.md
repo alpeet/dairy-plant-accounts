@@ -214,3 +214,15 @@ Full detail: `EXCEL_DATA_MODEL_AUDIT.md`, `DATABASE_REPAIR_PLAN.md`.
 | BUG-023 | Workbook: one bank value leaks into the ledger's credit column inside the total range | `Party_Ledger!H8937 = 'BANK RECON'!H538`, outside every block, within `SUBTOTAL(9,H3:H8937)` | **Workbook issue** — do not import that row as a party entry |
 | BUG-024 | Workbook: Mix Milk stock is −43,404.799 L and drives the P&L stock line | `Stock_Master!F3 = C + D − E` with purchases recorded under other product names | **Open (data entry)** — matches the app's negative closing stock; the app reports it rather than hiding it |
 | BUG-025 | Workbook: `Party_Ledger` carries 20 dead `1899-12-30` rows and a `K` column referencing `$C$52` | Over-copied `Advance` formulas | **Workbook issue** — the importer must skip zero/epoch rows (it does: blank date → skipped) |
+---
+
+## Audit 2026-11-05 (v1.4.53) — per-module Excel write-back
+
+| ID | Bug | Root cause | Status |
+|---|---|---|---|
+| BUG-026 | The app had **no per-module Excel write-back**: records entered in the app never reached their worksheet | The only writers were a whole-new-workbook export (`export-daily-account.js`) and a Monthly Report sheet insert (`xlsx-parts.js`). The real workbook was import-only | **Fixed** — `shared/excel-sync.js`, 10 modules, 63 checks |
+| BUG-027 | The full export builds a `Party_Ledger` sheet from `ledger_entries`, propagating the parallel ledger | `export-daily-account.js:353` copies stored ledger rows into a new workbook | **Open** — export path; switch it to `party_ledger.js` when the ledger migration is approved |
+| BUG-028 | The workbook's `Party_Ledger` formula blocks are fixed-height and would omit most new rows even with correct write-back | Blocks sized to the row counts at build time: Sales to 4,404, Purchase to 2,062, Collection to 2,011, Payment to 102, Expenses to 131, Petty to 103, Advance to 82 | **Open — reported** with measured numbers (`SIDEBAR_EXCEL_DATA_FLOW_MAPPING.md` §4.6). Extend the blocks or use the derived statement |
+| BUG-029 | `bank_transactions.accounting_class` (and `txn_uid`) exist on a migrated book but **not** on a freshly initialised database | The columns were added by an ad-hoc migration, not by the base schema | **Open** — found by `test-excel-sync.js`; the sync reads the column defensively (`|| ''`) so it does not crash |
+| BUG-030 | A workbook open in Excel could be overwritten by a sync, and Excel would then overwrite the sync on its next save | No `~$` lock check existed | **Fixed, tested** — sync refuses and writes nothing |
+| BUG-031 | The register sheets do not share one layout: `Collection` has `Type` in F and `Collected` in H, while `Payment`/`Expenses`/`Advance`/`PETTY CASH` have `Description` in F, `Type` in G, `Collected` in I and `Paid` in J; `BANK RECON` and `Salary` put their header on row 3, and `Salary` has a totals banner above it | The workbook reuses a 13-column template with two variants; `Salary` was rebuilt with a banner | **Fixed** — field maps declared per sheet and columns resolved by header text, with measured layouts recorded in `EXCEL_COLUMN_MAPPING.md` |

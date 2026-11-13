@@ -297,6 +297,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Import from Dairy Account Pro Excel (filePath optional — shows a picker when omitted)
     importExcelFromFile: (opts) => ipcRenderer.invoke('excel:import-file', opts),
+    syncExcel: (opts) => ipcRenderer.invoke('excel:sync', opts),
 
     // Fresh Start / Handover Reset (backup-first workflow)
     getCleanupStatus: () => ipcRenderer.invoke('db:cleanup:status'),

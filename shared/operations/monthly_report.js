@@ -812,8 +812,13 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
     };
 
     // 1. Income heads vs the sales register (excluding opening balances).
-    push('Sales invoices vs income heads', activity.sales_revenue, activity.income_heads_total,
-        'Opening-balance documents (OPN-…) are receivables from before the books opened, not revenue.', 1);
+    //    Income heads include genuine other income (rent is its own head since
+    //    v1.4.52), so compare the INVOICE-derived part to sales. Keeping the
+    //    comparison two-sided is what catches a receipt being treated as revenue.
+    push('Sales invoices vs income heads', activity.sales_revenue,
+        round2(activity.income_heads_total - activity.other_income),
+        'Rent/other income is a separate income head and is not sales; opening-balance documents (OPN-…) '
+        + 'are receivables from before the books opened, not revenue.', 1);
 
     // 2. Milk procurement vs the Milk Collection register.
     const collections = db.prepare(

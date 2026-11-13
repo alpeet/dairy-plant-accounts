@@ -220,3 +220,44 @@ reported separately, and only rent/other income is added to income.
 register, single counting of linked milk, running-balance continuity, date-cut
 opening b/f, no writes to `ledger_entries`, payable/receivable classification,
 reconciliation maths, rent → income, and idempotent re-import.
+---
+
+## v1.4.53 — per-module Excel write-back (2026-11-05)
+
+### The rule
+Every module writes back to **its own worksheet**. `Party_Ledger` is never a write target — in the app or in the workbook.
+
+### New module
+`shared/excel-sync.js`
+
+| Export | Use |
+|---|---|
+| `MODULES` | 10 register modules → sheet, field map, ref prefix |
+| `moduleIds()` | syncable modules |
+| `REPORT_ONLY` | sidebar tabs with no register sheet, and why |
+| `planModule(db, id, opts)` | what a sync would do; never writes |
+| `syncModule(db, id, opts)` | dry run by default; `{apply:true}` writes |
+| `syncAll(db, opts)` | every module, collects failures |
+| `readLayout` / `resolveColumns` | header-row detection and header-text column resolution |
+| `patchSheet` | part-level XML surgery on one worksheet |
+
+### Matching
+`App Ref` column appended after the last used column: `SALE-<id>#<line>`, `MILK-<id>`, `PUR-<id>#<line>`, `COL-<id>`, `COL-RENT-<id>`, `PAY-<id>`, `ADV-<id>`, `PC-<id>`, `EXP-<id>`, `BANK-<id>`, `SAL-<id>`. Rows without a ref are the operator's history and are never modified.
+
+### Writing
+`patchSheet` edits only `<sheetData>` of the target worksheet: it replaces the `<c>` cells for mapped columns and leaves every other cell (including formulas) and every other workbook part byte-identical. New cells inherit the style of the cell above, so number formats survive. `.bak-excel-sync-*` before every apply; temp file + atomic rename.
+
+### Entry points
+- Settings → **📤 Write Back to Excel** (Preview / Write)
+- `node scripts/excel-sync.js [--apply] [module…] [--list] [--json]`
+- Electron IPC `excel:sync`, REST `POST /api/excel/sync` (admin only)
+
+### Why not automatic on save
+Automatic write-back needs a hook in 11 modules × create/update/delete, a lock-aware queue when Excel is open, and a policy for a workbook on a synced drive. Doing it silently would make a save fail whenever Excel has the file open. The database is written first and always; the worksheet is updated by an explicit, idempotent sync.
+
+### Two things a future maintainer must know
+1. **Do not add `Party_Ledger` to `MODULES`.** The workbook builds it with formulas; writing it recreates the parallel ledger that this work removed.
+2. **Block heights.** The workbook's ledger blocks are sized to the old row counts. After a sync, rows beyond those extents do not appear in the workbook's `Party_Ledger`. Either extend the formula blocks or use `party_ledger.js`. Measured shortfalls are in `SIDEBAR_EXCEL_DATA_FLOW_MAPPING.md` §4.6.
+
+### Tests
+`scripts/audit/test-excel-sync.js` — 63 checks: registry (no module may name Party_Ledger), dry run writes nothing, each module writes only its sheet, `Party_Ledger` and `Profit_Loss` parts byte-identical, column mapping against the real headers, AD-date derivation, milk→`Purchase_Entry`, rent→`Collection!Type=Rent`, bank in exactly one sheet, re-sync updates without duplicating, deletion reported as orphan, open-in-Excel refusal, and a successful retry after release.

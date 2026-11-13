@@ -118,7 +118,17 @@ near(R.summary.gross_profit, R.summary.sales_revenue - R.summary.cogs, 0.05, 'gr
 
 // Income heads vs the sales register.
 const headsTotal = R.income_heads.reduce((s, h) => s + h.amount, 0);
-near(headsTotal, R.summary.sales_revenue, 1.0, 'income heads add up to the sales register (excl. opening balances)');
+// Income heads = product sales heads + genuine other income. Rent became a real
+// other-income row in v1.4.52 (other_expenses.category='Income'), so the product
+// heads are compared to the sales register and the rent heads to other income.
+// Together they must equal sales + other income, which still catches a receipt
+// being counted as revenue.
+const productHeads = R.income_heads
+    .filter(h => !/^rent/i.test(h.head))
+    .reduce((s, h) => s + h.amount, 0);
+near(productHeads, R.summary.sales_revenue, 1.0, 'product income heads add up to the sales register (excl. opening balances)');
+near(headsTotal - productHeads, R.summary.other_income, 1.0, 'rent heads equal other income, not sales');
+near(headsTotal, R.summary.sales_revenue + R.summary.other_income, 1.0, 'all income heads = sales + other income');
 ok(R.income_heads.length >= 4, `income heads are broken out (${R.income_heads.map(h => h.head).join(', ')})`);
 ok(R.income_heads.some(h => h.head === 'Milk Sales'), 'Milk Sales is its own income head');
 ok(R.income_heads.some(h => /Paneer/.test(h.head)), 'Paneer Sales is its own income head');

@@ -253,6 +253,27 @@ async function renderSettings() {
 
         <div class="card" style="max-width:700px;margin-top:20px">
             <div class="card-header">
+                <h2>📤 Write Back to Excel (one worksheet per module)</h2>
+            </div>
+            <div style="padding:16px">
+                <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">
+                    Writes this app's records into the workbook that owns each one — Sales to
+                    <strong>Sales_Entry</strong>, Milk and Purchases to <strong>Purchase_Entry</strong>, receipts to
+                    <strong>Collection</strong>, supplier payments to <strong>Payment</strong>, petty cash to
+                    <strong>PETTY CASH</strong>, expenses to <strong>Expenses</strong>, bank to <strong>BANK RECON</strong>, salary to
+                    <strong>Salary</strong>. <strong>Party_Ledger is never written</strong> (the workbook builds it with formulas).
+                    A <code>.bak-excel-sync-*</code> copy is made before every write; close the workbook in Excel first.
+                </p>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <button class="btn btn-secondary btn-sm" onclick="syncExcelToWorkbook(false)">🔍 Preview (nothing written)</button>
+                    <button class="btn btn-primary btn-sm" onclick="syncExcelToWorkbook(true)">📤 Write to Excel</button>
+                </div>
+                <div id="excelSyncResult" style="margin-top:14px;font-size:12px"></div>
+            </div>
+        </div>
+
+        <div class="card" style="max-width:700px;margin-top:20px">
+            <div class="card-header">
                 <h2>📂 CSV Import / Export</h2>
                 <button class="btn btn-secondary btn-sm" onclick="renderCSVSection()">🔄 Refresh</button>
             </div>
@@ -1758,7 +1779,57 @@ window.toggleTableGroup = toggleTableGroup;
 window.renderDBTables = renderDBTables;
 window.filterDBTables = filterDBTables;
 window.clearDBTables = clearDBTables;
+/**
+ * Write app records back into the workbook, one worksheet per module.
+ * @param {boolean} apply - false = preview only, true = write (backup first)
+ */
+async function syncExcelToWorkbook(apply) {
+    const el = document.getElementById('excelSyncResult');
+    if (el) el.innerHTML = `<p style="color:var(--text-light)">${apply ? '⏳ Writing to Excel…' : '⏳ Checking what would be written…'}</p>`;
+
+    let result;
+    if (window.api && typeof window.api.syncExcel === 'function') {
+        result = await window.api.syncExcel({ apply: !!apply });
+    } else {
+        try {
+            const resp = await fetch('/api/excel/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ apply: !!apply })
+            });
+            result = await resp.json();
+        } catch (err) {
+            result = { success: false, error: err.message };
+        }
+    }
+
+    if (!el) return;
+    if (!result || !result.success) {
+        el.innerHTML = `<p style="color:var(--danger)">Excel sync failed: ${escapeHtml((result && result.error) || 'unknown error')}</p>`;
+        return;
+    }
+
+    const modules = (result.data && result.data.modules) || {};
+    const rows = Object.entries(modules).map(([id, r]) => {
+        if (!r.success) return `<tr><td>${escapeHtml(id)}</td><td colspan="3" style="color:var(--danger)">${escapeHtml(r.error || 'failed')}</td></tr>`;
+        return `<tr><td>${escapeHtml(r.label || id)}</td><td>${escapeHtml(r.sheet || '')}</td>`
+            + `<td class="text-right">${r.matched || 0}</td><td class="text-right">${r.appended || 0}</td></tr>`;
+    }).join('');
+
+    el.innerHTML = `
+        <p style="color:var(--success);margin:0 0 8px">
+            ${apply ? '✅ Written' : '🔍 Preview only — nothing was written'}.
+            Party_Ledger was not touched.
+        </p>
+        <table class="data-table" style="font-size:12px">
+            <thead><tr><th>Module</th><th>Worksheet</th><th class="text-right">Rows updated</th><th class="text-right">Rows appended</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+}
+
 window.importExcelFromFile = importExcelFromFile;
+window.syncExcelToWorkbook = syncExcelToWorkbook;
 
 // ============================================================
 // CSV Import / Export UI
