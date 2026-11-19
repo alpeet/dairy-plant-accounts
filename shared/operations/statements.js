@@ -8,6 +8,8 @@
  */
 
 const { todayBSDate } = require('../excel-import');
+const partyLedger = require('./party_ledger');
+const accountingDates = require('./accounting_dates');
 
 // ── Number formatting helpers for statement display ──
 // Kill floating-point noise (97.64999999999999 → "97.65") and trim needless
@@ -32,6 +34,93 @@ function money2(v) {
     } catch (e) {
         return n.toFixed(2);
     }
+}
+
+/**
+ * Consolidated statement helpers.
+ *
+ * The statement is a REPORT: ledger rows plus any register row that is not
+ * already represented in the ledger (petty cash, expenses). Nothing is copied
+ * into a second table; source_table/source_id stay attached so every line can
+ * be opened at its original record.
+ */
+const LEDGER_SOURCE = {
+    sale: 'Sales',
+    purchase: 'Purchases',
+    milk_collection: 'Milk Collection',
+    payment_received: 'Payment',
+    payment_made: 'Payment',
+    advance: 'Advance',
+    adjustment: 'Adjustment',
+    opening: 'Opening'
+};
+
+/** A ledger row still carries its own transaction/accounting dates. */
+function normaliseLedgerEntry(e) {
+    const description = String(e.description || '');
+    let source = LEDGER_SOURCE[e.reference_type] || e.reference_type || '';
+    let displayType = e.reference_type;
+
+    // Registers that post a tagged adjustment (petty cash, expenses) are
+    // labelled as the module they came from, not as a generic adjustment.
+    if (e.reference_type === 'adjustment' && description.startsWith('PETTY:')) {
+        source = 'Petty Cash';
+        displayType = /\[Advance Receivable\]/.test(description) ? 'advance' : 'payment';
+    } else if (e.reference_type === 'adjustment' && description.startsWith('EXPENSE:')) {
+        source = 'Expenses';
+        displayType = /\(bill\)/.test(description) ? 'expense' : 'expense_payment';
+    } else if (e.reference_type === 'adjustment' && /Advance applied|Advance adjusted/i.test(description)) {
+        source = 'Advance';
+        displayType = 'advance_adjustment';
+    } else if (e.reference_type === 'payment_received') {
+        displayType = 'receipt';
+        if (/\[Advance Receivable\]/.test(description)) { displayType = 'advance_returned'; source = 'Advance'; }
+        else if (/\[Loan .*Receivable\]/.test(description)) { displayType = 'loan_repayment'; source = 'Payment'; }
+        else if (/\[Loan .*Payable\]/.test(description)) { displayType = 'loan_received'; source = 'Payment'; }
+    } else if (e.reference_type === 'payment_made') {
+        displayType = 'payment';
+        if (/\[Advance Receivable\]/.test(description)) { displayType = 'advance'; source = 'Advance'; }
+        else if (/\[Loan .*Receivable\]/.test(description)) { displayType = 'loan_given'; source = 'Payment'; }
+        else if (/\[Loan .*Payable\]/.test(description)) { displayType = 'loan_repayment'; source = 'Payment'; }
+    }
+
+    return {
+        ...e,
+        transaction_date: e.date,
+        accounting_date: e.accounting_date || e.date,
+        source_module: source,
+        statement_type: displayType
+    };
+}
+
+/** True when the ledger already carries this register row (never double it). */
+function ledgerCoversDerived(ledger, d) {
+    return ledger.some(e => {
+        if (d.source_table === 'payments') {
+            return ['payment_made', 'payment_received', 'adjustment', 'advance'].includes(e.reference_type)
+                && Number(e.reference_id) === Number(d.source_id);
+        }
+        if (d.source_table === 'petty_cash') {
+            return e.reference_type === 'adjustment'
+                && String(e.description || '').startsWith('PETTY:')
+                && Number(e.reference_id) === Number(d.source_id);
+        }
+        if (d.source_table === 'other_expenses') {
+            const isBill = d.type === 'expense';
+            return e.reference_type === 'adjustment'
+                && String(e.description || '').startsWith('EXPENSE:')
+                && Number(e.reference_id) === Number(d.source_id)
+                && (isBill === /\(bill\)/.test(String(e.description || '')));
+        }
+        const refType = d.type === 'sale' ? 'sale' : d.type === 'purchase' ? 'purchase'
+            : d.type === 'milk_collection' ? 'milk_collection' : d.type;
+        if (e.reference_type !== refType) return false;
+        if (Number(e.reference_id) === Number(d.source_id)) return true;
+        // Imported rows carry the bill/invoice NUMBER as text.
+        return String(e.reference_id || '').trim() !== ''
+            && String(e.reference_id).trim() === String(d.reference || '').trim()
+            && String(e.date) === String(d.date);
+    });
 }
 
 function titleCaseMilk(t) {
@@ -216,7 +305,7 @@ function attachEntryItemDetails(db, partyId, entries) {
  * @param {object} opts - { party_id, from_date, to_date }
  * @returns {object} { party, opening_balance, entries[], total_debit, total_credit, closing_balance }
  */
-function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
+function getPartyStatement(db, { party_id, from_date, to_date, transaction_type, source, reference } = {}) {
     if (!party_id) throw new Error('Party ID is required');
 
     const party = db.prepare("SELECT * FROM parties WHERE id = ?").get(party_id);
@@ -227,22 +316,14 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
     // excluded every BS-dated row from the filter, so the statement rendered
     // empty. MAX(date) is in the same calendar as the data itself.
     const from = from_date || '2000-01-01';
-    const to = to_date || (db.prepare('SELECT COALESCE(MAX(date), ?) AS d FROM ledger_entries WHERE party_id = ?')
-        .get(todayBSDate(), party_id).d);
+    // Books end, not "today": a future-dated BS document must not vanish from
+    // an unfiltered statement.
+    const to = to_date || '2090-12-30';
 
-    // Get opening balance (balance from before the from_date)
-    // Opening balance is the closing balance from all entries before the from_date
-    const openingEntry = db.prepare(`
-        SELECT COALESCE(SUM(debit), 0) as total_debit, COALESCE(SUM(credit), 0) as total_credit
-        FROM ledger_entries
-        WHERE party_id = ? AND date < ?
-    `).get(party_id, from);
-
-    const openingBalance = (party.opening_balance || 0) + (openingEntry.total_debit || 0) - (openingEntry.total_credit || 0);
-
-    // Get entries for the period (milk rows join milk_collections for the
-    // type/quantity/rate detail; payment rows carry method and remarks)
-    const entries = db.prepare(`
+    // Get every ledger row for the party (no date cut yet: the opening balance
+    // is computed after the module rows are merged in). Milk rows join
+    // milk_collections for type/quantity/rate; payment rows carry mode/remarks.
+    const ledgerEntries = db.prepare(`
         SELECT le.*, 
             CASE 
                 WHEN le.reference_type = 'sale' THEN COALESCE((SELECT invoice_no FROM sales WHERE id = le.reference_id), CASE WHEN typeof(le.reference_id) = 'text' THEN le.reference_id END)
@@ -269,9 +350,73 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
             ON le.reference_type = 'payment_received' AND pay_r.id = le.reference_id
         LEFT JOIN payments pay_m
             ON le.reference_type = 'payment_made' AND pay_m.id = le.reference_id
-        WHERE le.party_id = ? AND le.date >= ? AND le.date <= ?
+        WHERE le.party_id = ?
         ORDER BY le.date ASC, le.id ASC
-    `).all(party_id, from, to);
+    `).all(party_id);
+
+    // ── Consolidated view ──────────────────────────────────────────────
+    // Every register row for this party is included exactly once: ledger rows
+    // plus module rows the ledger does not already carry (petty cash, expenses
+    // recorded before a party link existed). The statement never writes.
+    const derivedRows = partyLedger.collectModuleRows(db)
+        .filter(r => Number(r.party_id) === Number(party_id))
+        // Purchases, sales, payments and milk post their own ledger row at entry
+        // time (imported history is in the ledger too), so adding them again
+        // would double the statement. Petty cash and expenses are the registers
+        // that historically never reached the party account; they are merged
+        // here, once, keyed by their tagged ledger row.
+        .filter(r => r.source_table === 'petty_cash' || r.source_table === 'other_expenses')
+        .filter(r => !ledgerCoversDerived(ledgerEntries, r))
+        .map(r => ({
+            id: null,
+            party_id: r.party_id,
+            date: r.date,
+            transaction_date: r.date,
+            accounting_date: r.accounting_date || r.date,
+            reference_type: r.type,
+            reference_id: r.source_id,
+            reference_no: r.reference || '',
+            description: r.particulars || '',
+            debit: r.debit || 0,
+            credit: r.credit || 0,
+            balance: 0,
+            is_derived: true,
+            source_table: r.source_table,
+            source_id: r.source_id,
+            source_module: r.source_module || partyLedger.SOURCE_MODULE[r.type] || '',
+            statement_type: r.type
+        }));
+
+    const acctOf = (r) => String(r.accounting_date || r.date || '');
+    const allRows = [...ledgerEntries.map(normaliseLedgerEntry), ...derivedRows];
+
+    // Opening balance: stored opening plus every row whose ACCOUNTING date is
+    // before the period. No SQL date cut can miss a derived register row.
+    const openingBalance = round2((party.opening_balance || 0)
+        + allRows.filter(r => from && acctOf(r) < String(from))
+            .reduce((s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0), 0));
+
+    const periodRows = allRows.filter(r => {
+        const d = acctOf(r);
+        if (from && d < String(from)) return false;
+        if (to && d > String(to)) return false;
+        return true;
+    }).filter(r => {
+        // Optional statement filters: transaction type, source module and
+        // reference-number search. They never alter which rows exist.
+        if (transaction_type && String(r.statement_type || r.reference_type) !== String(transaction_type)) return false;
+        if (source && String(r.source_module || '').toLowerCase() !== String(source).toLowerCase()) return false;
+        if (reference && !String(r.reference_no || '').toLowerCase().includes(String(reference).toLowerCase())) return false;
+        return true;
+    }).sort((a, b) => {
+        const d = acctOf(a).localeCompare(acctOf(b));
+        if (d !== 0) return d;
+        const t = String(a.transaction_date || '').localeCompare(String(b.transaction_date || ''));
+        if (t !== 0) return t;
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
+    });
+
+    const entries = periodRows;
 
     // Milk detail for purchase rows: resolve EACH ledger row to its OWN
     // purchase and attach only that purchase's milk collections.
@@ -370,7 +515,7 @@ function getPartyStatement(db, { party_id, from_date, to_date } = {}) {
     // textual (Party_Ledger import): match this party's payments by date +
     // amount + direction. Read-only — it only enriches what is displayed.
     try {
-        const partyPayments = db.prepare('SELECT date, amount, mode, notes, type FROM payments WHERE party_id = ?').all(party_id);
+        const partyPayments = db.prepare('SELECT date, accounting_date, amount, mode, notes, type FROM payments WHERE party_id = ?').all(party_id);
         for (const e of entries) {
             if (e.reference_type !== 'payment_received' && e.reference_type !== 'payment_made') continue;
             if (e.payment_mode || e.payment_mode_made) continue;

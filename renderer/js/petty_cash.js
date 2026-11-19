@@ -130,6 +130,11 @@ function showAddPettyCash(existingData) {
                     <input type="text" class="form-control" id="pcVoucher" value="${escapeHtml(d.voucher_no)}">
                 </div>
             </div>
+            <div class="form-group">
+                <label>Accounting / Effective Date</label>
+                <input type="date" class="form-control" id="pcAccountingDate" value="${d.accounting_date || d.date}">
+                <small style="color:var(--text-light)">Period this voucher belongs to. Defaults to the voucher date.</small>
+            </div>
             <div class="form-row">
                 <div class="form-group">
                     <label>Expense Head *</label>
@@ -180,6 +185,7 @@ async function savePettyCashEntry(id) {
     const data = {
         id: id || undefined,
         date: document.getElementById('pcDate')?.value || '',
+        accounting_date: document.getElementById('pcAccountingDate')?.value || undefined,
         voucher_no: document.getElementById('pcVoucher')?.value || '',
         expense_head: document.getElementById('pcHead')?.value || '',
         description: document.getElementById('pcDesc')?.value || '',

@@ -350,6 +350,9 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         getPayments: (opts) => apiPost('/payments/list', opts || {}),
         deletePayment: (id) => apiPost('/payments/delete', { id }),
         updatePayment: (data) => apiPost('/payments/update', data),
+        allocateAdvance: (data) => apiPost('/advances/allocate', data),
+        getAdvanceAllocations: (params) => apiPost('/advances/allocations', params || {}),
+        getDateReview: () => apiPost('/dates/review', {}),
 
         // Users (auth management)
         listUsers: () => apiPost('/auth/users/list'),

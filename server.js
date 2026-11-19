@@ -1217,6 +1217,19 @@ app.post('/api/payments/update', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.updatePayment(db, req.body)));
 });
 
+// Advance applied against a purchase bill: no cash moves, no second payment.
+app.post('/api/advances/allocate', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.applyAdvanceToPurchase(db, { ...req.body, created_by: req.user?.id || null })));
+});
+
+app.post('/api/advances/allocations', (req, res) => {
+    res.json(safeRun(() => ops.listAdvanceAllocations(db, req.body || {})));
+});
+
+app.post('/api/dates/review', (req, res) => {
+    res.json(safeRun(() => ops.getDateReviewReport(db)));
+});
+
 // ──────────────────────────────────────────────────────────────
 // Settings (admin only — business configuration)
 // ──────────────────────────────────────────────────────────────

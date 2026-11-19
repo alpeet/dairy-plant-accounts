@@ -261,6 +261,9 @@ contextBridge.exposeInMainWorld('api', {
     getPayments: (opts) => ipcRenderer.invoke('db:payments:list', opts),
     deletePayment: (id) => ipcRenderer.invoke('db:payments:delete', id),
     updatePayment: (data) => ipcRenderer.invoke('db:payments:update', data),
+    allocateAdvance: (data) => ipcRenderer.invoke('db:advances:allocate', data),
+    getAdvanceAllocations: (params) => ipcRenderer.invoke('db:advances:allocations', params),
+    getDateReview: () => ipcRenderer.invoke('db:dates:review'),
 
     // Cash Deposits
     getCashDeposits: (opts) => ipcRenderer.invoke('db:cash-deposits:list', opts),

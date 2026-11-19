@@ -177,6 +177,10 @@ CREATE TABLE IF NOT EXISTS sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_no TEXT NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    -- Accounting / effective date: the period the invoice belongs to. Empty
+    -- means "same as date" (see shared/operations/accounting_dates.js).
+    accounting_date TEXT DEFAULT '',
+    accounting_date_source TEXT DEFAULT '',
     party_id INTEGER NOT NULL,
     subtotal REAL DEFAULT 0.0,
     discount REAL DEFAULT 0.0,
@@ -218,6 +222,9 @@ CREATE TABLE IF NOT EXISTS purchases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bill_no TEXT NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    -- Purchase date and the accounting period the purchase is recognised in.
+    accounting_date TEXT DEFAULT '',
+    accounting_date_source TEXT DEFAULT '',
     party_id INTEGER NOT NULL,
     subtotal REAL DEFAULT 0.0,
     discount REAL DEFAULT 0.0,
@@ -259,6 +266,7 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     party_id INTEGER NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    accounting_date TEXT DEFAULT '',
     reference_type TEXT NOT NULL CHECK(reference_type IN ('sale', 'purchase', 'payment_received', 'payment_made', 'opening', 'adjustment', 'milk_collection', 'production', 'partner_contribution', 'partner_withdrawal', 'advance')),
     reference_id INTEGER DEFAULT NULL,
     description TEXT DEFAULT '',
@@ -276,6 +284,8 @@ CREATE TABLE IF NOT EXISTS milk_collections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     collection_no TEXT NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    accounting_date TEXT DEFAULT '',
+    accounting_date_source TEXT DEFAULT '',
     party_id INTEGER NOT NULL,
     route_id INTEGER DEFAULT NULL,
     milk_type TEXT DEFAULT 'cow' CHECK(milk_type IN ('cow', 'buffalo', 'mixed')),
@@ -314,6 +324,9 @@ CREATE TABLE IF NOT EXISTS payments (
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
     type TEXT NOT NULL CHECK(type IN ('receipt', 'payment', 'advance')),
     transaction_type TEXT DEFAULT NULL,
+    -- Actual money-movement date (`date`) and the period it settles/expenses.
+    accounting_date TEXT DEFAULT '',
+    accounting_date_source TEXT DEFAULT '',
     amount REAL NOT NULL DEFAULT 0.0,
     mode TEXT DEFAULT 'cash' CHECK(mode IN ('cash', 'bank', 'upi', 'cheque')),
     reference_type TEXT DEFAULT '',
@@ -754,6 +767,11 @@ CREATE TABLE IF NOT EXISTS petty_cash (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     voucher_no TEXT NOT NULL,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    accounting_date TEXT DEFAULT '',
+    accounting_date_source TEXT DEFAULT '',
+    -- Party paid, when the voucher settles/advances a supplier account.
+    party_id INTEGER DEFAULT NULL,
+    party_review INTEGER DEFAULT 0,
     expense_head TEXT NOT NULL DEFAULT '',
     description TEXT DEFAULT '',
     amount REAL NOT NULL DEFAULT 0.0,
@@ -879,10 +897,18 @@ CREATE TABLE IF NOT EXISTS vehicle_expenses (
 CREATE TABLE IF NOT EXISTS other_expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
+    accounting_date TEXT DEFAULT '',
+    accounting_date_source TEXT DEFAULT '',
     category TEXT NOT NULL DEFAULT '',
     expense_head TEXT NOT NULL DEFAULT '',
     description TEXT DEFAULT '',
     amount REAL NOT NULL DEFAULT 0.0,
+    -- Amount actually paid now; less than amount = a recognised payable.
+    paid_amount REAL DEFAULT NULL,
+    payment_status TEXT DEFAULT 'paid',
+    -- Party paid, when this expense is on a supplier's account.
+    party_id INTEGER DEFAULT NULL,
+    party_review INTEGER DEFAULT 0,
     paid_to TEXT DEFAULT '',
     payment_mode TEXT DEFAULT 'cash' CHECK(payment_mode IN ('cash', 'bank', 'upi', 'cheque')),
     reference_no TEXT DEFAULT '',

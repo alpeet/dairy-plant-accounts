@@ -49,6 +49,8 @@
 // ──────────────────────────────────────────────────────────────
 
 /** Half-up rounding to 2 decimals — the currency precision used everywhere. */
+const accountingDates = require('./accounting_dates');
+
 function round2(v) {
     const n = Number(v);
     if (!Number.isFinite(n)) return 0;
@@ -256,9 +258,17 @@ function detectMilkLine(productName) {
  */
 function getMilkCostSummary(db, opts = {}) {
     const { from, to } = periodBounds(opts);
+    // P&L recognises a purchase / milk collection in its ACCOUNTING period.
+    // Cash-flow reports keep using the transaction date (RANGE).
+    const acctRange = (table) => {
+        const e = accountingDates.acctDateExpr(db, table);
+        return `${e} >= ? AND ${e} <= ?`;
+    };
+    const collectionRange = acctRange('milk_collections');
+    const purchaseRange = acctRange('purchases');
 
     const collectionCount = db.prepare(
-        `SELECT COUNT(*) as count FROM milk_collections WHERE ${RANGE}`
+        `SELECT COUNT(*) as count FROM milk_collections WHERE ${collectionRange}`
     ).get(from, to).count;
 
     // ── Single milk-money policy (audit: Rs 0.05) ─────────────────────
@@ -267,7 +277,7 @@ function getMilkCostSummary(db, opts = {}) {
     // same expression the company ledger uses per displayed row — so summary,
     // ledger rows, P&L and net profit agree to the paisa by construction.
     const collectionAmounts = db.prepare(
-        `SELECT amount, purchase_ref_id FROM milk_collections WHERE ${RANGE}`
+        `SELECT amount, purchase_ref_id FROM milk_collections WHERE ${collectionRange}`
     ).all(from, to);
     let collectionsTotal = 0;
     let linkedTotal = 0;
@@ -285,7 +295,8 @@ function getMilkCostSummary(db, opts = {}) {
         `SELECT pi.purchase_id, pi.product_name, pi.amount
            FROM purchase_items pi
            JOIN purchases p ON p.id = pi.purchase_id
-          WHERE p.date >= ? AND p.date <= ?
+          WHERE ${accountingDates.acctDateExpr(db, 'purchases', 'p')} >= ?
+            AND ${accountingDates.acctDateExpr(db, 'purchases', 'p')} <= ?
             AND NOT EXISTS (SELECT 1 FROM milk_collections mc WHERE mc.purchase_ref_id = p.id)`
     ).all(from, to);
 
@@ -301,7 +312,7 @@ function getMilkCostSummary(db, opts = {}) {
 
     // ── Non-milk purchases: same per-bill expression as the company ledger ──
     const billRows = db.prepare(
-        `SELECT id, grand_total FROM purchases WHERE ${RANGE}`
+        `SELECT id, grand_total FROM purchases WHERE ${purchaseRange}`
     ).all(from, to);
     const linkedByBill = getLinkedMilkByBill(db, opts);
     let purchasesGross = 0;
@@ -342,9 +353,10 @@ function getMilkCostSummary(db, opts = {}) {
 function getLinkedMilkByBill(db, opts = {}) {
     const { from, to } = periodBounds(opts);
     const map = new Map();
+    const acctRange = accountingDates.acctDateExpr(db, 'milk_collections');
     for (const r of db.prepare(
         `SELECT purchase_ref_id AS pid, amount FROM milk_collections
-          WHERE ${RANGE} AND purchase_ref_id IS NOT NULL`
+          WHERE ${acctRange} >= ? AND ${acctRange} <= ? AND purchase_ref_id IS NOT NULL`
     ).all(from, to)) {
         // Row-rounded, matching the ledger's per-row rounding exactly.
         map.set(r.pid, round2((map.get(r.pid) || 0) + round2(r.amount)));
@@ -633,12 +645,27 @@ function getCashBankPosition(db, opts = {}) {
     const cashPayments = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
            FROM payments
-          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) = 'cash'`
+          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) = 'cash'
+            AND COALESCE(transaction_type, '') <> 'advance_adjustment'`
     ).get(...p);
 
+    // Income-category rows (rent received, scrap sale) are money IN, never a
+    // cash expense — counting them out and not in made rent reduce the till.
+    const incomeCategorySql = `UPPER(TRIM(COALESCE(category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')`;
     const cashExpenses = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
-           FROM other_expenses WHERE ${RANGE} AND LOWER(COALESCE(payment_mode,'cash')) = 'cash'`
+           FROM other_expenses WHERE ${RANGE} AND LOWER(COALESCE(payment_mode,'cash')) = 'cash'
+             AND NOT (${incomeCategorySql})`
+    ).get(...p);
+    const cashOtherIncome = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+           FROM other_expenses WHERE ${RANGE} AND LOWER(COALESCE(payment_mode,'cash')) = 'cash'
+             AND (${incomeCategorySql})`
+    ).get(...p);
+    const bankOtherIncome = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
+           FROM other_expenses WHERE ${RANGE} AND LOWER(COALESCE(payment_mode,'cash')) IN ${NON_CASH_MODES}
+             AND (${incomeCategorySql})`
     ).get(...p);
 
     const pettyCash = db.prepare(
@@ -682,7 +709,8 @@ function getCashBankPosition(db, opts = {}) {
     const bankPaymentsDoc = db.prepare(
         `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count
            FROM payments
-          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
+          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}
+            AND COALESCE(transaction_type, '') <> 'advance_adjustment'`
     ).get(...p);
 
     // Payments already reflected by an imported bank row (same reference, or the
@@ -698,7 +726,8 @@ function getCashBankPosition(db, opts = {}) {
     ).all(...p);
     const docPayments = db.prepare(
         `SELECT id, date, amount, mode, reference_type, reference_id, bank_txn_id FROM payments
-          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}`
+          WHERE ${RANGE} AND type IN ('payment', 'advance') AND LOWER(COALESCE(mode,'cash')) IN ${NON_CASH_MODES}
+            AND COALESCE(transaction_type, '') <> 'advance_adjustment'`
     ).all(...p);
     const dupReceipts = docReceipts.filter(r =>
         (r.bank_txn_id && bankRowIds.has(r.bank_txn_id)) || bankRefs.has(String(r.reference_type || '').trim()));
@@ -720,13 +749,13 @@ function getCashBankPosition(db, opts = {}) {
         nonTransferRows.reduce((s, r) => s + (Number(r.credit) || 0), 0));
     const bankNonTransferOut = round2(
         nonTransferRows.reduce((s, r) => s + (Number(r.debit) || 0), 0));
-    const bankIn = round2(bankCustomerReceipts + cashToBank
+    const bankIn = round2(bankCustomerReceipts + cashToBank + bankOtherIncome.total
         + (bankReceiptsDoc.total - dupReceipts.reduce((s, r) => s + (Number(r.amount) || 0), 0)));
     const bankExpenseOut = round2(expenseRows.reduce((s, r) => s + (Number(r.debit) || 0), 0));
     const bankOut = round2(bankNonTransferOut + transferOut
         + (bankPaymentsDoc.total - dupPayments.reduce((s, r) => s + (Number(r.amount) || 0), 0)));
 
-    const cashIn = round2(cashSales.total + cashReceipts.total);
+    const cashIn = round2(cashSales.total + cashReceipts.total + cashOtherIncome.total);
     const cashOut = round2(cashPayments.total + cashExpenses.total + pettyCash.total + cashToBank);
     const cashBalance = round2(cashIn - cashOut);
     const bankBalance = round2(bankIn - bankOut);
@@ -741,6 +770,7 @@ function getCashBankPosition(db, opts = {}) {
             cash_receipts_count: cashReceipts.count,
             cash_payments: round2(cashPayments.total),
             cash_expenses: round2(cashExpenses.total),
+            other_income_received: round2(cashOtherIncome.total),
             petty_cash: round2(pettyCash.total),
             deposited_to_bank: cashToBank,
             total_in: cashIn,
@@ -757,6 +787,7 @@ function getCashBankPosition(db, opts = {}) {
             // of the bank movement, so a reconciliation must add them to the
             // statement side instead of reporting them as a 3-million gap.
             receipts_documents: round2(bankReceiptsDoc.total - dupReceipts.reduce((s, r) => s + (Number(r.amount) || 0), 0)),
+            other_income_received: round2(bankOtherIncome.total),
             payments_documents: round2(bankPaymentsDoc.total - dupPayments.reduce((s, r) => s + (Number(r.amount) || 0), 0)),
             expenses_paid: bankExpenseOut,
             transfers_out: transferOut,
@@ -808,8 +839,10 @@ function getExpenseSummary(db, opts = {}) {
     const { from, to } = periodBounds(opts);
     const p = [from, to];
 
+    const incomeRowSql = `UPPER(TRIM(COALESCE(category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')`;
     const otherExpenses = db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM other_expenses WHERE ${RANGE}`
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM other_expenses
+          WHERE ${RANGE} AND NOT (${incomeRowSql})`
     ).get(...p);
     const petty = db.prepare(
         // Advances are NOT expenses (audit req 25): rows with head 'Advance'
@@ -840,7 +873,7 @@ function getExpenseSummary(db, opts = {}) {
     ).get(...p);
 
     const otherIncome = db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM other_expenses WHERE ${RANGE} AND category = 'Income'`
+        `SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM other_expenses WHERE ${RANGE} AND (${incomeRowSql})`
     ).get(...p);
 
     const knownRefs = new Set(
@@ -930,13 +963,16 @@ function getExpenseSummary(db, opts = {}) {
     // Other Expenses / a typed expense payment, which are the sources above.
     // Statement rows are still listed in `bank_expense_rows` so the operator can
     // see them and enter the missing expense deliberately.
+    // `otherExpenses` already excludes income rows, so income is NOT subtracted
+    // a second time here (doing both understated operating expenses by the
+    // whole other-income figure).
     const operating = round2(
-        (otherExpenses.total - otherIncome.total) + petty.total + salary.total + vehicle.total
+        otherExpenses.total + petty.total + salary.total + vehicle.total
         + typedExpenses.total
     );
 
     return {
-        other_expenses: round2(otherExpenses.total - otherIncome.total),
+        other_expenses: round2(otherExpenses.total),
         other_income: round2(otherIncome.total),
         // Rent contained in the buckets above (never added on top of them).
         rent: rentTotal,

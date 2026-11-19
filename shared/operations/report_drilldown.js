@@ -202,6 +202,7 @@ function cashRows(db, from, to) {
           FROM payments pm LEFT JOIN parties p ON p.id = pm.party_id
          WHERE pm.date >= ? AND pm.date <= ? AND pm.type IN ('payment', 'advance')
            AND LOWER(COALESCE(pm.mode, 'cash')) = 'cash'
+           AND COALESCE(pm.transaction_type, '') <> 'advance_adjustment'
          ORDER BY pm.date, pm.id`).all(from, to)) {
         rows.push(makeRow({
             date: r.date, voucher: `${r.type === 'advance' ? 'ADV' : 'PV'}-${r.id}`, party: r.party,
@@ -211,16 +212,21 @@ function cashRows(db, from, to) {
         }));
     }
 
+    // Rent received / other income banked in cash is money IN; the same rows
+    // must never also appear as a cash expense (they would cancel the receipt).
     for (const r of db.prepare(`
         SELECT oe.id, oe.date, oe.amount, oe.category, oe.expense_head, oe.description,
-               oe.paid_to, oe.reference_no
+               oe.paid_to, oe.reference_no,
+               CASE WHEN UPPER(TRIM(COALESCE(oe.category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED') THEN 1 ELSE 0 END AS is_income
           FROM other_expenses oe
          WHERE oe.date >= ? AND oe.date <= ? AND LOWER(COALESCE(oe.payment_mode, 'cash')) = 'cash'
          ORDER BY oe.date, oe.id`).all(from, to)) {
+        const income = Number(r.is_income) === 1;
         rows.push(makeRow({
             date: r.date, voucher: r.reference_no || `EX-${r.id}`, party: r.paid_to,
             description: r.description || r.expense_head || r.category,
-            amount: r.amount, direction: 'out', category: 'Cash out · expenses',
+            amount: r.amount, direction: income ? 'in' : 'out',
+            category: income ? 'Cash in · other income' : 'Cash out · expenses',
             status: r.category, table: 'other_expenses', id: r.id
         }));
     }
@@ -351,12 +357,29 @@ function bankRows(db, from, to) {
         }));
     }
 
+    // Rent / other income received into the bank (never a statement row).
+    for (const r of db.prepare(`
+        SELECT oe.id, oe.date, oe.amount, oe.expense_head, oe.description, oe.reference_no
+          FROM other_expenses oe
+         WHERE oe.date >= ? AND oe.date <= ?
+           AND LOWER(COALESCE(oe.payment_mode, 'cash')) IN ('bank', 'upi', 'cheque')
+           AND UPPER(TRIM(COALESCE(oe.category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
+         ORDER BY oe.date, oe.id`).all(from, to)) {
+        rows.push(makeRow({
+            date: r.date, voucher: r.reference_no || `IN-${r.id}`, party: '',
+            description: r.description || r.expense_head || 'Other income banked',
+            amount: r.amount, direction: 'in', category: 'Bank in · other income',
+            table: 'other_expenses', id: r.id
+        }));
+    }
+
     const docs = db.prepare(`
         SELECT pm.id, pm.date, pm.amount, pm.type, pm.mode, pm.reference_type, pm.notes,
                pm.bank_txn_id, pm.transaction_type, p.name AS party
           FROM payments pm LEFT JOIN parties p ON p.id = pm.party_id
          WHERE pm.date >= ? AND pm.date <= ?
            AND LOWER(COALESCE(pm.mode, 'cash')) IN ('bank', 'upi', 'cheque')
+           AND COALESCE(pm.transaction_type, '') <> 'advance_adjustment'
          ORDER BY pm.date, pm.id`).all(from, to);
     for (const r of docs) {
         const duplicate = (r.bank_txn_id && bankRowIds.has(r.bank_txn_id))
@@ -473,7 +496,8 @@ function otherIncomeRows(db, from, to) {
     for (const r of db.prepare(`
         SELECT oe.id, oe.date, oe.amount, oe.expense_head, oe.category, oe.description, oe.reference_no
           FROM other_expenses oe
-         WHERE oe.date >= ? AND oe.date <= ? AND oe.category = 'Income'
+         WHERE oe.date >= ? AND oe.date <= ?
+           AND UPPER(TRIM(COALESCE(oe.category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
          ORDER BY oe.date, oe.id`).all(from, to)) {
         rows.push(makeRow({
             date: r.date, voucher: r.reference_no || `IN-${r.id}`, party: '',
@@ -505,7 +529,8 @@ function expenseRows(db, from, to) {
         SELECT oe.id, oe.date, oe.amount, oe.category, oe.expense_head, oe.description,
                oe.paid_to, oe.reference_no, oe.payment_mode
           FROM other_expenses oe
-         WHERE oe.date >= ? AND oe.date <= ? AND oe.category != 'Income'
+         WHERE oe.date >= ? AND oe.date <= ?
+           AND UPPER(TRIM(COALESCE(oe.category, ''))) NOT IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
          ORDER BY oe.date, oe.id`).all(from, to)) {
         rows.push(makeRow({
             date: r.date, voucher: r.reference_no || `EX-${r.id}`, party: r.paid_to,

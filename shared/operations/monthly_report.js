@@ -31,6 +31,7 @@
 
 const accounting = require('./accounting');
 const bs = require('../bs-calendar');
+const accountingDates = require('./accounting_dates');
 const { getLoanAdvanceBalances } = accounting;
 const prepaid = require('./prepaid_rent');
 
@@ -169,6 +170,9 @@ function getSalesRevenue(db, from, to) {
 /** Income by head — product lines from the invoice items + non-sales income. */
 function getIncomeHeads(db, from, to) {
     const map = {};
+    // P&L recognises income in its ACCOUNTING period, not the day money moved.
+    const oAcct = accountingDates.acctDateExpr(db, 'other_expenses');
+    const pAcct = accountingDates.acctDateExpr(db, 'payments');
 
     // Product / revenue lines of real (non-opening) invoices.
     const items = db.prepare(`
@@ -193,7 +197,8 @@ function getIncomeHeads(db, from, to) {
         SELECT COALESCE(NULLIF(TRIM(expense_head), ''), category) AS head,
                COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM other_expenses
-        WHERE date >= ? AND date <= ? AND category = 'Income'
+        WHERE ${oAcct} >= ? AND ${oAcct} <= ?
+          AND UPPER(TRIM(COALESCE(category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
         GROUP BY head
     `).all(from, to);
     let nonInvoiceIncome = 0;
@@ -206,7 +211,7 @@ function getIncomeHeads(db, from, to) {
     const typedIncome = db.prepare(`
         SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM payments
-        WHERE date >= ? AND date <= ? AND transaction_type IN ('interest_income', 'other_income')
+        WHERE ${pAcct} >= ? AND ${pAcct} <= ? AND transaction_type IN ('interest_income', 'other_income')
     `).get(from, to);
     if (Number(typedIncome.total) !== 0) {
         addHead(map, 'Other Income', typedIncome.total, typedIncome.n);
@@ -239,6 +244,9 @@ function getIncomeHeads(db, from, to) {
 function getExpenseHeads(db, from, to) {
     const map = {};
     const sources = {};
+    const oAcct = accountingDates.acctDateExpr(db, 'other_expenses');
+    const pcAcct = accountingDates.acctDateExpr(db, 'petty_cash');
+    const pAcct = accountingDates.acctDateExpr(db, 'payments');
 
     // 1. Expenses register (other_expenses), excluding its 'Income' rows.
     const rows = db.prepare(`
@@ -246,7 +254,8 @@ function getExpenseHeads(db, from, to) {
                COALESCE(NULLIF(TRIM(description), ''), '') AS detail,
                COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM other_expenses
-        WHERE date >= ? AND date <= ? AND category != 'Income'
+        WHERE ${oAcct} >= ? AND ${oAcct} <= ?
+          AND UPPER(TRIM(COALESCE(category, ''))) NOT IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
         GROUP BY head, detail
     `).all(from, to);
     for (const r of rows) {
@@ -264,7 +273,7 @@ function getExpenseHeads(db, from, to) {
                COALESCE(TRIM(COALESCE(description, '')), '') AS detail,
                COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM petty_cash
-        WHERE date >= ? AND date <= ? AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
+        WHERE ${pcAcct} >= ? AND ${pcAcct} <= ? AND UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'
           AND NOT ${accounting.PETTY_DUPLICATE_SQL}
         GROUP BY head, detail
     `).all(from, to);
@@ -272,13 +281,13 @@ function getExpenseHeads(db, from, to) {
     sources.petty_cash = round2(petty.reduce((s, r) => s + Number(r.total || 0), 0));
     const settled = db.prepare(
         `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM petty_cash
-          WHERE date >= ? AND date <= ? AND ${accounting.PETTY_SETTLEMENT_SQL}`
+          WHERE ${pcAcct} >= ? AND ${pcAcct} <= ? AND ${accounting.PETTY_SETTLEMENT_SQL}`
     ).get(from, to);
     sources.supplier_settlements_excluded = round2(settled.total);
     sources.supplier_settlement_count = settled.n;
     const salaryDup = db.prepare(
         `SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM petty_cash
-          WHERE date >= ? AND date <= ? AND ${accounting.PETTY_SALARY_DUP_SQL}`
+          WHERE ${pcAcct} >= ? AND ${pcAcct} <= ? AND ${accounting.PETTY_SALARY_DUP_SQL}`
     ).get(from, to);
     sources.salary_duplicates_excluded = round2(salaryDup.total);
     sources.salary_duplicate_count = salaryDup.n;
@@ -308,7 +317,8 @@ function getExpenseHeads(db, from, to) {
     const typed = db.prepare(`
         SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM payments
-        WHERE date >= ? AND date <= ? AND transaction_type IN ('actual_expense', 'advance_adjustment')
+        WHERE ${pAcct} >= ? AND ${pAcct} <= ? AND transaction_type IN ('actual_expense', 'advance_adjustment')
+          AND NOT (COALESCE(reference_type, '') = 'purchase')
     `).get(from, to);
     if (typed.n) addHead(map, 'Other Operating Expenses', typed.total, typed.n);
     sources.typed_payment_expenses = round2(typed.total);
@@ -349,9 +359,10 @@ function getCogs(db, from, to) {
     // forward a payable/stock position — they are NOT March trading, so they
     // must not become an expense in the month the books open. Excluding them
     // here is the same correction the income side applies.
+    const pAcct = accountingDates.acctDateExpr(db, 'purchases');
     const opening = db.prepare(`
         SELECT COUNT(*) AS n, COALESCE(SUM(grand_total), 0) AS total
-        FROM purchases WHERE date >= ? AND date <= ? AND bill_no LIKE 'OPN%'
+        FROM purchases WHERE ${pAcct} >= ? AND ${pAcct} <= ? AND bill_no LIKE 'OPN%'
     `).get(from, to);
     const grossOther = round2(milk.non_milk_purchases);
     const openingExcluded = round2(Math.min(grossOther, Number(opening.total) || 0));
@@ -868,10 +879,12 @@ function buildReconciliation(db, { from, to, activity, opening, closing, months 
     // 6. Bank: statement rows + documents, each counted once.
     const cb = closing.cash_bank_detail;
     push('Bank receipts vs movements',
-        round2(cb.bank.customer_receipts + cb.bank.cash_deposits_in + (cb.bank.receipts_documents || 0)),
+        round2(cb.bank.customer_receipts + cb.bank.cash_deposits_in + (cb.bank.receipts_documents || 0)
+            + (cb.bank.other_income_received || 0)),
         cb.bank.total_in,
         `Statement receipts ${cb.bank.customer_receipts} + cash deposits ${cb.bank.cash_deposits_in}`
-        + ` + bank-mode receipts without a statement row ${cb.bank.receipts_documents || 0}.`);
+        + ` + bank-mode receipts without a statement row ${cb.bank.receipts_documents || 0}`
+        + ` + rent/other income banked ${cb.bank.other_income_received || 0}.`);
     push('Bank payments vs expense/transfer side',
         round2(cb.bank.payments + (cb.bank.payments_documents || 0) + cb.bank.expenses_paid + cb.bank.transfers_out),
         cb.bank.total_out,

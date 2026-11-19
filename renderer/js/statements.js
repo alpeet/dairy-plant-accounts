@@ -96,6 +96,38 @@ async function showPartyStatement(type = '') {
                 <input type="date" class="form-control" id="stTo" value="${toVal}">
             </div>
             <div class="form-group">
+                <label>${rl('Transaction Type', 'कारोबारको प्रकार')}</label>
+                <select class="form-control" id="stTxnType">
+                    <option value="">${rl('All', 'सबै')}</option>
+                    <option value="purchase">${rl('Purchase', 'खरिद')}</option>
+                    <option value="sale">${rl('Sale', 'बिक्री')}</option>
+                    <option value="milk_collection">${rl('Milk collection', 'दूध सङ्कलन')}</option>
+                    <option value="receipt">${rl('Receipt', 'प्राप्ति')}</option>
+                    <option value="payment">${rl('Payment', 'भुक्तानी')}</option>
+                    <option value="advance">${rl('Advance', 'अग्रिम')}</option>
+                    <option value="advance_adjustment">${rl('Advance adjustment', 'अग्रिम मिलान')}</option>
+                    <option value="expense">${rl('Expense', 'खर्च')}</option>
+                    <option value="expense_payment">${rl('Expense paid', 'खर्च भुक्तानी')}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>${rl('Source Module', 'स्रोत मोड्युल')}</label>
+                <select class="form-control" id="stSource">
+                    <option value="">${rl('All', 'सबै')}</option>
+                    <option value="Sales">${rl('Sales', 'बिक्री')}</option>
+                    <option value="Purchases">${rl('Purchases', 'खरिद')}</option>
+                    <option value="Milk Collection">${rl('Milk Collection', 'दूध सङ्कलन')}</option>
+                    <option value="Payment">${rl('Payment', 'भुक्तानी')}</option>
+                    <option value="Advance">${rl('Advance', 'अग्रिम')}</option>
+                    <option value="Petty Cash">${rl('Petty Cash', 'सानो नगद')}</option>
+                    <option value="Expenses">${rl('Expenses', 'खर्च')}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>${rl('Reference No', 'रसिद नं.')}</label>
+                <input type="text" class="form-control" id="stRef" placeholder="${rl('Search reference', 'रसिद खोज्नुहोस्')}">
+            </div>
+            <div class="form-group">
                 <label>&nbsp;</label>
                 <button class="btn btn-primary btn-sm" onclick="generateStatement()">${rlt('generate')}</button>
             </div>
@@ -155,7 +187,12 @@ async function generateStatement() {
 
     if (!partyId) { showToast('Please select a party', 'warning'); return; }
 
-    const result = await window.api.getPartyStatement({ party_id: parseInt(partyId), from_date: from, to_date: to });
+    const result = await window.api.getPartyStatement({
+        party_id: parseInt(partyId), from_date: from, to_date: to,
+        transaction_type: document.getElementById('stTxnType')?.value || undefined,
+        source: document.getElementById('stSource')?.value || undefined,
+        reference: document.getElementById('stRef')?.value || undefined
+    });
     if (!result.success) { showToast(result.error, 'error'); return; }
 
     window._lastStatement = result.data;
@@ -182,6 +219,12 @@ function statementModuleName(type) {
         payment_received: ['Payment received', 'प्राप्त भुक्तानी'],
         payment_made: ['Payment made', 'गरिएको भुक्तानी'],
         pdc: ['Cheque (PDC)', 'चेक (पीडीसी)'],
+        receipt: ['Receipt', 'प्राप्ति'],
+        payment: ['Payment made', 'गरिएको भुक्तानी'],
+        advance: ['Advance', 'अग्रिम'],
+        advance_adjustment: ['Advance adjusted', 'अग्रिम मिलान'],
+        expense: ['Expense bill', 'खर्च बिल'],
+        expense_payment: ['Expense paid', 'खर्च भुक्तानी'],
         opening: ['Opening balance', 'सुरुको मौज्दात'],
         manual: ['Manual entry', 'हात्तले लेखिएको']
     };
@@ -282,9 +325,11 @@ function renderStatementResult(data) {
         <tr style="${e.is_pdc ? 'background:#fbfcfe' : ''}" class="mr-line"
             onclick="statementToggleDetail(${i})"
             title="${escapeHtml(rl('Click to open this line\u2019s details', 'यो लाइनको विवरण हेर्न क्लिक गर्नुहोस्'))}">
+            <td>${formatDate(e.accounting_date || e.date)}</td>
             <td>${formatDate(e.date)}</td>
             <td>${escapeHtml(e.reference_no || '')}</td>
-            <td>${statementModuleName(e.reference_type)}${e.is_pdc ? ' 🏛' : ''}</td>
+            <td>${statementModuleName(e.statement_type || e.reference_type)}${e.is_pdc ? ' 🏛' : ''}</td>
+            <td>${escapeHtml(e.source_module || '')}</td>
             <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
             <td class="text-right">${cells.qty === ST_DASH ? '' : cells.qty}</td>
             <td class="text-right">${cells.rate === ST_DASH ? '' : cells.rate}</td>
@@ -294,11 +339,12 @@ function renderStatementResult(data) {
             <td>${statementStatusCell(e)}</td>
         </tr>
         <tr id="${detailId}" style="display:none">
-            <td colspan="10" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
+            <td colspan="12" style="background:#f8fafc;padding:10px 14px;font-size:12px;border-bottom:1px solid var(--border)">
                 <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
-                    <span><strong>${rl('Date', 'मिति')}:</strong> ${formatDate(e.date)}</span>
+                    <span><strong>${rl('Accounting date', 'हिसाब मिति')}:</strong> ${formatDate(e.accounting_date || e.date)}</span>
+                    <span><strong>${rl('Transaction date', 'कारोबार मिति')}:</strong> ${formatDate(e.date)}</span>
                     <span><strong>${rlt('reference')}:</strong> ${escapeHtml(e.reference_no || '—')}</span>
-                    <span><strong>${rl('Source module', 'स्रोत मोड्युल')}:</strong> ${statementModuleName(e.reference_type)}</span>
+                    <span><strong>${rl('Source module', 'स्रोत मोड्युल')}:</strong> ${escapeHtml(e.source_module || statementModuleName(e.reference_type))}</span>
                     <span><strong>${rl('Record ID', 'रेकर्ड आईडी')}:</strong> ${e.source_id ?? e.reference_id ?? '—'}</span>
                     <span><strong>${rlt('amount')}:</strong> ${e.debit > 0 ? formatCurrency(e.debit) : (e.credit > 0 ? formatCurrency(e.credit) : '—')}</span>
                     <span><strong>${rlt('balance')}:</strong> ${formatCurrency(e.running_balance)}</span>
@@ -346,9 +392,11 @@ function renderStatementResult(data) {
             <table>
                 <thead>
                     <tr>
-                        <th>${rlt('date')}</th>
+                        <th>${rl('Accounting Date', 'हिसाब मिति')}</th>
+                        <th>${rl('Transaction Date', 'कारोबार मिति')}</th>
                         <th>${rlt('reference')}</th>
                         <th>${rlt('transaction_type')}</th>
+                        <th>${rl('Source Module', 'स्रोत मोड्युल')}</th>
                         <th>${rlt('particulars')}</th>
                         <th class="text-right">${rlt('quantity')}</th>
                         <th class="text-right">${rlt('rate')}</th>
@@ -360,16 +408,16 @@ function renderStatementResult(data) {
                 </thead>
                 <tbody>
                     <tr style="background:#f0f4f8;font-weight:600">
-                        <td colspan="8">${rlt('opening_balance')}</td>
+                        <td colspan="10">${rlt('opening_balance')}</td>
                         <td class="text-right">${formatCurrency(data.opening_balance)}</td>
                         <td></td>
                     </tr>
                     ${rows}
-                    ${data.entries.length === 0 ? `<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
+                    ${data.entries.length === 0 ? `<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text-light)">${rl('No transactions in this period', 'यो अवधिमा कुनै लेनदेन छैन')}</td></tr>` : ''}
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="6"><strong>${rlt('total')}</strong></td>
+                        <td colspan="8"><strong>${rlt('total')}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td>
                         <td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td>
@@ -444,12 +492,12 @@ function buildStatementHtml(data, settings) {
             ${data.pdc.issued_held ? ` Issued ${formatCurrency(data.pdc.issued_held)} (${data.pdc.issued_held_count} cheque(s));` : ''}
         </div>` : ''}
         <table>
-            <thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
+            <thead><tr><th>${rl('Accounting Date', 'हिसाब मिति')}</th><th>${rl('Transaction Date', 'कारोबार मिति')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rl('Source Module', 'स्रोत मोड्युल')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
             <tbody>
-                <tr><td colspan="8">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
-                ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === ST_DASH ? '' : c.qty}</td><td class="text-right">${c.rate === ST_DASH ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
+                <tr><td colspan="10">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
+                ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.accounting_date || e.date)}</td><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.statement_type || e.reference_type)}</td><td>${escapeHtml(e.source_module || '')}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === ST_DASH ? '' : c.qty}</td><td class="text-right">${c.rate === ST_DASH ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
             </tbody>
-            <tfoot><tr><td colspan="6"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
+            <tfoot><tr><td colspan="8"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
         </table>
         <div class="footer"><div>${rl('Printed', 'प्रिन्ट')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;
@@ -560,12 +608,12 @@ async function exportStatementPDF() {
             tfoot tr td { background: #eef2f7; font-weight: 700; }
         </style>
         <div class="header"><h1>${escapeHtml(settings.business_name || 'Prarambha Account & Stock Management')}</h1><h2>${escapeHtml(data.party.name)} — ${rl('Statement of Account', 'खाताको विवरण')}</h2><p>${rlt('period')}: ${data.from_date} → ${data.to_date}</p></div>
-        <table><thead><tr><th>${rlt('date')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
+        <table><thead><tr><th>${rl('Accounting Date', 'हिसाब मिति')}</th><th>${rl('Transaction Date', 'कारोबार मिति')}</th><th>${rlt('reference')}</th><th>${rlt('transaction_type')}</th><th>${rl('Source Module', 'स्रोत मोड्युल')}</th><th>${rlt('particulars')}</th><th class="text-right">${rlt('quantity')}</th><th class="text-right">${rlt('rate')}</th><th class="text-right">${rlt('debit')}</th><th class="text-right">${rlt('credit')}</th><th class="text-right">${rlt('balance')}</th><th>${rlt('status')}</th></tr></thead>
         <tbody>
-            <tr><td colspan="8">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
-            ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.reference_type)}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === ST_DASH ? '' : c.qty}</td><td class="text-right">${c.rate === ST_DASH ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
+            <tr><td colspan="10">${rlt('opening_balance')}</td><td class="text-right"><strong>${formatCurrency(data.opening_balance)}</strong></td><td></td></tr>
+            ${data.entries.map(e => { const c = statementItemCells(e); return `<tr><td>${formatDate(e.accounting_date || e.date)}</td><td>${formatDate(e.date)}</td><td>${escapeHtml(e.reference_no || '')}</td><td>${statementModuleName(e.statement_type || e.reference_type)}</td><td>${escapeHtml(e.source_module || '')}</td><td>${escapeHtml(e.description)}</td><td class="text-right">${c.qty === ST_DASH ? '' : c.qty}</td><td class="text-right">${c.rate === ST_DASH ? '' : c.rate}</td><td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : '-'}</td><td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : '-'}</td><td class="text-right">${formatCurrency(e.running_balance)}</td><td>${statementStatusCell(e)}</td></tr>`; }).join('')}
         </tbody>
-        <tfoot><tr><td colspan="6"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
+        <tfoot><tr><td colspan="8"><strong>${rlt('total')}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_debit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.total_credit)}</strong></td><td class="text-right"><strong>${formatCurrency(data.closing_balance)}</strong></td><td></td></tr></tfoot>
         </table>
         <div class="footer"><div>${rl('Generated', 'बनाइएको मिति')}: ${new Date().toLocaleDateString('en-IN')}</div><div class="signature">${rl('Authorized Signature', 'अधिकृत हस्ताक्षर')}</div></div>
     `;

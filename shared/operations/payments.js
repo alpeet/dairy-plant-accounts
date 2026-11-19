@@ -25,6 +25,8 @@
 
 const { logAudit } = require('./audit');
 const accounting = require('./accounting');
+const accountingDates = require('./accounting_dates');
+const round2 = accounting.round2;
 
 /** Payment modes that move money through the bank. */
 const BANK_MODES = ['bank', 'upi', 'cheque'];
@@ -39,12 +41,20 @@ function linkPaymentToBank() {
  * posting the matching double entry to the ledger.
  */
 function savePayment(db, payment) {
+    // The receipt/payment date is when money moved; the accounting date is the
+    // period it belongs to. They are stored independently (rent received on
+    // 5 Nov for October keeps date=5 Nov, accounting_date=31 Oct).
+    const dates = accountingDates.normalizeDates({
+        date: payment.date,
+        accounting_date: payment.accounting_date
+    });
     const trx = db.transaction(() => {
         const transactionType = normalizeTransactionType(payment.transaction_type);
         const result = db.prepare(
-            "INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, reference_id, notes, bank_account, bank_reference) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO payments (party_id, date, accounting_date, accounting_date_source, type, transaction_type, amount, mode, reference_type, reference_id, notes, bank_account, bank_reference) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).run(
-            payment.party_id, payment.date, payment.type, transactionType, payment.amount,
+            payment.party_id, dates.date, dates.accounting_date, dates.source,
+            payment.type, transactionType, payment.amount,
             payment.mode, payment.reference_type || '',
             payment.reference_id || null, payment.notes || '',
             payment.bank_account || '', payment.bank_reference || ''
@@ -54,12 +64,19 @@ function savePayment(db, payment) {
         postPaymentLedger(db, {
             id: paymentId,
             party_id: payment.party_id,
-            date: payment.date,
+            date: dates.date,
+            accounting_date: dates.accounting_date,
             type: payment.type,
             transaction_type: transactionType,
             amount: payment.amount,
-            mode: payment.mode
+            mode: payment.mode,
+            reference_type: payment.reference_type || ''
         }, payment.notes || '');
+
+        // A payment against a purchase bill or an expense settles that
+        // document's payable. It never creates a second purchase/expense —
+        // only the settlement counter on the original document moves.
+        applySettlement(db, payment, transactionType, 1);
 
         // STANDALONE REGISTER (operator rule, 2026-10): recording a payment
         // never creates or links a Bank Transactions row, whatever its mode or
@@ -109,6 +126,8 @@ function postPaymentLedger(db, p, notes = '') {
         direction: p.direction || (p.type === 'receipt' ? 'in' : 'out')
     });
 
+    const acct = p.accounting_date || p.date;
+
     if (rule) {
         const moneyDebit = rule.debit_account === accounting.ACCOUNT.CASH || rule.debit_account === accounting.ACCOUNT.BANK;
         const moneyCredit = rule.credit_account === accounting.ACCOUNT.CASH || rule.credit_account === accounting.ACCOUNT.BANK;
@@ -118,12 +137,12 @@ function postPaymentLedger(db, p, notes = '') {
             // expense leg AND the receivable leg, each tagged. Neither leg is
             // a payment_received/payment_made row, so cash flow is untouched.
             db.prepare(
-                "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'adjustment', ?, ?, ?, 0, 0)"
-            ).run(p.party_id, p.date, p.id,
+                "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, 0, 0)"
+            ).run(p.party_id, p.date, acct, p.id,
                   `${rule.kind} [${rule.debit_account}]`, p.amount);
             db.prepare(
-                "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'advance', ?, ?, 0, ?, 0)"
-            ).run(p.party_id, p.date, p.id,
+                "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'advance', ?, ?, 0, ?, 0)"
+            ).run(p.party_id, p.date, acct, p.id,
                   `${rule.kind} [${rule.credit_account}]`, p.amount);
             return rule;
         }
@@ -132,9 +151,9 @@ function postPaymentLedger(db, p, notes = '') {
         const tagAccount = moneyDebit ? rule.credit_account : rule.debit_account;
         const desc = `${rule.kind.charAt(0).toUpperCase() + rule.kind.slice(1)}${notes ? ' — ' + notes : ''} [${tagAccount}]`;
         db.prepare(
-            "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, ?, ?, ?, ?, 0)"
+            "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)"
         ).run(
-            p.party_id, p.date,
+            p.party_id, p.date, acct,
             moneyDebit ? 'payment_received' : 'payment_made',
             p.id, desc,
             moneyDebit ? 0 : p.amount,
@@ -146,14 +165,153 @@ function postPaymentLedger(db, p, notes = '') {
     // Legacy settlement entries (no transaction type / settlement / other)
     if (p.type === 'receipt') {
         db.prepare(
-            "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'payment_received', ?, 'Payment Received', 0, ?, 0)"
-        ).run(p.party_id, p.date, p.id, p.amount);
+            "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'payment_received', ?, 'Payment Received', 0, ?, 0)"
+        ).run(p.party_id, p.date, acct, p.id, p.amount);
     } else {
         db.prepare(
-            "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, 'payment_made', ?, 'Payment Made', ?, 0, 0)"
-        ).run(p.party_id, p.date, p.id, p.amount);
+            "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'payment_made', ?, 'Payment Made', ?, 0, 0)"
+        ).run(p.party_id, p.date, acct, p.id, p.amount);
     }
     return null;
+}
+
+/**
+ * Move the settlement counter on the document a payment settles.
+ *
+ *   reference_type = 'purchase' → purchases.paid_amount/status
+ *   reference_type = 'expense'  → other_expenses.paid_amount/payment_status
+ *
+ * The payment is the only record of the money; the bill keeps its original
+ * amount. Nothing is re-posted as a second purchase or expense.
+ * `direction` is +1 when the payment is saved and -1 when it is deleted.
+ */
+function applySettlement(db, payment, transactionType, direction) {
+    const refType = String(payment.reference_type || '').toLowerCase();
+    const refId = payment.reference_id;
+    if (!refId || !['purchase', 'expense'].includes(refType)) return null;
+    // An advance adjustment is a period/advance movement, not new money; it is
+    // handled by the advance allocation, never as a cash settlement.
+    if (transactionType === accounting.TRANSACTION_TYPES.ADVANCE_ADJUSTMENT) return null;
+    const amount = round2(payment.amount) * (direction < 0 ? -1 : 1);
+
+    if (refType === 'purchase') {
+        const bill = db.prepare('SELECT id, grand_total, COALESCE(paid_amount, 0) AS paid FROM purchases WHERE id = ?').get(refId);
+        if (!bill) return null;
+        const paid = round2(Math.min(round2(bill.grand_total), Math.max(0, round2(bill.paid) + amount)));
+        const status = paid <= 0.005 ? 'unpaid' : (paid + 0.005 >= round2(bill.grand_total) ? 'paid' : 'partial');
+        db.prepare("UPDATE purchases SET paid_amount = ?, status = ?, updated_at = datetime('now','localtime') WHERE id = ?")
+            .run(paid, status, refId);
+        return { document: 'purchase', paid, status };
+    }
+
+    const exp = db.prepare('SELECT id, amount, COALESCE(paid_amount, 0) AS paid FROM other_expenses WHERE id = ?').get(refId);
+    if (!exp) return null;
+    const total = round2(exp.amount);
+    const paid = round2(Math.min(total, Math.max(0, round2(exp.paid) + amount)));
+    const status = paid <= 0.005 ? 'unpaid' : (paid + 0.005 >= total ? 'paid' : 'partial');
+    db.prepare("UPDATE other_expenses SET paid_amount = ?, payment_status = ?, updated_at = datetime('now','localtime') WHERE id = ?")
+        .run(paid, status, refId);
+    return { document: 'expense', paid, status };
+}
+
+/** Subtract a deleted payment from the document it settled. */
+function reverseSettlement(db, payment) {
+    return applySettlement(db, payment, payment.transaction_type, -1);
+}
+
+/**
+ * Advance allocations: an advance paid earlier is applied to a purchase bill.
+ * No cash moves and no new expense/payment is created — the advance asset is
+ * reduced and the bill's payable is settled by the same amount.
+ */
+function ensureAdvanceAllocations(db) {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS advance_allocations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            advance_payment_id INTEGER NOT NULL,
+            purchase_id INTEGER NOT NULL,
+            party_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            accounting_date TEXT DEFAULT '',
+            amount REAL NOT NULL DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_by INTEGER DEFAULT NULL,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_adv_alloc_payment ON advance_allocations(advance_payment_id);
+        CREATE INDEX IF NOT EXISTS idx_adv_alloc_purchase ON advance_allocations(purchase_id);
+    `);
+}
+
+function applyAdvanceToPurchase(db, data = {}) {
+    ensureAdvanceAllocations(db);
+    const amount = round2(data.amount);
+    if (!(amount > 0)) throw new Error('Allocation amount must be greater than zero');
+    const dates = accountingDates.normalizeDates({
+        date: data.date || new Date().toISOString().slice(0, 10),
+        accounting_date: data.accounting_date
+    });
+
+    const trx = db.transaction(() => {
+        const advance = db.prepare(
+            "SELECT * FROM payments WHERE id = ? AND transaction_type = 'advance'"
+        ).get(data.advance_payment_id);
+        if (!advance) throw new Error('Advance payment not found');
+        const bill = db.prepare('SELECT * FROM purchases WHERE id = ?').get(data.purchase_id);
+        if (!bill) throw new Error('Purchase bill not found');
+        if (Number(bill.party_id) !== Number(advance.party_id)) {
+            throw new Error('The advance and the purchase bill belong to different parties');
+        }
+
+        const allocated = round2(db.prepare(
+            'SELECT COALESCE(SUM(amount), 0) AS t FROM advance_allocations WHERE advance_payment_id = ?'
+        ).get(advance.id).t);
+        const available = round2(round2(advance.amount) - allocated);
+        if (amount > available + 0.005) {
+            throw new Error(`Only ${available.toFixed(2)} of this advance is still available`);
+        }
+
+        const result = db.prepare(`
+            INSERT INTO advance_allocations
+                (advance_payment_id, purchase_id, party_id, date, accounting_date, amount, notes, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(advance.id, bill.id, advance.party_id, dates.date, dates.accounting_date,
+              amount, data.notes || '', data.created_by || null);
+
+        // Two tagged ledger rows: the advance asset falls, the bill payable
+        // falls. Neither leg is cash, so no cash-flow report moves.
+        db.prepare(
+            "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'adjustment', ?, ?, 0, ?, 0)"
+        ).run(advance.party_id, dates.date, dates.accounting_date, bill.id,
+              `Advance applied to purchase bill ${bill.bill_no} [${accounting.ACCOUNT.ADVANCE_RECEIVABLE}]`, amount);
+        db.prepare(
+            "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, 0, 0)"
+        ).run(advance.party_id, dates.date, dates.accounting_date, bill.id,
+              `Advance applied to purchase bill ${bill.bill_no} (settlement)`, amount);
+
+        const total = round2(bill.grand_total);
+        const paid = round2(Math.min(total, round2(bill.paid_amount) + amount));
+        const status = paid <= 0.005 ? 'unpaid' : (paid + 0.005 >= total ? 'paid' : 'partial');
+        db.prepare("UPDATE purchases SET paid_amount = ?, status = ?, updated_at = datetime('now','localtime') WHERE id = ?")
+            .run(paid, status, bill.id);
+
+        logAudit(db, 'advance_allocations', result.lastInsertRowid, 'create', null,
+            { ...data, amount }, data.created_by);
+        return { id: result.lastInsertRowid, remaining_advance: round2(available - amount), purchase_paid: paid };
+    });
+    return trx();
+}
+
+/** List allocations, optionally for one party / advance / purchase. */
+function listAdvanceAllocations(db, { party_id, advance_payment_id, purchase_id } = {}) {
+    ensureAdvanceAllocations(db);
+    let q = 'SELECT * FROM advance_allocations WHERE 1=1';
+    const p = [];
+    if (party_id) { q += ' AND party_id = ?'; p.push(party_id); }
+    if (advance_payment_id) { q += ' AND advance_payment_id = ?'; p.push(advance_payment_id); }
+    if (purchase_id) { q += ' AND purchase_id = ?'; p.push(purchase_id); }
+    q += ' ORDER BY date DESC, id DESC';
+    return db.prepare(q).all(...p);
 }
 
 /**
@@ -193,6 +351,10 @@ function deletePayment(db, id) {
             "DELETE FROM ledger_entries WHERE reference_type IN ('payment_made', 'payment_received') AND reference_id = ?"
         ).run(id);
 
+        // Undo the settlement counter on the purchase/expense this payment
+        // settled — the bill itself stays, only its outstanding grows back.
+        reverseSettlement(db, payment);
+
         // Delete the payment record
         db.prepare("DELETE FROM payments WHERE id = ?").run(id);
 
@@ -215,11 +377,19 @@ function updatePayment(db, data) {
         const newType = data.transaction_type !== undefined
             ? normalizeTransactionType(data.transaction_type)
             : existing.transaction_type;
+        const dates = accountingDates.normalizeDates({
+            date: data.date || existing.date,
+            accounting_date: data.accounting_date !== undefined
+                ? data.accounting_date
+                : existing.accounting_date
+        });
 
         db.prepare(
-            "UPDATE payments SET date = ?, mode = ?, notes = ?, transaction_type = ? WHERE id = ?"
+            "UPDATE payments SET date = ?, accounting_date = ?, accounting_date_source = ?, mode = ?, notes = ?, transaction_type = ? WHERE id = ?"
         ).run(
-            data.date || existing.date,
+            dates.date,
+            dates.accounting_date,
+            dates.source,
             data.mode || existing.mode,
             data.notes !== undefined ? data.notes : existing.notes,
             newType,
@@ -227,14 +397,16 @@ function updatePayment(db, data) {
         );
 
         // Re-post the ledger entry if the accounting-relevant fields changed
-        if (data.date !== existing.date || data.mode !== existing.mode || newType !== existing.transaction_type) {
+        if (dates.date !== existing.date || dates.accounting_date !== existing.accounting_date
+            || data.mode !== existing.mode || newType !== existing.transaction_type) {
             db.prepare(
                 "DELETE FROM ledger_entries WHERE reference_type IN ('payment_made', 'payment_received') AND reference_id = ?"
             ).run(data.id);
             postPaymentLedger(db, {
                 id: data.id,
                 party_id: existing.party_id,
-                date: data.date || existing.date,
+                date: dates.date,
+                accounting_date: dates.accounting_date,
                 type: existing.type,
                 transaction_type: newType,
                 amount: existing.amount,
@@ -255,5 +427,8 @@ module.exports = {
     updatePayment,
     postPaymentLedger,
     normalizeTransactionType,
-    linkPaymentToBank
+    linkPaymentToBank,
+    ensureAdvanceAllocations,
+    applyAdvanceToPurchase,
+    listAdvanceAllocations
 };

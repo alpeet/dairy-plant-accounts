@@ -38,7 +38,27 @@ const SOURCE_LABEL = {
     loan_received: 'Loan received',
     loan_repayment: 'Loan repayment',
     advance_adjustment: 'Advance adjusted',
+    expense: 'Expense bill',
+    expense_payment: 'Expense paid',
     opening: 'Opening balance'
+};
+
+/** Human source-module names, independent of the ledger reference type. */
+const SOURCE_MODULE = {
+    sale: 'Sales',
+    purchase: 'Purchases',
+    milk_collection: 'Milk Collection',
+    receipt: 'Payment',
+    payment: 'Payment',
+    advance: 'Advance',
+    advance_returned: 'Advance',
+    loan_given: 'Payment',
+    loan_received: 'Payment',
+    loan_repayment: 'Payment',
+    advance_adjustment: 'Advance',
+    expense: 'Expenses',
+    expense_payment: 'Expenses',
+    opening: 'Opening'
 };
 
 /** Shorthand quantity formatting that never invents decimals. */
@@ -85,13 +105,14 @@ function collectModuleRows(db) {
 
     let sales = [];
     try {
-        sales = db.prepare(`SELECT id, date, invoice_no, party_id, grand_total FROM sales
+        sales = db.prepare(`SELECT id, date, accounting_date, invoice_no, party_id, grand_total FROM sales
                             WHERE party_id IS NOT NULL`).all();
     } catch (e) { sales = []; }
     for (const s of sales) {
         add({
-            party_id: s.party_id, date: s.date, type: 'sale',
-            source_table: 'sales', source_id: s.id,
+            party_id: s.party_id, date: s.date,
+            accounting_date: s.accounting_date || s.date, type: 'sale',
+            source_table: 'sales', source_id: s.id, source_module: SOURCE_MODULE.sale,
             reference: s.invoice_no || '',
             particulars: `Sale invoice ${s.invoice_no || '#' + s.id}`,
             debit: MONEY(s.grand_total), credit: 0
@@ -100,13 +121,14 @@ function collectModuleRows(db) {
 
     let purchases = [];
     try {
-        purchases = db.prepare(`SELECT id, date, bill_no, party_id, grand_total FROM purchases
+        purchases = db.prepare(`SELECT id, date, accounting_date, bill_no, party_id, grand_total FROM purchases
                                 WHERE party_id IS NOT NULL`).all();
     } catch (e) { purchases = []; }
     for (const p of purchases) {
         add({
-            party_id: p.party_id, date: p.date, type: 'purchase',
-            source_table: 'purchases', source_id: p.id,
+            party_id: p.party_id, date: p.date,
+            accounting_date: p.accounting_date || p.date, type: 'purchase',
+            source_table: 'purchases', source_id: p.id, source_module: SOURCE_MODULE.purchase,
             reference: p.bill_no || '',
             particulars: `Purchase bill ${p.bill_no || '#' + p.id}`,
             debit: 0, credit: MONEY(p.grand_total)
@@ -117,14 +139,15 @@ function collectModuleRows(db) {
     // Counting both would double the same litres and the same rupees.
     let milk = [];
     try {
-        milk = db.prepare(`SELECT id, date, collection_no, party_id, milk_type, quantity_liters, rate, amount
+        milk = db.prepare(`SELECT id, date, accounting_date, collection_no, party_id, milk_type, quantity_liters, rate, amount
                            FROM milk_collections
                            WHERE party_id IS NOT NULL AND COALESCE(purchase_ref_id, 0) = 0`).all();
     } catch (e) { milk = []; }
     for (const m of milk) {
         add({
-            party_id: m.party_id, date: m.date, type: 'milk_collection',
-            source_table: 'milk_collections', source_id: m.id,
+            party_id: m.party_id, date: m.date,
+            accounting_date: m.accounting_date || m.date, type: 'milk_collection',
+            source_table: 'milk_collections', source_id: m.id, source_module: SOURCE_MODULE.milk_collection,
             reference: m.collection_no || '',
             particulars: `${cap(m.milk_type) || 'Milk'} milk ${trim(m.quantity_liters)} L @${trim(m.rate)}`,
             debit: 0, credit: MONEY(m.amount)
@@ -140,13 +163,76 @@ function collectModuleRows(db) {
         const side = paymentSide(p);
         if (!side) continue;
         add({
-            party_id: p.party_id, date: p.date, type: side.type,
-            source_table: 'payments', source_id: p.id,
+            party_id: p.party_id, date: p.date,
+            accounting_date: p.accounting_date || p.date,
+            type: side.type,
+            source_table: 'payments', source_id: p.id, source_module: SOURCE_MODULE[side.type] || 'Payment',
             reference: p.reference_type ? String(p.reference_type) : '',
             particulars: p.notes || side.label,
             debit: side.side === 'dr' ? MONEY(p.amount) : 0,
             credit: side.side === 'cr' ? MONEY(p.amount) : 0
         });
+    }
+
+    // ── Petty Cash ──────────────────────────────────────────────
+    // A voucher paid to a party is a payment on that party's account; an
+    // ADVANCE voucher is a receivable, not an expense. Read from the register
+    // itself so the statement always reflects the original record.
+    let petty = [];
+    try {
+        petty = db.prepare(`SELECT id, party_id, date, accounting_date, voucher_no,
+                                  expense_head, description, amount
+                             FROM petty_cash WHERE party_id IS NOT NULL`).all();
+    } catch (e) { petty = []; }
+    for (const pc of petty) {
+        const isAdvance = String(pc.expense_head || '').trim().toUpperCase() === 'ADVANCE';
+        add({
+            party_id: pc.party_id, date: pc.date,
+            accounting_date: pc.accounting_date || pc.date,
+            type: isAdvance ? 'advance' : 'payment',
+            source_table: 'petty_cash', source_id: pc.id, source_module: 'Petty Cash',
+            reference: pc.voucher_no || '',
+            particulars: `${isAdvance ? 'Advance paid' : 'Petty cash'} — ${pc.expense_head || ''}${pc.description ? ' — ' + pc.description : ''}`,
+            debit: MONEY(pc.amount), credit: 0
+        });
+    }
+
+    // ── Expenses ────────────────────────────────────────────────
+    // One expense bill (credit) and the part already paid (debit). A later
+    // payment settles the remainder through the Payment module; the expense
+    // itself is never posted a second time.
+    let expenses = [];
+    try {
+        expenses = db.prepare(`SELECT id, party_id, date, accounting_date, category,
+                                      expense_head, description, amount,
+                                      COALESCE(paid_amount, amount) AS paid_amount,
+                                      reference_no
+                                 FROM other_expenses WHERE party_id IS NOT NULL`).all();
+    } catch (e) { expenses = []; }
+    for (const ex of expenses) {
+        const income = String(ex.category || '').trim().toUpperCase() === 'INCOME';
+        if (income) continue;
+        add({
+            party_id: ex.party_id, date: ex.date,
+            accounting_date: ex.accounting_date || ex.date,
+            type: 'expense',
+            source_table: 'other_expenses', source_id: ex.id, source_module: 'Expenses',
+            reference: ex.reference_no || '',
+            particulars: `Expense — ${ex.expense_head || ex.category}${ex.description ? ' — ' + ex.description : ''}`,
+            debit: 0, credit: MONEY(ex.amount)
+        });
+        const paid = MONEY(ex.paid_amount);
+        if (paid > 0.005) {
+            add({
+                party_id: ex.party_id, date: ex.date,
+                accounting_date: ex.accounting_date || ex.date,
+                type: 'expense_payment',
+                source_table: 'other_expenses', source_id: ex.id, source_module: 'Expenses',
+                reference: ex.reference_no || '',
+                particulars: `Expense paid — ${ex.expense_head || ex.category}`,
+                debit: paid, credit: 0
+            });
+        }
     }
 
     return rows;
@@ -175,16 +261,19 @@ function getDerivedPartyLedger(db, { party_id, from_date, to_date } = {}) {
     const all = collectModuleRows(db).filter(r => Number(r.party_id) === Number(party_id));
     const storedOpening = MONEY(party.opening_balance);
 
-    const before = from_date ? all.filter(r => String(r.date) < String(from_date)) : [];
+    // Period membership is the ACCOUNTING date; the transaction date is shown
+    // separately on the statement.
+    const acctOf = (r) => String(r.accounting_date || r.date);
+    const before = from_date ? all.filter(r => acctOf(r) < String(from_date)) : [];
     const openingBf = round2(storedOpening + sumDr(before) - sumCr(before));
 
     let view = all.filter(r => {
-        if (from_date && String(r.date) < String(from_date)) return false;
-        if (to_date && String(r.date) > String(to_date)) return false;
+        if (from_date && acctOf(r) < String(from_date)) return false;
+        if (to_date && acctOf(r) > String(to_date)) return false;
         return true;
     });
     view = view.slice().sort((a, b) => {
-        const d = String(a.date).localeCompare(String(b.date));
+        const d = acctOf(a).localeCompare(acctOf(b));
         if (d !== 0) return d;
         const t = String(a.type).localeCompare(String(b.type));
         if (t !== 0) return t;
@@ -239,7 +328,7 @@ function getDerivedPartyBalances(db, { as_of_date, type, search } = {}) {
         });
     }
     for (const r of rows) {
-        if (as_of_date && String(r.date) > String(as_of_date)) continue;
+        if (as_of_date && String(r.accounting_date || r.date) > String(as_of_date)) continue;
         const acc = byParty.get(Number(r.party_id));
         if (!acc) continue;
         acc.debit = round2(acc.debit + (Number(r.debit) || 0));
@@ -329,6 +418,7 @@ function reconcileWithStoredLedger(db, { as_of_date } = {}) {
 
 module.exports = {
     SOURCE_LABEL,
+    SOURCE_MODULE,
     paymentSide,
     collectModuleRows,
     getDerivedPartyLedger,

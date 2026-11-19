@@ -2209,8 +2209,12 @@ async function editPaymentRecord(id) {
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Date *</label>
+                    <label>Transaction Date *</label>
                     <input type="date" class="form-control" id="editPayDate" value="${p.date}">
+                </div>
+                <div class="form-group">
+                    <label>Accounting / Effective Date</label>
+                    <input type="date" class="form-control" id="editPayAccountingDate" value="${p.accounting_date || p.date}">
                 </div>
                 <div class="form-group">
                     <label>Mode *</label>
@@ -2272,6 +2276,7 @@ async function savePaymentRecordEdit() {
     const data = {
         id: parseInt(id),
         date: document.getElementById('editPayDate')?.value || '',
+        accounting_date: document.getElementById('editPayAccountingDate')?.value || undefined,
         mode: document.getElementById('editPayMode')?.value || 'cash',
         transaction_type: document.getElementById('editPayType')?.value || '',
         notes: document.getElementById('editPayNotes')?.value || ''
@@ -2363,9 +2368,14 @@ function showPaymentEntryForm(defaultType) {
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Date *</label>
+                    <label>Transaction Date *</label>
                     <input type="date" class="form-control" id="payEntryDate" value="${today()}">
                 </div>
+            </div>
+            <div class="form-group">
+                <label>Accounting / Effective Date</label>
+                <input type="date" class="form-control" id="payEntryAccountingDate" value="${today()}">
+                <small style="color:var(--text-light)">The period this income/expense belongs to (e.g. October rent received in November). Defaults to the transaction date.</small>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -2462,6 +2472,7 @@ async function submitPaymentEntry() {
 
     const result = await window.api.savePayment({
         party_id: party.id, date, type,
+        accounting_date: document.getElementById('payEntryAccountingDate')?.value || undefined,
         transaction_type: typeName,
         amount, mode: document.getElementById('payEntryMode')?.value || 'cash',
         bank_account: document.getElementById('payEntryBankAccount')?.value?.trim() || '',

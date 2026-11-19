@@ -1022,6 +1022,20 @@ function runMigrations(db) {
         console.log('Migration 34 (prepaid expenses) skipped:', e34.message);
     }
 
+    // Migration 35: transaction date vs accounting / effective date. Adds the
+    // columns and backfills accounting_date from the existing date (never moves
+    // a historical amount to another month), and links petty-cash/expense
+    // payees to parties only on an exact unique name match.
+    try {
+        const { ensureAccountingDates } = require('./operations/accounting_dates');
+        const report = ensureAccountingDates(db);
+        if (report.added_columns.length || !report.already_current || report.totals) {
+            console.log('Accounting-date migration:', JSON.stringify(report));
+        }
+    } catch (e35) {
+        console.log('Migration 35 (accounting dates) skipped:', e35.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

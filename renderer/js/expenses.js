@@ -139,22 +139,31 @@ async function refreshExpenses() {
 
 function showAddExpense(existingData) {
     const todayStr = today();
-    const d = existingData || { date: todayStr, category: '', expense_head: '', description: '', amount: '', paid_to: '', payment_mode: 'cash', reference_no: '', remarks: '' };
+    const d = existingData || { date: todayStr, category: '', expense_head: '', description: '', amount: '', paid_amount: '', paid_to: '', payment_mode: 'cash', reference_no: '', remarks: '' };
+    // Party list for the paid-to box: an exact name links the expense to that
+    // party's statement (the backend refuses to guess a near match).
+    window.api.getParties({}).then(r => {
+        const dl = document.getElementById('exPartyList');
+        if (dl && r.success) {
+            dl.innerHTML = (r.data || []).map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.type || '')}</option>`).join('');
+        }
+    });
 
     showModal(`
         <div class="modal-header"><h2>${existingData ? 'Edit' : 'New'} Expense Entry</h2><button class="close-btn" onclick="closeModal()">&times;</button></div>
         <div class="modal-body">
             <div class="form-row">
-                <div class="form-group"><label>Date</label><input type="date" class="form-control" id="exDate" value="${d.date}"></div>
-                <div class="form-group"><label>Category *</label><input type="text" class="form-control" id="exCategoryVal" list="exCatList" value="${escapeHtml(d.category)}" placeholder="e.g., Office, Utility, Travel"></div>
+                <div class="form-group"><label>Transaction Date</label><input type="date" class="form-control" id="exDate" value="${d.date}"></div>
+                <div class="form-group"><label>Accounting / Effective Date</label><input type="date" class="form-control" id="exAccountingDate" value="${d.accounting_date || d.date}"></div>
             </div>
+            <div class="form-group"><label>Category *</label><input type="text" class="form-control" id="exCategoryVal" list="exCatList" value="${escapeHtml(d.category)}" placeholder="e.g., Office, Utility, Travel, Rent Received"></div>
             <div class="form-row">
                 <div class="form-group"><label>Expense Head *</label><input type="text" class="form-control" id="exHead" value="${escapeHtml(d.expense_head)}" placeholder="e.g., Electricity, Rent, Insurance"></div>
                 <div class="form-group"><label>Amount *</label><input type="number" class="form-control" id="exAmount" value="${d.amount}" step="0.01" min="0.01"></div>
             </div>
             <div class="form-group"><label>Description</label><input type="text" class="form-control" id="exDesc" value="${escapeHtml(d.description || '')}"></div>
             <div class="form-row">
-                <div class="form-group"><label>Paid To</label><input type="text" class="form-control" id="exPaidTo" value="${escapeHtml(d.paid_to || '')}"></div>
+                <div class="form-group"><label>Paid To (party / supplier)</label><input type="text" class="form-control" id="exPaidTo" list="exPartyList" value="${escapeHtml(d.paid_to || '')}" autocomplete="off"></div>
                 <div class="form-group"><label>Payment Mode</label>
                     <select class="form-control" id="exMode">
                         <option value="cash" ${d.payment_mode === 'cash' ? 'selected' : ''}>Cash</option>
@@ -165,10 +174,12 @@ function showAddExpense(existingData) {
                 </div>
             </div>
             <div class="form-row">
+                <div class="form-group"><label>Paid Now (Rs)</label><input type="number" class="form-control" id="exPaidAmount" value="${d.paid_amount != null ? d.paid_amount : d.amount}" min="0" step="0.01"><small style="color:var(--text-light)">Less than the amount = the rest is a payable.</small></div>
                 <div class="form-group"><label>Reference No</label><input type="text" class="form-control" id="exRef" value="${escapeHtml(d.reference_no || '')}"></div>
-                <div class="form-group"><label>Remarks</label><input type="text" class="form-control" id="exRemarks" value="${escapeHtml(d.remarks || '')}"></div>
             </div>
+            <div class="form-group"><label>Remarks</label><input type="text" class="form-control" id="exRemarks" value="${escapeHtml(d.remarks || '')}"></div>
         </div>
+        <datalist id="exPartyList"></datalist>
         <datalist id="exCatList">${(window._expenseCategories || []).map(c => `<option value="${escapeHtml(c.category)}">`).join('')}</datalist>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -181,10 +192,12 @@ async function saveExpenseEntry(id) {
     const data = {
         id: id || undefined,
         date: document.getElementById('exDate')?.value || '',
+        accounting_date: document.getElementById('exAccountingDate')?.value || undefined,
         category: document.getElementById('exCategoryVal')?.value || '',
         expense_head: document.getElementById('exHead')?.value || '',
         description: document.getElementById('exDesc')?.value || '',
         amount: parseFloat(document.getElementById('exAmount')?.value || 0),
+        paid_amount: document.getElementById('exPaidAmount')?.value === '' ? undefined : parseFloat(document.getElementById('exPaidAmount')?.value || 0),
         paid_to: document.getElementById('exPaidTo')?.value || '',
         payment_mode: document.getElementById('exMode')?.value || 'cash',
         reference_no: document.getElementById('exRef')?.value || '',

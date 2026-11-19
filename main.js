@@ -841,6 +841,19 @@ authHandle('db:payments:update', async (event, data) => {
     return safeRun(() => ops.updatePayment(db, data));
 });
 
+// Advance applied against a purchase bill: no cash moves, no second payment.
+authHandle('db:advances:allocate', async (event, data) => {
+    return safeRun(() => ops.applyAdvanceToPurchase(db, { ...data, created_by: (currentUser && currentUser.id) || null }));
+});
+
+authHandle('db:advances:allocations', async (event, params = {}) => {
+    return safeRun(() => ops.listAdvanceAllocations(db, params));
+});
+
+authHandle('db:dates:review', async () => {
+    return safeRun(() => ops.getDateReviewReport(db));
+});
+
 // --- Financial Reports (Profit/Loss, Stock Statement, Enhanced Daybook) ---
 authHandle('db:reports:profit-loss', async (event, params = {}) => {
     return safeRun(() => ops.getProfitLoss(db, params));

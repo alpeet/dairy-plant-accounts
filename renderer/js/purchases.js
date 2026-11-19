@@ -154,8 +154,12 @@ async function showPurchaseForm(purchaseId = null) {
                         <input type="text" class="form-control" name="bill_no" value="${escapeHtml(purchase ? purchase.bill_no : generateBillNo())}" required>
                     </div>
                     <div class="form-group">
-                        <label>Date</label>
+                        <label>Purchase Date</label>
                         <input type="date" class="form-control" name="date" value="${purchase ? purchase.date : today()}" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Accounting / Effective Date</label>
+                        <input type="date" class="form-control" name="accounting_date" value="${purchase ? (purchase.accounting_date || purchase.date) : today()}">
                     </div>
                 </div>
                 <div class="form-group">
@@ -380,6 +384,7 @@ async function savePurchase(purchaseId) {
         id: purchaseId || null,
         bill_no: formData.get('bill_no'),
         date: formData.get('date'),
+        accounting_date: formData.get('accounting_date') || formData.get('date'),
         party_id: parseInt(formData.get('party_id')),
         items,
         subtotal,

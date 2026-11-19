@@ -11,6 +11,7 @@
 const { logAudit } = require('./audit');
 const { round2 } = require('./accounting');
 const bsCalendar = require('../bs-calendar');
+const accountingDates = require('./accounting_dates');
 
 /**
  * List purchases with optional filters.
@@ -53,8 +54,15 @@ function savePurchase(db, purchaseData) {
     // made every report whose range started "before" it fail validation.
     const dateCheck = bsCalendar.validateBSDate(purchaseData && purchaseData.date);
     if (!dateCheck.valid) throw new Error('Purchase date: ' + dateCheck.reason);
+    // Purchase date = when the goods were bought; accounting date = the period
+    // the purchase is recognised in. Defaults to the purchase date and is
+    // stored independently from then on.
+    const dates = accountingDates.normalizeDates({
+        date: purchaseData.date,
+        accounting_date: purchaseData.accounting_date
+    });
     const trx = db.transaction(() => {
-        const { id, bill_no, date, party_id, items: rawItems, subtotal: _subtotal, discount: _discount, tax: _tax,
+        const { id, bill_no, party_id, items: rawItems, subtotal: _subtotal, discount: _discount, tax: _tax,
                 transport_charges: _transport, extra_charges: _extra, grand_total: _grandTotal, paid_amount: _paidAmount,
                 payment_mode, status, notes } = purchaseData;
         // D11 precision policy (req 39/40): new money writes are stored at
@@ -67,6 +75,7 @@ function savePurchase(db, purchaseData) {
         const extra_charges = round2(_extra);
         const grand_total = round2(_grandTotal);
         const paid_amount = round2(_paidAmount);
+        const { date, accounting_date } = dates;
         const items = (rawItems || []).map(it => ({
             ...it,
             rate: round2(it.rate),
@@ -96,8 +105,8 @@ function savePurchase(db, purchaseData) {
 
             // Update purchase record
             db.prepare(
-                "UPDATE purchases SET bill_no=?, date=?, party_id=?, subtotal=?, discount=?, tax=?, transport_charges=?, extra_charges=?, grand_total=?, paid_amount=?, payment_mode=?, status=?, notes=?, updated_at=datetime('now','localtime') WHERE id=?"
-            ).run(bill_no, date, party_id, subtotal, discount, tax,
+                "UPDATE purchases SET bill_no=?, date=?, accounting_date=?, accounting_date_source=?, party_id=?, subtotal=?, discount=?, tax=?, transport_charges=?, extra_charges=?, grand_total=?, paid_amount=?, payment_mode=?, status=?, notes=?, updated_at=datetime('now','localtime') WHERE id=?"
+            ).run(bill_no, date, accounting_date, dates.source, party_id, subtotal, discount, tax,
                   transport_charges || 0, extra_charges || 0,
                   grand_total, paid_amount, payment_mode, status, notes, id);
 
@@ -120,16 +129,16 @@ function savePurchase(db, purchaseData) {
             // Add ledger entry
             const outstanding = grand_total - paid_amount;
             db.prepare(
-                "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, 'purchase', ?, ?, ?, 0, ?)"
-            ).run(party_id, date, id, `Purchase Bill ${bill_no}`, grand_total, outstanding);
+                "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, ?, 'purchase', ?, ?, ?, 0, ?)"
+            ).run(party_id, date, accounting_date, id, `Purchase Bill ${bill_no}`, grand_total, outstanding);
 
             logAudit(db, 'purchases', id, 'update', oldPurchase, purchaseData, purchaseData.created_by);
             return { id };
         } else {
             // ── New purchase ──
             const result = db.prepare(
-                "INSERT INTO purchases (bill_no, date, party_id, subtotal, discount, tax, transport_charges, extra_charges, grand_total, paid_amount, payment_mode, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            ).run(bill_no, date, party_id, subtotal, discount, tax,
+                "INSERT INTO purchases (bill_no, date, accounting_date, accounting_date_source, party_id, subtotal, discount, tax, transport_charges, extra_charges, grand_total, paid_amount, payment_mode, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ).run(bill_no, date, accounting_date, dates.source, party_id, subtotal, discount, tax,
                   transport_charges || 0, extra_charges || 0,
                   grand_total, paid_amount, payment_mode, status, notes);
             const purchaseId = result.lastInsertRowid;
@@ -151,8 +160,8 @@ function savePurchase(db, purchaseData) {
 
             const outstanding = grand_total - paid_amount;
             db.prepare(
-                "INSERT INTO ledger_entries (party_id, date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, 'purchase', ?, ?, ?, 0, ?)"
-            ).run(party_id, date, purchaseId, `Purchase Bill ${bill_no}`, grand_total, outstanding);
+                "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, credit, debit, balance) VALUES (?, ?, ?, 'purchase', ?, ?, ?, 0, ?)"
+            ).run(party_id, date, accounting_date, purchaseId, `Purchase Bill ${bill_no}`, grand_total, outstanding);
 
             logAudit(db, 'purchases', purchaseId, 'create', null, purchaseData, purchaseData.created_by);
             return { id: purchaseId };

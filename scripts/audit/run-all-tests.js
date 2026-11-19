@@ -69,6 +69,7 @@ const MANIFEST = [
     // party ledger is derived from the owning modules (never a write target),
     // milk on a purchase bill counted once, rent typed as income not as a receipt
     'test-party-ledger-derived.js',
+    'test-accounting-dates.js',
     'test-excel-sync.js',
     'test-excel-import-routing.js',
     'test-expenses-routing.js',

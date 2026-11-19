@@ -12,6 +12,7 @@
 
 const { getDashboard } = require('./dashboard');
 const { globalSearch } = require('./search');
+const accountingDates = require('./accounting_dates');
 
 const {
     listParties, getParty, saveParty, deleteParty, getPartyLedger
@@ -45,7 +46,8 @@ const {
 
 const {
     savePayment, listPayments, deletePayment, updatePayment,
-    postPaymentLedger, normalizeTransactionType
+    postPaymentLedger, normalizeTransactionType,
+    ensureAdvanceAllocations, applyAdvanceToPurchase, listAdvanceAllocations
 } = require('./payments');
 
 const {
@@ -200,6 +202,7 @@ module.exports = {
     // Payments
     savePayment, listPayments, deletePayment, updatePayment,
     postPaymentLedger, normalizeTransactionType,
+    ensureAdvanceAllocations, applyAdvanceToPurchase, listAdvanceAllocations,
 
     // Reports
     getSalesReport, getPurchasesReport, getDaybook, getReceivables, getPayables,
@@ -391,6 +394,15 @@ module.exports = {
     getLoanAdvanceBalances: accounting.getLoanAdvanceBalances,
     getAdvanceRecoveryRegister: accounting.getAdvanceRecoveryRegister,
     TRANSACTION_TYPES: accounting.TRANSACTION_TYPES,
+
+    // Transaction date vs accounting / effective date: one migration and one
+    // audit for the whole app.
+    ensureAccountingDates: accountingDates.ensureAccountingDates,
+    normalizeDates: accountingDates.normalizeDates,
+    acctDateExpr: accountingDates.acctDateExpr,
+    getDateReviewReport: accountingDates.getDateReviewReport,
+    resolveParty: accountingDates.resolveParty,
+    ACCOUNTING_TABLES: accountingDates.ACCOUNTING_TABLES,
 
     // Bulk (date-wise) entry — Mode B data entry. Every row reuses
     // saveMilkCollection/savePurchase/saveSale, so validation, ledger, stock,

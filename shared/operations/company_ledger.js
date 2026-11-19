@@ -137,7 +137,8 @@ function getCompanyLedger(db, opts = {}) {
     const otherIncome = db.prepare(`
         SELECT id, date, reference_no, expense_head, description, amount
           FROM other_expenses
-         WHERE date >= ? AND date <= ? AND category = 'Income'
+         WHERE date >= ? AND date <= ?
+           AND UPPER(TRIM(COALESCE(category, ''))) IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
          ORDER BY date, id`).all(from, to);
     for (const r of otherIncome) {
         push({
@@ -207,7 +208,9 @@ function getCompanyLedger(db, opts = {}) {
     for (const r of db.prepare(`
         SELECT id, date, reference_no, category, expense_head, description, amount
           FROM other_expenses
-         WHERE date >= ? AND date <= ? AND category != 'Income' ORDER BY date, id`).all(from, to)) {
+         WHERE date >= ? AND date <= ?
+           AND UPPER(TRIM(COALESCE(category, ''))) NOT IN ('INCOME', 'OTHER INCOME', 'RENT RECEIVED', 'RENT INCOME', 'INTEREST RECEIVED')
+         ORDER BY date, id`).all(from, to)) {
         push({
             date: r.date, reference: r.reference_no || '', type: r.category || r.expense_head || 'Expense',
             particular: r.description || r.expense_head || 'Expense',

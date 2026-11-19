@@ -453,3 +453,22 @@ Full suite: **40/40 files**.
 Do not add `prepaid_rent_expense` to `getExpenseSummary().total_operating_expenses`.
 That total is the register figure every other report reconciles to (company ledger,
 expense analysis). The P&L adds the prepaid recognition itself, once.
+
+## Accounting / effective date (v1.4.58)
+
+* `shared/operations/accounting_dates.js` owns the two-date model:
+  `normalizeDates()` validates a transaction date and an optional accounting
+  date, `ensureAccountingDates()` adds the columns and backfills only empty
+  values from the stored transaction date, and `acctDateExpr(db, table, alias)`
+  returns the effective-date SQL used by P&L reports (falling back to `date` on
+  an unmigrated book, so no report crashes).
+* P&L / Expense Breakdown / income heads / purchase recognition read
+  `accounting_date`; Cash Book, Bank register, Cash Flow and payment history read
+  `date`. Changing one never rewrites the other.
+* Party statement = ledger rows + the petty-cash and expense rows the ledger does
+  not already carry (keyed by their tagged `PETTY:` / `EXPENSE:` ledger row).
+  It stays read-only and exposes both dates plus the source module.
+* `payments.reference_type = 'purchase' | 'expense'` settles that document
+  (`paid_amount` + status); deleting the payment reverses it.
+* `applyAdvanceToPurchase()` records an `advance_allocations` row and two tagged
+  ledger rows — the advance asset and the bill payable both fall, no cash moves.

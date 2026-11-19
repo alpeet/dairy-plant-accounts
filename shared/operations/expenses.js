@@ -14,6 +14,7 @@
 
 const { logAudit } = require('./audit');
 const { round2 } = require('./accounting');
+const accountingDates = require('./accounting_dates');
 // One expense vocabulary for the whole app (Phase 3). The Expenses screen
 // offers it as datalist suggestions so free-text categories converge on it.
 const { EXPENSE_CATEGORIES } = require('./management_reports');
@@ -24,6 +25,9 @@ const { EXPENSE_CATEGORIES } = require('./management_reports');
  * (read-only in this tab: they are managed from the Petty Cash register).
  */
 function listOtherExpenses(db, { from_date, to_date, category, expense_head } = {}) {
+    // Lazy migration (the app's existing pattern): a book opened by a tool that
+    // skipped initDatabase still gets the accounting-date / party columns.
+    try { accountingDates.ensureAccountingDates(db); } catch (e) { /* read-only book */ }
     let query = `
         SELECT oe.*, u.username as created_by_name, NULL as petty_cash_id
         FROM other_expenses oe LEFT JOIN users u ON oe.created_by = u.id
@@ -35,9 +39,14 @@ function listOtherExpenses(db, { from_date, to_date, category, expense_head } = 
     if (expense_head) { query += " AND (oe.expense_head LIKE ? OR oe.category LIKE ?)"; params.push(`%${expense_head}%`, `%${expense_head}%`); }
     query += " UNION ALL ";
     query += `
-        SELECT pc.id as id, pc.date as date, 'Petty Cash' as category,
+        SELECT pc.id as id, pc.date as date, pc.accounting_date as accounting_date,
+               pc.accounting_date_source as accounting_date_source,
+               'Petty Cash' as category,
                pc.expense_head as expense_head, pc.description as description,
-               pc.amount as amount, pc.paid_to as paid_to,
+               pc.amount as amount, pc.amount as paid_amount,
+               'paid' as payment_status, pc.party_id as party_id,
+               pc.party_review as party_review,
+               pc.paid_to as paid_to,
                pc.payment_mode as payment_mode, pc.voucher_no as reference_no,
                pc.remarks as remarks, pc.created_by as created_by,
                pc.created_at as created_at, pc.updated_at as updated_at,
@@ -64,35 +73,100 @@ function getOtherExpense(db, id) {
  * Save an expense entry (create or update).
  */
 function saveOtherExpense(db, data) {
+    // Expense date = when the cost was incurred; accounting date = the period
+    // it belongs to (rent received for October but banked in November).
+    const dates = accountingDates.normalizeDates({
+        date: data.date,
+        accounting_date: data.accounting_date
+    });
+    const amount = round2(data.amount);
+    const paidAmount = data.paid_amount === undefined || data.paid_amount === null || data.paid_amount === ''
+        ? amount
+        : round2(data.paid_amount);
+    if (paidAmount < -0.005 || paidAmount > amount + 0.005) {
+        throw new Error('Paid amount must be between 0 and the expense amount');
+    }
+    const paymentStatus = paidAmount <= 0.005 ? 'unpaid'
+        : (paidAmount + 0.005 >= amount ? 'paid' : 'partial');
+    const party = accountingDates.resolveParty(db, {
+        party_id: data.party_id,
+        paid_to: data.paid_to
+    });
+
     const trx = db.transaction(() => {
-        if (data.id) {
-            const oldEntry = db.prepare("SELECT * FROM other_expenses WHERE id = ?").get(data.id);
+        let id = data.id;
+        if (id) {
+            const oldEntry = db.prepare("SELECT * FROM other_expenses WHERE id = ?").get(id);
             db.prepare(`
-                UPDATE other_expenses SET date=?, category=?, expense_head=?, description=?,
-                    amount=?, paid_to=?, payment_mode=?, reference_no=?, remarks=?,
-                    updated_at=datetime('now','localtime')
+                UPDATE other_expenses SET date=?, accounting_date=?, accounting_date_source=?,
+                    category=?, expense_head=?, description=?, amount=?, paid_amount=?,
+                    payment_status=?, party_id=?, party_review=?, paid_to=?, payment_mode=?,
+                    reference_no=?, remarks=?, updated_at=datetime('now','localtime')
                 WHERE id=?
             `).run(
-                data.date, data.category, data.expense_head, data.description || '',
-                data.amount, data.paid_to || '', data.payment_mode || 'cash',
-                data.reference_no || '', data.remarks || '', data.id
+                dates.date, dates.accounting_date, dates.source,
+                data.category, data.expense_head, data.description || '',
+                amount, paidAmount, paymentStatus, party.party_id, party.review,
+                data.paid_to || '', data.payment_mode || 'cash',
+                data.reference_no || '', data.remarks || '', id
             );
-            logAudit(db, 'other_expenses', data.id, 'update', oldEntry, data, data.created_by);
-            return { id: data.id };
+            logAudit(db, 'other_expenses', id, 'update', oldEntry, data, data.created_by);
         } else {
             const result = db.prepare(`
-                INSERT INTO other_expenses (date, category, expense_head, description, amount, paid_to, payment_mode, reference_no, remarks, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO other_expenses (date, accounting_date, accounting_date_source,
+                    category, expense_head, description, amount, paid_amount, payment_status,
+                    party_id, party_review, paid_to, payment_mode, reference_no, remarks, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                data.date, data.category, data.expense_head, data.description || '',
-                data.amount, data.paid_to || '', data.payment_mode || 'cash',
+                dates.date, dates.accounting_date, dates.source,
+                data.category, data.expense_head, data.description || '',
+                amount, paidAmount, paymentStatus, party.party_id, party.review,
+                data.paid_to || '', data.payment_mode || 'cash',
                 data.reference_no || '', data.remarks || '', data.created_by || null
             );
-            logAudit(db, 'other_expenses', result.lastInsertRowid, 'create', null, data, data.created_by);
-            return { id: result.lastInsertRowid };
+            id = result.lastInsertRowid;
+            logAudit(db, 'other_expenses', id, 'create', null, data, data.created_by);
         }
+
+        // A party-linked expense posts to that party's account: the bill is the
+        // credit (payable), the money already paid is the debit (settlement).
+        // A later payment through the Payment module adds its own debit — the
+        // expense itself is never posted twice and never counted twice in P&L.
+        postExpenseLedger(db, id, {
+            party_id: party.party_id,
+            date: dates.date,
+            accounting_date: dates.accounting_date,
+            amount,
+            paid_amount: paidAmount,
+            head: data.expense_head,
+            reference_no: data.reference_no || '',
+            mode: data.payment_mode || 'cash',
+            category: data.category
+        });
+
+        return { id };
     });
     return trx();
+}
+
+/** Ledger rows for a party-linked expense (stable reference prefix 'EXPENSE:'). */
+function postExpenseLedger(db, expenseId, e) {
+    db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'adjustment' AND reference_id = ? AND description LIKE 'EXPENSE:%'")
+        .run(expenseId);
+    if (!e.party_id) return;
+    // Income rows are money in, never a supplier payable.
+    if (isIncomeCategory(e.category)) return;
+    const ref = e.reference_no ? ` ${e.reference_no}` : '';
+    db.prepare(
+        "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'adjustment', ?, ?, 0, ?, 0)"
+    ).run(e.party_id, e.date, e.accounting_date, expenseId,
+          `EXPENSE: ${e.head}${ref} (bill)`, e.amount);
+    if (e.paid_amount > 0.005) {
+        db.prepare(
+            "INSERT INTO ledger_entries (party_id, date, accounting_date, reference_type, reference_id, description, debit, credit, balance) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, 0, 0)"
+        ).run(e.party_id, e.date, e.accounting_date, expenseId,
+              `EXPENSE: ${e.head}${ref} (paid ${e.mode})`, e.paid_amount);
+    }
 }
 
 /**
@@ -103,12 +177,16 @@ function saveOtherExpense(db, data) {
 function deleteOtherExpense(db, id, changedBy = null) {
     const oldEntry = db.prepare("SELECT * FROM other_expenses WHERE id = ?").get(id);
     if (oldEntry) {
+        db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'adjustment' AND reference_id = ? AND description LIKE 'EXPENSE:%'")
+            .run(id);
         db.prepare("DELETE FROM other_expenses WHERE id = ?").run(id);
         logAudit(db, 'other_expenses', id, 'delete', oldEntry, null, changedBy);
         return { deleted: true };
     }
     const oldPc = db.prepare("SELECT * FROM petty_cash WHERE id = ?").get(id);
     if (oldPc) {
+        db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'adjustment' AND reference_id = ? AND description LIKE 'PETTY:%'")
+            .run(id);
         db.prepare("DELETE FROM petty_cash WHERE id = ?").run(id);
         logAudit(db, 'petty_cash', id, 'delete', oldPc, null, changedBy);
         return { deleted: true, petty_cash: true };
@@ -164,14 +242,20 @@ function isIncomeCategory(category) {
  * separately as `income_total` / `income_count`.
  */
 function getExpensesSummary(db, { from_date, to_date } = {}) {
+    try { accountingDates.ensureAccountingDates(db); } catch (e) { /* read-only book */ }
+    // Expense breakdown is accrual-based: the accounting date decides the
+    // period (see shared/operations/accounting_dates.js).
+    const oAcct = accountingDates.acctDateExpr(db, 'other_expenses');
+    const pcAcct = accountingDates.acctDateExpr(db, 'petty_cash');
     let query = `
         SELECT COALESCE(COUNT(*), 0) as count, COALESCE(SUM(amount), 0) as total FROM (
-            SELECT amount, date, category FROM other_expenses WHERE 1=1 AND NOT (${INCOME_CATEGORY_SQL})`;
+            SELECT amount, ${oAcct} AS date, category FROM other_expenses WHERE 1=1 AND NOT (${INCOME_CATEGORY_SQL})`;
     const params = [];
-    if (from_date) { query += " AND date >= ?"; params.push(from_date); }
-    if (to_date) { query += " AND date <= ?"; params.push(to_date); }            query += " UNION ALL SELECT amount, date, 'Petty Cash' as category FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'";
-    if (from_date) { query += " AND date >= ?"; params.push(from_date); }
-    if (to_date) { query += " AND date <= ?"; params.push(to_date); }
+    if (from_date) { query += ` AND ${oAcct} >= ?`; params.push(from_date); }
+    if (to_date) { query += ` AND ${oAcct} <= ?`; params.push(to_date); }
+    query += ` UNION ALL SELECT amount, ${pcAcct} AS date, 'Petty Cash' as category FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'`;
+    if (from_date) { query += ` AND ${pcAcct} >= ?`; params.push(from_date); }
+    if (to_date) { query += ` AND ${pcAcct} <= ?`; params.push(to_date); }
     query += `)
     `;
     const total = db.prepare(query).get(...params);
@@ -180,18 +264,18 @@ function getExpensesSummary(db, { from_date, to_date } = {}) {
     let incomeQuery = `SELECT COALESCE(COUNT(*), 0) as count, COALESCE(SUM(amount), 0) as total
         FROM other_expenses WHERE 1=1 AND (${INCOME_CATEGORY_SQL})`;
     const incomeParams = [];
-    if (from_date) { incomeQuery += " AND date >= ?"; incomeParams.push(from_date); }
-    if (to_date) { incomeQuery += " AND date <= ?"; incomeParams.push(to_date); }
+    if (from_date) { incomeQuery += ` AND ${oAcct} >= ?`; incomeParams.push(from_date); }
+    if (to_date) { incomeQuery += ` AND ${oAcct} <= ?`; incomeParams.push(to_date); }
     const income = db.prepare(incomeQuery).get(...incomeParams);
 
     let catQuery = `SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM (
-        SELECT category, amount, date FROM other_expenses WHERE 1=1 AND NOT (${INCOME_CATEGORY_SQL})`;
+        SELECT category, amount, ${oAcct} AS date FROM other_expenses WHERE 1=1 AND NOT (${INCOME_CATEGORY_SQL})`;
     const catParams = [];
-    if (from_date) { catQuery += " AND date >= ?"; catParams.push(from_date); }
-    if (to_date) { catQuery += " AND date <= ?"; catParams.push(to_date); }
-    catQuery += " UNION ALL SELECT 'Petty Cash' as category, amount, date FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'";
-    if (from_date) { catQuery += " AND date >= ?"; catParams.push(from_date); }
-    if (to_date) { catQuery += " AND date <= ?"; catParams.push(to_date); }
+    if (from_date) { catQuery += ` AND ${oAcct} >= ?`; catParams.push(from_date); }
+    if (to_date) { catQuery += ` AND ${oAcct} <= ?`; catParams.push(to_date); }
+    catQuery += ` UNION ALL SELECT 'Petty Cash' as category, amount, ${pcAcct} AS date FROM petty_cash WHERE UPPER(TRIM(COALESCE(expense_head, ''))) != 'ADVANCE'`;
+    if (from_date) { catQuery += ` AND ${pcAcct} >= ?`; catParams.push(from_date); }
+    if (to_date) { catQuery += ` AND ${pcAcct} <= ?`; catParams.push(to_date); }
     catQuery += " ) GROUP BY category ORDER BY total DESC";
     const byCategory = db.prepare(catQuery).all(...catParams);
 
