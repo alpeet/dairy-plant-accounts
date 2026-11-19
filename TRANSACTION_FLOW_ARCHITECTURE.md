@@ -67,7 +67,7 @@ There is **no** background timer, watcher or file-system listener. Nothing write
 | Advance / loan | Advances | `payments` (`transaction_type` advance/loan) | advances on the balance sheet | `Advance` |
 | Petty cash | Petty Cash | `petty_cash` | operating expenses | `PETTY CASH` |
 | Office expense | Expenses | `other_expenses` (non-income) | expense heads | `Expenses` |
-| Bank statement line | Bank Transactions | `bank_transactions` | bank reports only | `BANK RECON` |
+| Bank statement line | Bank Transactions | `bank_transactions` (+ `account_id` → `bank_accounts`) | that bank account's own statement and balance; all-account view keeps balances separate | `BANK RECON` |
 | Salary | Salary | `salary_records` | payroll reports | `Salary` |
 | Stock movement | automatic on sale/purchase/production | `stock_movements` | stock statement, COGS | none (derived in the workbook) |
 | Party statement | — (no storage) | — | `party_ledger.js` / `ledger_entries` | `Party_Ledger` (formula view) |

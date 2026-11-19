@@ -181,9 +181,19 @@ check(Math.abs(statement.total_debit - sumDebit) < 0.005, 'statement total debit
 check(Math.abs(statement.total_credit - sumCredit) < 0.005, 'statement total credit sums the bank rows', { statement: statement.total_credit, rows: sumCredit });
 check(Math.abs(statement.net - (sumCredit - sumDebit)) < 0.005, 'statement net is credit minus debit', statement.net);
 check(statement.entries.length === bankCount(), 'statement lists every bank row once', { entries: statement.entries.length, rows: bankCount() });
-const runningOk = statement.entries.every((r, i) => i === 0
-    || Math.abs(r.running_balance - (statement.entries[i - 1].running_balance + (r.credit || 0) - (r.debit || 0))) < 0.005);
-check(runningOk, 'running balance is continuous from the first row');
+// In the consolidated view every row carries ITS OWN account's running balance
+// — independent balances are the whole point of the multi-bank module — so the
+// series is continuous inside each account, not across the interleaved rows.
+const lastByAccount = new Map();
+let runningOk = true;
+for (const r of statement.entries) {
+    const prev = lastByAccount.get(r.account_id);
+    if (prev && Math.abs(r.running_balance - (prev.running_balance + (r.credit || 0) - (r.debit || 0))) >= 0.005) runningOk = false;
+    lastByAccount.set(r.account_id, r);
+}
+check(runningOk, 'running balance is continuous within each account');
+check(statement.entries.every(r => Number(r.account_id) > 0),
+    'every consolidated row names the account it belongs to');
 
 console.log('\n6) Source invariant — only bank.js may write bank rows');
 const WRITES_BANK = /(INSERT\s+INTO\s+bank_transactions|UPDATE\s+bank_transactions|DELETE\s+FROM\s+bank_transactions)/i;

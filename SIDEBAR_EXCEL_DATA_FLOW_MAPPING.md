@@ -33,7 +33,7 @@
 | Petty Cash | `petty_cash` | `PETTY CASH` | `petty_cash` | `petty_cash`, **`ledger_entries`** | **writes a ledger row** | Verified; sync added |
 | Expenses | `other_expenses` | `Expenses` (+ `Collection` for rent income) | `other_expenses` | `other_expenses`, **`ledger_entries`** | **writes a ledger row** | Verified; sync added |
 | Advances | `payments` (`transaction_type` advance/loan) | `Advance` | `payments`, `parties` | `payments`, **`ledger_entries`**, `petty_cash` (duplicate) | **writes a ledger row** | Verified; sync added |
-| Bank Transactions | `bank_transactions` | `BANK RECON` | `bank_transactions` | **`bank_transactions` only** | **none — enforced** | Verified (32-check restart suite); sync added |
+| Bank Transactions | `bank_transactions`, `bank_accounts` | `BANK RECON` | `bank_transactions`, `bank_accounts` | **`bank_transactions` + `bank_accounts` only** | **none — enforced** | Verified (33-check restart + 63-check multi-bank suites); sync added |
 | Salary | `salary_records`, `employees` | `Salary` | `salary_records`, `employees` | `salary_records`, **`ledger_entries`** | **writes a ledger row** | Verified; sync added |
 | Stock | `stock_movements`, `products` | none (derived) | `stock_movements`, `products` | `stock_movements` | none | Verified (report only) |
 | Stock Statement | *(computed)* | none | `stock_movements`, `products` | — | none | Verified (report only) |
@@ -85,6 +85,11 @@
 | `salary` | Salary | `Salary` | `SAL-<id>` | 12 |
 
 Measured by `node scripts/excel-sync.js` (dry run, read-only) against the live book.
+
+All 136 bank rows now carry an `account_id`: `PRARAMBHA` (113) and `Sushil QR` (23),
+taken from the bank name each row actually records. No row was reassigned by
+guesswork — a row with no usable bank name goes to `Unassigned / Existing Bank`
+and is flagged for review. See §6 of `DEVELOPMENT_HANDOVER.md`.
 
 ---
 

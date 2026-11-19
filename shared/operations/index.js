@@ -143,7 +143,12 @@ const {
     getBankStatement, saveBankTransaction, deleteBankTransaction, setBankMatch,
     setBankAccountingClass,
     postBankToLedger, importBankRows, findPartyByName, normalizeName,
-    bankRowClass, isNonPartyRow
+    bankRowClass, isNonPartyRow,
+    // multi-bank account master
+    ensureBankAccounts, migrateBankAccounts, listBankAccounts, getBankAccount,
+    saveBankAccount, setBankAccountStatus, deleteBankAccount, findBankAccount,
+    saveBankTransfer, reconcileBank, ACCOUNT_TYPES, TXN_CATEGORIES,
+    TXN_CATEGORY_LABELS, SYSTEM_ACCOUNT_NAME
 } = require('./bank');
 
 // ── Accounting core (money precision, account mapping, settlement, reconcile) ──
@@ -357,6 +362,13 @@ module.exports = {
     setBankAccountingClass,
     postBankToLedger, importBankRows, findPartyByName, normalizeName,
     bankRowClass, isNonPartyRow,
+
+    // Multi-bank account master (accounts, per-account statements, transfers,
+    // reconciliation). Bank rows stay standalone: nothing here posts anywhere.
+    ensureBankAccounts, migrateBankAccounts, listBankAccounts, getBankAccount,
+    saveBankAccount, setBankAccountStatus, deleteBankAccount, findBankAccount,
+    saveBankTransfer, reconcileBank, ACCOUNT_TYPES, TXN_CATEGORIES,
+    TXN_CATEGORY_LABELS, SYSTEM_ACCOUNT_NAME,
 
     // Accounting Core — ONE source of truth for precision, the debit/credit
     // account mapping, milk cost recognised once, bank-row classification,

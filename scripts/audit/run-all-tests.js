@@ -73,6 +73,7 @@ const MANIFEST = [
     'test-excel-import-routing.js',
     'test-expenses-routing.js',
     'test-profit-loss-rent.js',
+    'test-bank-accounts.js',
     // party statement item/quantity/rate detail + column set
     'test-statement-items.js',
     // every Monthly Report figure is traceable to its rows

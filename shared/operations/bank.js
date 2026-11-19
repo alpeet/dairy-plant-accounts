@@ -129,6 +129,8 @@ function ensureBankTable(db) {
     // Legacy rows are classified for display only. Healing never posts to or
     // creates a record in any other register.
     try { _healAccountingClass(db); } catch (e) { console.log('accounting_class heal error (non-fatal):', e.message); }
+    // Multi-bank master + account assignment for existing rows (idempotent).
+    try { ensureBankAccounts(db); } catch (e) { console.log('bank account migration error (non-fatal):', e.message); }
 }
 
 /**
@@ -249,18 +251,24 @@ function postBankToLedger(db, id) {
 /**
  * List bank transactions with optional filters.
  */
-function listBankTransactions(db, { from_date, to_date, search, match_status, bank_account } = {}) {
+function listBankTransactions(db, { from_date, to_date, search, match_status, bank_account, account_id, txn_category } = {}) {
     ensureBankTable(db);
     const where = [];
     const params = [];
-    if (from_date) { where.push('date >= ?'); params.push(from_date); }
-    if (to_date) { where.push('date <= ?'); params.push(to_date); }
-    if (search) { where.push('(counterparty_name LIKE ? OR description LIKE ? OR reference_no LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
-    if (match_status) { where.push('match_status = ?'); params.push(match_status); }
-    if (bank_account) { where.push('bank_account = ?'); params.push(bank_account); }
+    if (from_date) { where.push('b.date >= ?'); params.push(from_date); }
+    if (to_date) { where.push('b.date <= ?'); params.push(to_date); }
+    if (search) { where.push('(b.counterparty_name LIKE ? OR b.description LIKE ? OR b.reference_no LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (match_status) { where.push('b.match_status = ?'); params.push(match_status); }
+    if (bank_account) { where.push('b.bank_account = ?'); params.push(bank_account); }
+    if (account_id) { where.push('b.account_id = ?'); params.push(Number(account_id)); }
+    if (txn_category) { where.push('b.txn_category = ?'); params.push(txn_category); }
     const sql = `
-        SELECT b.*, '' AS party_name
+        SELECT b.*, '' AS party_name,
+               COALESCE(a.bank_name, '') AS account_name,
+               COALESCE(a.account_number, '') AS account_number,
+               COALESCE(a.status, '') AS account_status
         FROM bank_transactions b
+        LEFT JOIN bank_accounts a ON a.id = b.account_id
         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
         ORDER BY b.date, b.id
     `;
@@ -285,7 +293,12 @@ function getBankReviewQueue(db) {
  */
 function getBankTransaction(db, id) {
     ensureBankTable(db);
-    return db.prepare('SELECT b.*, \'\' AS party_name FROM bank_transactions b WHERE b.id = ?').get(id);
+    return db.prepare(`SELECT b.*, '' AS party_name,
+            COALESCE(a.bank_name, '') AS account_name,
+            COALESCE(a.account_number, '') AS account_number
+        FROM bank_transactions b
+        LEFT JOIN bank_accounts a ON a.id = b.account_id
+        WHERE b.id = ?`).get(id);
 }
 
 /**
@@ -297,9 +310,18 @@ function saveBankTransaction(db, data, userId = null) {
     const {
         id, date, reference_no, counterparty_name, description,
         debit, credit, payment_mode, bank_account, txn_type,
-        party_id, match_status, remarks
+        party_id, match_status, remarks, account_id, txn_category
     } = data || {};
     const amount = parseFloat(credit || 0) > 0 ? parseFloat(credit || 0) : (parseFloat(debit || 0) || 0);
+
+    // Every transaction belongs to one bank account. An explicit account is
+    // validated; a name that matches a real account is used; anything else goes
+    // to "Unassigned / Existing Bank" and is flagged — never guessed.
+    const acct = resolveAccountForRow(db, { account_id, bank_account, txn_type });
+    if (acct.error) return { success: false, error: acct.error };
+    const category = normalizeTxnCategory(txn_category, { txn_type, bank_account, description, debit, credit });
+    const accountText = String(bank_account || '').trim() || (acct.account ? acct.account.bank_name : '');
+    const review = acct.review ? 1 : 0;
     const cls = accounting.classifyBankRow({
         txn_type, description, counterparty_name, reference_no, remarks, debit, credit
     });
@@ -321,17 +343,22 @@ function saveBankTransaction(db, data, userId = null) {
         } else if (!uid || String(uid).startsWith('ref:')) {
             uid = _uidForContent(db, { date, debit, credit, counterparty_name, description, bank_account, txn_type, payment_mode }, id);
         }
+        // A transfer leg keeps its account: moving one side to another bank
+        // would leave the pair pointing at the wrong balances.
+        if (oldRow && oldRow.transfer_group && Number(oldRow.account_id) !== Number(acct.id)) {
+            return { success: false, error: 'This row is one side of an inter-bank transfer; its account cannot be changed. Delete the transfer and record it again.' };
+        }
         db.prepare(`
             UPDATE bank_transactions SET
                 date = ?, reference_no = ?, counterparty_name = ?, description = ?,
                 debit = ?, credit = ?, amount = ?, payment_mode = ?, bank_account = ?,
                 txn_type = ?, party_id = NULL, match_status = ?, accounting_class = ?, remarks = ?,
-                txn_uid = ?,
+                txn_uid = ?, account_id = ?, txn_category = ?, account_review = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
         `).run(date, reference_no || '', counterparty_name || '', description || '',
-              debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-              txn_type || '', status, cls, remarks || '', uid, id);
+              debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', accountText,
+              txn_type || '', status, cls, remarks || '', uid, acct.id, category, review, id);
         logAudit(db, 'bank_transactions', id, 'update', oldRow || null,
             getBankTransaction(db, id), userId);
         return { success: true, data: getBankTransaction(db, id), accounting_class: cls };
@@ -352,7 +379,9 @@ function saveBankTransaction(db, data, userId = null) {
            AND created_at >= datetime('now', 'localtime', '-10 seconds')
          LIMIT 1
     `).get(date, amount, reference_no || '', counterparty_name || '', description || '',
-           bank_account || '', txn_type || '');
+           // The row is stored with the ACCOUNT NAME (accountText), not the raw
+           // request value — compare like with like or a double-click inserts twice.
+           accountText, txn_type || '');
     if (recent) return { success: true, data: getBankTransaction(db, recent.id), accounting_class: cls, duplicate: true };
     const uid = refTrim
         ? `ref:${refTrim}`
@@ -361,11 +390,13 @@ function saveBankTransaction(db, data, userId = null) {
     const ins = db.prepare(`
         INSERT INTO bank_transactions
             (date, reference_no, counterparty_name, description, debit, credit, amount,
-             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class, remarks, created_by, txn_uid)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             payment_mode, bank_account, txn_type, party_id, match_status, accounting_class, remarks, created_by, txn_uid,
+             account_id, txn_category, account_review, recon_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unreconciled')
     `).run(date, reference_no || '', counterparty_name || '', description || '',
-           debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', bank_account || '',
-           txn_type || '', null, status, cls, remarks || '', userId, uid);
+           debit || 0, credit || 0, amount, payment_mode || 'QR/Bank', accountText,
+           txn_type || '', null, status, cls, remarks || '', userId, uid,
+           acct.id, category, review);
     const newId = Number(ins.lastInsertRowid);
     db.prepare(`UPDATE bank_transactions SET party_id = NULL, ledger_posted = 0, ledger_entry_id = NULL WHERE id = ?`).run(newId);
     logAudit(db, 'bank_transactions', newId, 'create', null, getBankTransaction(db, newId), userId);
@@ -379,6 +410,19 @@ function deleteBankTransaction(db, id, userId = null) {
     ensureBankTable(db);
     const txn = db.prepare('SELECT * FROM bank_transactions WHERE id = ?').get(id);
     if (!txn) return { success: false, error: 'Bank transaction not found' };
+    // One half of an inter-bank transfer is never deleted alone: the pair is
+    // one movement, so both legs go together and both accounts stay correct.
+    const group = String(txn.transfer_group || '');
+    if (group) {
+        const pair = db.prepare('SELECT * FROM bank_transactions WHERE transfer_group = ?').all(group);
+        db.transaction(() => {
+            for (const row of pair) {
+                db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(row.id);
+                logAudit(db, 'bank_transactions', row.id, 'delete', row, null, userId);
+            }
+        })();
+        return { success: true, deleted: pair.length, transfer: true };
+    }
     db.prepare('DELETE FROM bank_transactions WHERE id = ?').run(id);
     logAudit(db, 'bank_transactions', id, 'delete', txn, null, userId);
     return { success: true };
@@ -412,23 +456,6 @@ function setBankAccountingClass(db, id, accounting_class, userId = null) {
     const after = getBankTransaction(db, id);
     logAudit(db, 'bank_transactions', id, 'update', oldRow, after, userId);
     return { success: true, data: after };
-}
-
-/**
- * Bank statement with running balance (optionally per account).
- */
-function getBankStatement(db, { bank_account, from_date, to_date } = {}) {
-    ensureBankTable(db);
-    const rows = listBankTransactions(db, { bank_account, from_date, to_date });
-    const total_debit = rows.reduce((s, r) => s + (r.debit || 0), 0);
-    const total_credit = rows.reduce((s, r) => s + (r.credit || 0), 0);
-    return {
-        entries: rows,
-        total_debit,
-        total_credit,
-        net: total_credit - total_debit,
-        closing_balance: rows.length ? rows[rows.length - 1].running_balance : 0
-    };
 }
 
 /**
@@ -545,11 +572,472 @@ function importBankRows(db, rows) {
         }
     });
     doImport();
+    // Give the imported rows their account right away (or the review bucket)
+    // instead of leaving them unassigned until the next screen load.
+    try { migrateBankAccounts(db); } catch (e) { /* assigned on next open */ }
     return report;
+}
+
+// ══════════════════════════════════════════════════════════════
+// MULTI-BANK ACCOUNT MASTER
+// ══════════════════════════════════════════════════════════════
+
+const round2 = accounting.round2;
+
+const ACCOUNT_TYPES = ['Current', 'Savings', 'Other'];
+const SYSTEM_ACCOUNT_NAME = 'Unassigned / Existing Bank';
+const RECON_STATUSES = ['unreconciled', 'reconciled', 'disputed'];
+const TXN_CATEGORIES = ['deposit', 'withdrawal', 'bank_charge', 'interest', 'transfer_in', 'transfer_out', 'other'];
+
+const TXN_CATEGORY_LABELS = {
+    deposit: 'Deposit', withdrawal: 'Withdrawal', bank_charge: 'Bank Charge',
+    interest: 'Interest', transfer_in: 'Transfer In', transfer_out: 'Transfer Out', other: 'Other'
+};
+
+// Values the workbook import left in `bank_account`: they are CLASSIFICATIONS,
+// never account names. Used by the migration so a classification can never be
+// mistaken for a bank.
+const CLASSIFICATION_VALUES = new Set([
+    '', 'advance', 'customer collection', 'supplier payment', 'expenses', 'expense',
+    'transfer between own accounts', 'bank charge', 'unclassified', 'other'
+]);
+
+// The import also leaves transaction KINDS in the type column (for example
+// "Bank Deposit (own)"). None of these can be a bank name, so the migration
+// must never invent an account from one — those rows go to the review bucket.
+const TXN_KIND_WORDS = /\b(deposit|withdrawal|withdraw|transfer|expense|expenses|collection|payment|charge|interest|advance|cash)\b/i;
+
+const ACCOUNT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS bank_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_name TEXT NOT NULL DEFAULT '',
+    branch_name TEXT DEFAULT '',
+    account_holder TEXT DEFAULT '',
+    account_number TEXT DEFAULT '',
+    account_type TEXT DEFAULT 'Current' CHECK(account_type IN ('Current', 'Savings', 'Other')),
+    opening_balance REAL DEFAULT 0.0,
+    opening_balance_date TEXT DEFAULT '',
+    status TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
+    remarks TEXT DEFAULT '',
+    is_system INTEGER DEFAULT 0,
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_accounts_number ON bank_accounts(account_number) WHERE account_number <> '';
+CREATE INDEX IF NOT EXISTS idx_bank_accounts_name ON bank_accounts(bank_name);
+`;
+
+/**
+ * Create the account master and add the account columns to an existing
+ * `bank_transactions` table, then migrate legacy rows once. Safe to call on
+ * every start: every step is idempotent and no row is ever deleted.
+ */
+function ensureBankAccounts(db) {
+    db.exec(ACCOUNT_SCHEMA);
+    try { db.exec('ALTER TABLE bank_transactions ADD COLUMN account_id INTEGER DEFAULT NULL'); } catch (e) { /* ok */ }
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN txn_category TEXT DEFAULT ''"); } catch (e) { /* ok */ }
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN transfer_group TEXT DEFAULT ''"); } catch (e) { /* ok */ }
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN recon_status TEXT DEFAULT 'unreconciled'"); } catch (e) { /* ok */ }
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN recon_date TEXT DEFAULT ''"); } catch (e) { /* ok */ }
+    try { db.exec("ALTER TABLE bank_transactions ADD COLUMN recon_remarks TEXT DEFAULT ''"); } catch (e) { /* ok */ }
+    try { db.exec('ALTER TABLE bank_transactions ADD COLUMN account_review INTEGER DEFAULT 0'); } catch (e) { /* ok */ }
+    try { db.exec('CREATE INDEX IF NOT EXISTS idx_bank_transactions_account ON bank_transactions(account_id)'); } catch (e) { /* ok */ }
+    const report = migrateBankAccounts(db);
+    return report;
+}
+
+/** Look an account up by its number, or by its name (case-insensitive). */
+function findBankAccount(db, value) {
+    const v = String(value || '').trim();
+    if (!v) return null;
+    return db.prepare(
+        `SELECT * FROM bank_accounts WHERE account_number = ? OR UPPER(TRIM(bank_name)) = UPPER(TRIM(?))
+         ORDER BY CASE WHEN account_number = ? THEN 0 ELSE 1 END, id LIMIT 1`
+    ).get(v, v, v) || null;
+}
+
+/** The system bucket every row with an unknown bank goes to. Never guessed. */
+function systemAccountId(db) {
+    const row = db.prepare('SELECT id FROM bank_accounts WHERE is_system = 1 ORDER BY id LIMIT 1').get();
+    if (row) return row.id;
+    const info = db.prepare(
+        `INSERT INTO bank_accounts (bank_name, account_type, opening_balance, status, is_system, remarks)
+         VALUES (?, 'Other', 0, 'Active', 1, ?)`
+    ).run(SYSTEM_ACCOUNT_NAME, 'Existing transactions whose bank was not recorded. Reassign them from the Bank Transactions screen once the bank is known.');
+    return Number(info.lastInsertRowid);
+}
+
+/**
+ * Account name a legacy row actually carries.
+ *
+ * The workbook's "Bank Account" column (index 11) reached `txn_type`, while the
+ * Classification column (index 10) reached `bank_account`. The app's own form
+ * wrote the opposite way. Both orders are therefore tried, and a value that is
+ * a known classification is never treated as a bank name.
+ * @private
+ */
+function legacyAccountName(row) {
+    for (const raw of [row && row.txn_type, row && row.bank_account]) {
+        const v = String(raw || '').trim();
+        if (v && !CLASSIFICATION_VALUES.has(v.toLowerCase())) return v;
+    }
+    return '';
+}
+
+/**
+ * One-time, idempotent assignment of existing transactions to accounts.
+ *
+ * A bank named on the row is used as-is (never guessed); a row with no usable
+ * bank name goes to "Unassigned / Existing Bank" and is flagged for review.
+ * No row is edited except to fill account_id / txn_category / the review flag,
+ * and no amount, date or text is changed.
+ */
+function migrateBankAccounts(db) {
+    const report = { created: [], assigned: 0, unassigned: 0, already: 0, flagged: 0 };
+    const pending = db.prepare('SELECT * FROM bank_transactions WHERE account_id IS NULL ORDER BY id').all();
+    if (pending.length === 0) return report;
+
+    // updated_at is deliberately NOT touched: the migration must leave every
+    // historical row byte-identical apart from the account link itself.
+    const upd = db.prepare(
+        `UPDATE bank_transactions SET account_id = ?, txn_category = CASE WHEN COALESCE(txn_category,'') = '' THEN ? ELSE txn_category END,
+            account_review = ? WHERE id = ?`
+    );
+    const run = db.transaction(() => {
+        for (const row of pending) {
+            const name = legacyAccountName(row);
+            let account = name ? findBankAccount(db, name) : null;
+            let review = 0;
+            // An existing account is always reused; a NEW one is only created
+            // from something that reads like a bank, never from a transaction
+            // kind such as "Bank Deposit (own)".
+            if (name && !account && !TXN_KIND_WORDS.test(name)) {
+                const info = db.prepare(
+                    `INSERT INTO bank_accounts (bank_name, account_type, opening_balance, status, remarks)
+                     VALUES (?, 'Current', 0, 'Active', ?)`
+                ).run(name, 'Created from existing bank transactions. Set the branch, number and opening balance, then confirm them against the bank statement.');
+                account = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(info.lastInsertRowid);
+                report.created.push(name);
+            }
+            if (!account) { review = 1; report.unassigned++; report.flagged++; }
+            else report.assigned++;
+            const accountId = account ? account.id : systemAccountId(db);
+            upd.run(accountId, deriveTxnCategory(row), review, row.id);
+        }
+    });
+    run();
+    return report;
+}
+
+/** Transaction type implied by a legacy row's own wording. */
+function deriveTxnCategory(row) {
+    const text = [row && row.txn_type, row && row.bank_account, row && row.description].join(' ').toUpperCase();
+    if (/BANK\s*CHARGE|SERVICE\s*CHARGE|SMS\s*CHARGE|TRANSFER\s*CHARGE/.test(text)) return 'bank_charge';
+    if (/INTEREST/.test(text)) return 'interest';
+    if (/TRANSFER\s*BETWEEN|OWN\s*ACCOUNT/.test(text)) return (Number(row.debit) || 0) > 0 ? 'transfer_out' : 'transfer_in';
+    return (Number(row.credit) || 0) > 0 ? 'deposit' : 'withdrawal';
+}
+
+/** Normalise a requested type; unknown values fall back to the direction. */
+function normalizeTxnCategory(value, row = {}) {
+    const v = String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
+    if (TXN_CATEGORIES.includes(v)) return v;
+    return deriveTxnCategory(row);
+}
+
+/** All accounts, each with its own balance (never one combined figure). */
+function listBankAccounts(db, { include_inactive = false } = {}) {
+    ensureBankAccounts(db);
+    const rows = db.prepare(`
+        SELECT a.*,
+               (SELECT COUNT(*) FROM bank_transactions t WHERE t.account_id = a.id) AS tx_count,
+               (SELECT COALESCE(SUM(t.credit - t.debit), 0) FROM bank_transactions t WHERE t.account_id = a.id) AS movement
+        FROM bank_accounts a
+        ${include_inactive ? '' : "WHERE a.status = 'Active'"}
+        ORDER BY a.is_system, a.bank_name, a.account_number, a.id
+    `).all();
+    return rows.map(a => ({ ...a, current_balance: round2((a.opening_balance || 0) + (a.movement || 0)) }));
+}
+
+function getBankAccount(db, id) {
+    ensureBankAccounts(db);
+    const a = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(id);
+    if (!a) return null;
+    const mv = db.prepare('SELECT COALESCE(SUM(credit - debit), 0) m, COUNT(*) n FROM bank_transactions WHERE account_id = ?').get(a.id);
+    return { ...a, movement: round2(mv.m), tx_count: mv.n, current_balance: round2((a.opening_balance || 0) + mv.m) };
+}
+
+/** Create or update a bank account (audited). Duplicate numbers are rejected. */
+function saveBankAccount(db, data = {}, userId = null) {
+    ensureBankAccounts(db);
+    const { id, bank_name, branch_name, account_holder, account_number, account_type,
+        opening_balance, opening_balance_date, status, remarks } = data;
+
+    const name = String(bank_name || '').trim();
+    if (!name) return { success: false, error: 'Bank name is required' };
+    const type = ACCOUNT_TYPES.includes(String(account_type)) ? String(account_type) : 'Current';
+    const state = String(status || 'Active') === 'Inactive' ? 'Inactive' : 'Active';
+    const number = String(account_number || '').trim();
+    const opening = round2(Number(opening_balance) || 0);
+    const openingDate = String(opening_balance_date || '').trim();
+    if (openingDate) {
+        const { validateBSDate } = require('../bs-calendar');
+        const check = validateBSDate(openingDate);
+        if (!check.valid) return { success: false, error: 'Opening balance date: ' + check.reason };
+    }
+    if (number) {
+        const clash = db.prepare('SELECT id FROM bank_accounts WHERE account_number = ? AND id != ?')
+            .get(number, id || 0);
+        if (clash) return { success: false, error: `Account number ${number} is already used by account #${clash.id}` };
+    }
+
+    if (id) {
+        const old = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(id);
+        if (!old) return { success: false, error: 'Bank account not found' };
+        db.prepare(`
+            UPDATE bank_accounts SET bank_name = ?, branch_name = ?, account_holder = ?, account_number = ?,
+                account_type = ?, opening_balance = ?, opening_balance_date = ?, status = ?, remarks = ?,
+                updated_at = datetime('now','localtime') WHERE id = ?
+        `).run(name, String(branch_name || '').trim(), String(account_holder || '').trim(), number,
+               type, opening, openingDate, state, String(remarks || '').trim(), id);
+        logAudit(db, 'bank_accounts', id, 'update', old, getBankAccount(db, id), userId);
+        return { success: true, data: getBankAccount(db, id) };
+    }
+
+    const info = db.prepare(`
+        INSERT INTO bank_accounts (bank_name, branch_name, account_holder, account_number, account_type,
+            opening_balance, opening_balance_date, status, remarks, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(name, String(branch_name || '').trim(), String(account_holder || '').trim(), number,
+           type, opening, openingDate, state, String(remarks || '').trim(), userId);
+    const newId = Number(info.lastInsertRowid);
+    logAudit(db, 'bank_accounts', newId, 'create', null, getBankAccount(db, newId), userId);
+    return { success: true, data: getBankAccount(db, newId) };
+}
+
+/** Activate / deactivate. History is never touched. */
+function setBankAccountStatus(db, id, status, userId = null) {
+    ensureBankAccounts(db);
+    const old = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(id);
+    if (!old) return { success: false, error: 'Bank account not found' };
+    const state = String(status) === 'Inactive' ? 'Inactive' : 'Active';
+    db.prepare("UPDATE bank_accounts SET status = ?, updated_at = datetime('now','localtime') WHERE id = ?")
+        .run(state, id);
+    logAudit(db, 'bank_accounts', id, 'update', old, getBankAccount(db, id), userId);
+    return { success: true, data: getBankAccount(db, id) };
+}
+
+/**
+ * Delete an account ONLY when it has no transactions. An account with history
+ * is deactivated instead, so no statement row can ever be orphaned.
+ */
+function deleteBankAccount(db, id, userId = null) {
+    ensureBankAccounts(db);
+    const old = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(id);
+    if (!old) return { success: false, error: 'Bank account not found' };
+    const used = db.prepare('SELECT COUNT(*) n FROM bank_transactions WHERE account_id = ?').get(id).n;
+    if (used > 0) {
+        return {
+            success: false, used,
+            error: `This account has ${used} transaction(s) — it cannot be deleted. Set it to Inactive instead; the history stays available.`
+        };
+    }
+    if (old.is_system) return { success: false, error: 'The "Unassigned / Existing Bank" account is required and cannot be deleted.' };
+    db.prepare('DELETE FROM bank_accounts WHERE id = ?').run(id);
+    logAudit(db, 'bank_accounts', id, 'delete', old, null, userId);
+    return { success: true };
+}
+
+/**
+ * Resolve the account a transaction belongs to, without ever guessing:
+ * an explicit id wins; a name that matches a real account is used; anything
+ * else is parked in the system bucket and flagged for review.
+ * @private
+ */
+function resolveAccountForRow(db, { account_id, bank_account, txn_type } = {}) {
+    if (account_id) {
+        const a = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(account_id);
+        if (!a) return { error: 'Bank account not found' };
+        return { id: a.id, account: a, review: 0 };
+    }
+    const name = String(bank_account || '').trim()
+        || (CLASSIFICATION_VALUES.has(String(txn_type || '').trim().toLowerCase()) ? '' : String(txn_type || '').trim());
+    const found = name ? findBankAccount(db, name) : null;
+    if (found) return { id: found.id, account: found, review: 0 };
+    return { id: systemAccountId(db), account: db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(systemAccountId(db)), review: 1 };
+}
+
+/**
+ * Bank statement. One account → its own opening balance and running balance.
+ * All accounts → per-account sections with their own balances; the totals are
+ * reported separately and never merged into one misleading bank balance.
+ */
+function getBankStatement(db, { account_id, from_date, to_date, txn_category, search, bank_account } = {}) {
+    ensureBankTable(db);
+    const accounts = listBankAccounts(db, { include_inactive: true });
+    const inRange = (r) => (!from_date || r.date >= from_date) && (!to_date || r.date <= to_date);
+    const matches = (r) => (!txn_category || (r.txn_category || '') === txn_category)
+        && (!search || [r.reference_no, r.description, r.counterparty_name].some(v => String(v || '').toLowerCase().includes(String(search).toLowerCase())));
+
+    const rowsFor = (accountId) => db.prepare(
+        `SELECT * FROM bank_transactions WHERE account_id = ? ORDER BY date, id`
+    ).all(accountId);
+
+    const runAccount = (account) => {
+        const all = rowsFor(account.id);
+        const before = all.filter(r => from_date && r.date < from_date);
+        const opening = round2((account.opening_balance || 0)
+            + before.reduce((s, r) => s + (r.credit || 0) - (r.debit || 0), 0));
+        let running = opening;
+        const entries = [];
+        for (const r of all.filter(inRange)) {
+            running = round2(running + (r.credit || 0) - (r.debit || 0));
+            if (!matches(r)) continue;
+            entries.push({
+                ...r, running_balance: running,
+                account_name: account.bank_name, account_number: account.account_number,
+                account_label: account.bank_name + (account.account_number ? ' — ' + account.account_number : '')
+            });
+        }
+        const debits = round2(entries.reduce((s, r) => s + (r.debit || 0), 0));
+        const credits = round2(entries.reduce((s, r) => s + (r.credit || 0), 0));
+        return {
+            account: { id: account.id, bank_name: account.bank_name, account_number: account.account_number,
+                branch_name: account.branch_name, account_type: account.account_type, status: account.status,
+                is_system: account.is_system, tx_count: account.tx_count },
+            opening_balance: opening, total_debit: debits, total_credit: credits,
+            closing_balance: round2(opening + credits - debits), entries
+        };
+    };
+
+    if (account_id) {
+        const account = accounts.find(a => Number(a.id) === Number(account_id));
+        if (!account) return { success: false, error: 'Bank account not found', entries: [], total_debit: 0, total_credit: 0, closing_balance: 0 };
+        const s = runAccount(account);
+        return {
+            success: true, mode: 'account', ...s,
+            net: round2(s.total_credit - s.total_debit),
+            from_date, to_date, accounts
+        };
+    }
+
+    // An account with no history at all (typically the empty review bucket) is
+    // not a bank balance and is left out of the consolidated view. Accounts
+    // whose rows merely fall outside the period stay, with their balance.
+    const per = accounts
+        .filter(a => (a.tx_count || 0) > 0 || round2(a.opening_balance) !== 0)
+        .map(runAccount);
+    const entries = per.flatMap(p => p.entries)
+        .sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
+    const total_debit = round2(per.reduce((s, p) => s + p.total_debit, 0));
+    const total_credit = round2(per.reduce((s, p) => s + p.total_credit, 0));
+    return {
+        success: true, mode: 'all', entries, total_debit, total_credit,
+        net: round2(total_credit - total_debit),
+        // Per-account balances stay separate on purpose: adding bank balances
+        // together hides which bank holds what.
+        accounts: per.map(p => ({ ...p.account, opening_balance: p.opening_balance, total_debit: p.total_debit,
+            total_credit: p.total_credit, closing_balance: p.closing_balance })),
+        closing_by_account: per.map(p => ({ account_id: p.account.id, label: p.account.bank_name + (p.account.account_number ? ' — ' + p.account.account_number : ''), closing_balance: p.closing_balance })),
+        from_date, to_date
+    };
+}
+
+/**
+ * Inter-bank transfer: TWO linked rows (debit source, credit destination).
+ * Money moving between the company's own accounts is never income or expense.
+ */
+function saveBankTransfer(db, data = {}, userId = null) {
+    ensureBankAccounts(db);
+    const fromId = Number(data.from_account_id);
+    const toId = Number(data.to_account_id);
+    const amount = round2(Number(data.amount) || 0);
+    const date = String(data.date || '').trim();
+    if (!fromId || !toId) return { success: false, error: 'Select both the source and the destination account' };
+    if (fromId === toId) return { success: false, error: 'Source and destination must be different accounts' };
+    if (!(amount > 0)) return { success: false, error: 'Amount must be greater than zero' };
+    if (!date) return { success: false, error: 'Date is required' };
+    const from = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(fromId);
+    const to = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(toId);
+    if (!from || !to) return { success: false, error: 'Bank account not found' };
+    if (from.status === 'Inactive' || to.status === 'Inactive') return { success: false, error: 'Both accounts must be Active' };
+
+    const group = 'tr:' + Date.now().toString(36) + ':' + Math.random().toString(36).slice(2, 8);
+    const reference = String(data.reference_no || '').trim();
+    const remarks = String(data.remarks || '').trim();
+    const insert = db.prepare(`
+        INSERT INTO bank_transactions
+            (date, reference_no, counterparty_name, description, debit, credit, amount, payment_mode,
+             bank_account, txn_type, party_id, match_status, accounting_class, remarks, created_by,
+             txn_uid, account_id, txn_category, transfer_group, recon_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'none', ?, ?, ?, ?, ?, ?, ?, 'unreconciled')
+    `);
+    const fromLabel = from.bank_name + (from.account_number ? ' — ' + from.account_number : '');
+    const toLabel = to.bank_name + (to.account_number ? ' — ' + to.account_number : '');
+
+    const run = db.transaction(() => {
+        const outInfo = insert.run(date, reference, to.bank_name, `Transfer to ${toLabel}`, amount, 0, amount,
+            'Bank', from.bank_name, 'Transfer Between Own Accounts', 'cash_to_bank_transfer', remarks, userId,
+            `${group}#out`, from.id, 'transfer_out', group);
+        const inInfo = insert.run(date, reference, from.bank_name, `Transfer from ${fromLabel}`, 0, amount, amount,
+            'Bank', to.bank_name, 'Transfer Between Own Accounts', 'cash_to_bank_transfer', remarks, userId,
+            `${group}#in`, to.id, 'transfer_in', group);
+        const out = getBankTransaction(db, Number(outInfo.lastInsertRowid));
+        const inn = getBankTransaction(db, Number(inInfo.lastInsertRowid));
+        logAudit(db, 'bank_transactions', out.id, 'create', null, out, userId);
+        logAudit(db, 'bank_transactions', inn.id, 'create', null, inn, userId);
+        return { out, in: inn };
+    });
+    const pair = run();
+    return {
+        success: true, transfer_group: group, amount,
+        from: pair.out, to: pair.in,
+        note: 'Two linked rows. Money between your own accounts — never income or expense.'
+    };
+}
+
+/**
+ * Reconciliation status / remarks on existing rows. Never changes an amount,
+ * date, account or description — a reconciliation marker only.
+ */
+function reconcileBank(db, data = {}, userId = null) {
+    ensureBankAccounts(db);
+    const status = RECON_STATUSES.includes(String(data.status)) ? String(data.status) : 'reconciled';
+    const remarks = String(data.remarks || '').trim();
+    const reconDate = String(data.recon_date || data.date || '').trim();
+    let ids = Array.isArray(data.ids) ? data.ids.map(Number).filter(Boolean) : [];
+    if (ids.length === 0) {
+        const where = [];
+        const params = [];
+        if (data.account_id) { where.push('account_id = ?'); params.push(Number(data.account_id)); }
+        if (data.from_date) { where.push('date >= ?'); params.push(data.from_date); }
+        if (data.to_date) { where.push('date <= ?'); params.push(data.to_date); }
+        if (where.length === 0) return { success: false, error: 'Choose an account or a date range to reconcile' };
+        ids = db.prepare(`SELECT id FROM bank_transactions WHERE ${where.join(' AND ')}`).all(...params).map(r => r.id);
+    }
+    const get = db.prepare('SELECT * FROM bank_transactions WHERE id = ?');
+    const upd = db.prepare(`UPDATE bank_transactions SET recon_status = ?, recon_date = ?, recon_remarks = ?,
+        updated_at = datetime('now','localtime') WHERE id = ?`);
+    let changed = 0;
+    db.transaction(() => {
+        for (const id of ids) {
+            const old = get.get(id);
+            if (!old) continue;
+            upd.run(status, reconDate, remarks, id);
+            logAudit(db, 'bank_transactions', id, 'update', old, get.get(id), userId);
+            changed++;
+        }
+    })();
+    return { success: true, updated: changed, status, remarks };
 }
 
 module.exports = {
     ensureBankTable,
+    ACCOUNT_TYPES, TXN_CATEGORIES, TXN_CATEGORY_LABELS, SYSTEM_ACCOUNT_NAME,
+    ensureBankAccounts, migrateBankAccounts, listBankAccounts, getBankAccount,
+    saveBankAccount, setBankAccountStatus, deleteBankAccount, findBankAccount,
+    saveBankTransfer, reconcileBank,
     listBankTransactions,
     getBankTransaction,
     getBankReviewQueue,

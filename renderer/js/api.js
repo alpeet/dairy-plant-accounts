@@ -196,6 +196,14 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         matchBankTransaction: (data) => apiPost('/bank/match', data),
         setBankAccountingClass: (data) => apiPost('/bank/classify', data),
         postBankToLedger: (id) => apiPost('/bank/post', { id }),
+        // Multi-bank accounts
+        getBankAccounts: (opts) => apiPost('/bank/accounts', opts || {}),
+        getBankAccount: (id) => apiPost('/bank/account/get', { id }),
+        saveBankAccount: (data) => apiPost('/bank/account/save', data),
+        setBankAccountStatus: (data) => apiPost('/bank/account/status', data),
+        deleteBankAccount: (id) => apiPost('/bank/account/delete', { id }),
+        saveBankTransfer: (data) => apiPost('/bank/transfer', data),
+        reconcileBank: (data) => apiPost('/bank/reconcile', data),
 
         // Salary
         getSalaryList: (opts) => apiPost('/salary/list', opts || {}),

@@ -116,6 +116,15 @@ contextBridge.exposeInMainWorld('api', {
     matchBankTransaction: (data) => ipcRenderer.invoke('db:bank:match', data),
     setBankAccountingClass: (data) => ipcRenderer.invoke('db:bank:class', data),
     postBankToLedger: (id) => ipcRenderer.invoke('db:bank:post', id),
+    // Multi-bank accounts
+    getBankAccounts: (opts) => ipcRenderer.invoke('db:bank:accounts', opts),
+    getBankAccount: (id) => ipcRenderer.invoke('db:bank:account-get', id),
+    saveBankAccount: (data) => ipcRenderer.invoke('db:bank:account-save', data),
+    setBankAccountStatus: (data) => ipcRenderer.invoke('db:bank:account-status', data),
+    deleteBankAccount: (id) => ipcRenderer.invoke('db:bank:account-delete', id),
+    saveBankTransfer: (data) => ipcRenderer.invoke('db:bank:transfer', data),
+    reconcileBank: (data) => ipcRenderer.invoke('db:bank:reconcile', data),
+    exportBankStatement: (opts) => ipcRenderer.invoke('export:bank-statement', opts),
 
     // Salary
     getSalaryList: (opts) => ipcRenderer.invoke('db:salary:list', opts),

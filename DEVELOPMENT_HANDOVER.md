@@ -60,6 +60,13 @@ company ledger 35, management reports 58, bank standalone 11, bank idempotency 4
    `shared/operations/bank.js` writes `bank_transactions`.
 8. **`cash_collections` added to `database/schema.sql`** — it used to be created
    on demand by `cash.js`, so fresh installs diverged from migrated books.
+9. **Multiple company bank accounts** (v1.4.57) — a `bank_accounts` master,
+   `bank_transactions.account_id` on every row, per-account statements with
+   independent running balances, a consolidated view that keeps each balance
+   separate, two-row inter-bank transfers, reconciliation status/remarks and
+   Excel/PDF export. A save without an account is rejected. `bank_accounts` and
+   the new columns are now in `database/schema.sql`, closing BUG-029.
+   `test-bank-accounts.js` 63/63.
 
 Full detail, root causes and the exact tests: `BUG_REGISTER.md`.
 
@@ -102,6 +109,32 @@ do NOT re-seed after a Fresh Start". To reset deliberately: quit the app, confir
 the backup above, then use Settings → Fresh Start (admin password + typing RESET)
 or `shared/operations/data_cleanup.js`.
 
+## 4b. Bank accounts migration (v1.4.57)
+
+The workbook's `BANK RECON` sheet writes the **real bank name** into the column
+the app stores as `txn_type` (`PRARAMBHA` 113 rows, `Sushil QR` 23) and the
+**classification** into the column stored as `bank_account` (`Customer
+Collection`, `Supplier Payment`, `Transfer Between Own Accounts`, `expenses`,
+`advance`, `Bank Charge`). `importBankReconSheet` maps col 10 → `bank_account`
+and col 11 → `txn_type`, so no data was ever swapped — only the two column names
+are misleading. The migration therefore rewrites neither column:
+
+1. `bank_accounts` is created (idempotent) and `bank_transactions` gains
+   `account_id`, `txn_category`, `transfer_group`, `recon_status`, `recon_date`,
+   `recon_remarks`, `account_review` — all `ALTER TABLE … ADD COLUMN`, so no row
+   is rebuilt and no existing column is dropped.
+2. Every row with `account_id IS NULL` is resolved from `txn_type`, then
+   `bank_account`, skipping each known classification value and each transaction
+   kind ("Bank Deposit (own)"). A name that matches an account is reused; a new
+   bank name creates that account once.
+3. Anything left goes to **Unassigned / Existing Bank** (`is_system=1`) with
+   `account_review=1` — flagged for manual assignment, never guessed. Re-running
+   the migration is a no-op.
+4. Amounts, dates, text and `updated_at` are never touched, so each historical
+   row stays byte-identical apart from the new account link. No opening balance
+   existed anywhere in the source data, so each migrated account starts at 0 with
+   a remark asking the operator to set the real opening balance and date.
+
 ## 5. Architecture as it now stands
 
 - `shared/operations/*` is the single source of business logic; `main.js` (IPC) and
@@ -111,8 +144,13 @@ or `shared/operations/data_cleanup.js`.
 - `shared/operations/accounting.js` owns money: `round2`, `CURRENCY_TOLERANCE`,
   classification, cash/bank position, expense summary, reconciliation.
 - **Bank Transactions is a leaf module**: it reads and writes only
-  `bank_transactions`. Nothing may post from it into another module, and no other
-  module may create a bank row automatically. Enforced by `test-bank-standalone.js`.
+  `bank_transactions` and its own `bank_accounts` master. Nothing may post from it
+  into another module, and no other module may create a bank row automatically.
+  Enforced by `test-bank-standalone.js` and `test-bank-isolation-restart.js`.
+- **One bank row, one account**: `bank_transactions.account_id` is the
+  authoritative link (`bank_account`/`txn_type` are kept for workbook
+  compatibility). A transfer is two rows sharing `transfer_group` — never income
+  or expense — and deleting either leg deletes the pair.
 - Statements are presentation-only: `attachEntryItemDetails()` attaches display
   detail and never changes an amount, balance or total.
 - The Monthly Report screen, its print/PDF and `shared/export-monthly-report.js` all

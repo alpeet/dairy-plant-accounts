@@ -332,6 +332,33 @@ CREATE TABLE IF NOT EXISTS payments (
 -- ============================================================
 -- BANK TRANSACTIONS (separate from cash / petty cash)
 -- ============================================================
+-- ============================================================
+-- BANK ACCOUNT MASTER (multi-bank)
+-- ============================================================
+-- One row per company bank account; `bank_transactions.account_id` points here.
+-- The row named "Unassigned / Existing Bank" (is_system=1) holds historical
+-- transactions whose bank was never recorded: they are flagged for manual
+-- review and that account can never be deleted.
+CREATE TABLE IF NOT EXISTS bank_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank_name TEXT NOT NULL DEFAULT '',
+    branch_name TEXT DEFAULT '',
+    account_holder TEXT DEFAULT '',
+    account_number TEXT DEFAULT '',
+    account_type TEXT DEFAULT 'Current' CHECK(account_type IN ('Current', 'Savings', 'Other')),
+    opening_balance REAL DEFAULT 0.0,
+    opening_balance_date TEXT DEFAULT '',
+    status TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
+    remarks TEXT DEFAULT '',
+    is_system INTEGER DEFAULT 0,
+    created_by INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_accounts_number ON bank_accounts(account_number) WHERE account_number <> '';
+CREATE INDEX IF NOT EXISTS idx_bank_accounts_name ON bank_accounts(bank_name);
+
 CREATE TABLE IF NOT EXISTS bank_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL DEFAULT (date('now', 'localtime')),
@@ -352,11 +379,24 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
     created_by INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+    accounting_class TEXT DEFAULT '',
+    txn_uid TEXT DEFAULT NULL,
+    account_id INTEGER DEFAULT NULL,
+    txn_category TEXT DEFAULT '',
+    transfer_group TEXT DEFAULT '',
+    recon_status TEXT DEFAULT 'unreconciled',
+    recon_date TEXT DEFAULT '',
+    recon_remarks TEXT DEFAULT '',
+    account_review INTEGER DEFAULT 0,
     FOREIGN KEY (party_id) REFERENCES parties(id),
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_party ON bank_transactions(party_id);
+-- NOTE: indexes on account_id / txn_uid are created by shared/operations/bank.js
+-- AFTER its ALTER TABLE adds those columns. A CREATE INDEX here would fail on an
+-- existing book that has not run that migration yet, because this whole file is
+-- executed before any migration.
 
 -- ============================================================
 -- POST-DATED CHEQUES (PDC register)

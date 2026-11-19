@@ -659,6 +659,14 @@ authHandle('export:monthly-report', async (event, opts = {}) => {
     return exportMonthlyReportExcel(db, savePath, opts || {});
 });
 
+// Bank statement workbook — one account or consolidated, same engine as screen.
+authHandle('export:bank-statement', async (event, opts = {}) => {
+    if (!db) return { success: false, error: 'Database not ready' };
+    const { exportBankStatementExcel } = require('./shared/export-bank-statement');
+    const savePath = (opts && opts.outputPath) || path.join(getDbDir(), 'Bank_Statement_Export.xlsx');
+    return exportBankStatementExcel(db, savePath, opts || {});
+});
+
 // ============================================================
 // IPC Handlers - Database Operations (auth-gated)
 // ============================================================
@@ -1033,6 +1041,11 @@ authHandle('db:bank:get', async (event, id) => {
 });
 
 authHandle('db:bank:save', async (event, data) => {
+    // A new bank transaction must name its bank account. (Editing an existing
+    // row keeps the account it already has; the importer resolves names.)
+    if (data && data.id == null && !data.account_id) {
+        return { success: false, error: 'Select a bank account before saving this transaction' };
+    }
     return safeRun(() => ops.saveBankTransaction(db, data, currentUser && currentUser.id));
 });
 
@@ -1055,6 +1068,34 @@ authHandle('db:bank:match', async (event, data) => {
 authHandle('db:bank:class', async (event, data) => {
     return safeRun(() => ops.setBankAccountingClass(db, data.id, data.accounting_class, currentUser && currentUser.id));
 });
+
+// ── Multi-bank accounts ──
+// The account is validated again here, so a transaction can never be stored
+// from the app without one.
+authHandle('db:bank:accounts', async (event, opts = {}) => ({
+    success: true, data: ops.listBankAccounts(db, opts || {})
+}));
+
+authHandle('db:bank:account-get', async (event, id) => ({
+    success: true, data: ops.getBankAccount(db, id)
+}));
+
+authHandle('db:bank:account-save', async (event, data = {}) => {
+    const r = ops.saveBankAccount(db, data || {}, currentUser ? currentUser.id : null);
+    return r.success === false ? r : { success: true, data: r.data };
+});
+
+authHandle('db:bank:account-status', async (event, data = {}) =>
+    ops.setBankAccountStatus(db, (data || {}).id, (data || {}).status, currentUser ? currentUser.id : null));
+
+authHandle('db:bank:account-delete', async (event, id) =>
+    ops.deleteBankAccount(db, id, currentUser ? currentUser.id : null));
+
+authHandle('db:bank:transfer', async (event, data = {}) =>
+    ops.saveBankTransfer(db, data || {}, currentUser ? currentUser.id : null));
+
+authHandle('db:bank:reconcile', async (event, data = {}) =>
+    ops.reconcileBank(db, data || {}, currentUser ? currentUser.id : null));
 
 authHandle('db:bank:post', async (event, id) => {
     return safeRun(() => ops.postBankToLedger(db, id));

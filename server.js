@@ -1392,6 +1392,10 @@ app.post('/api/bank/get', (req, res) => {
 });
 
 app.post('/api/bank/save', requireRole('operator'), (req, res) => {
+    // A new bank transaction must name its bank account.
+    if (req.body && req.body.id == null && !req.body.account_id) {
+        return res.json({ success: false, error: 'Select a bank account before saving this transaction' });
+    }
     res.json(safeRun(() => ops.saveBankTransaction(db, req.body, req.user?.id)));
 });
 
@@ -1417,6 +1421,43 @@ app.post('/api/bank/classify', requireRole('operator'), (req, res) => {
 
 app.post('/api/bank/post', requireRole('operator'), (req, res) => {
     res.json(safeRun(() => ops.postBankToLedger(db, req.body.id)));
+});
+
+// ── Multi-bank accounts ──
+app.post('/api/bank/accounts', (req, res) => {
+    res.json(safeRun(() => ops.listBankAccounts(db, req.body || {})));
+});
+app.post('/api/bank/account/get', (req, res) => {
+    res.json(safeRun(() => ops.getBankAccount(db, req.body.id)));
+});
+app.post('/api/bank/account/save', requireRole('operator'), (req, res) => {
+    const r = ops.saveBankAccount(db, req.body || {}, req.user?.id);
+    res.json(r.success === false ? r : { success: true, data: r.data });
+});
+app.post('/api/bank/account/status', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.setBankAccountStatus(db, req.body.id, req.body.status, req.user?.id)));
+});
+app.post('/api/bank/account/delete', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deleteBankAccount(db, req.body.id, req.user?.id)));
+});
+app.post('/api/bank/transfer', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveBankTransfer(db, req.body || {}, req.user?.id)));
+});
+app.post('/api/bank/reconcile', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.reconcileBank(db, req.body || {}, req.user?.id)));
+});
+app.post('/api/bank/export', requireAuth, (req, res) => {
+    try {
+        const { exportBankStatementExcel } = require('./shared/export-bank-statement');
+        const out = path.join(dbDir, 'Bank_Statement_Export.xlsx');
+        const r = exportBankStatementExcel(db, out, req.body || {});
+        if (!r.success) return res.json(r);
+        res.download(r.filePath, r.filename || 'Bank_Statement_Export.xlsx', (err) => {
+            if (err && !res.headersSent) res.json({ success: false, error: 'Download failed: ' + err.message });
+        });
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
 });
 
 // ──────────────────────────────────────────────────────────────
