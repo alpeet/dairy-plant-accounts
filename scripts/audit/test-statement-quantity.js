@@ -267,6 +267,60 @@ console.log('\n— 10. Screen, print and PDF share the columns and summary —')
     check('filters are echoed into print/PDF', /statementFilterText\(data\)/.test(src));
 }
 
+console.log('\n— 11. Unreconciled purchase rows are flagged, never guessed —');
+{
+    // Any party whose purchase ledger came from a workbook import that did not
+    // reconcile has such a row. Its amount is real; its milk line is missing.
+    const purchaseParties = db.prepare(`SELECT DISTINCT party_id id FROM ledger_entries
+        WHERE reference_type = 'purchase' AND party_id IS NOT NULL`).all();
+    let flagged = 0, sample = null, misflagged = 0, totalFlagged = 0;
+    for (const p of purchaseParties) {
+        const d = getPartyStatement(db, { party_id: p.id });
+        for (const e of d.entries) {
+            if (e.reference_type !== 'purchase') continue;
+            if (e.qty_unreconciled) {
+                flagged++;
+                sample = sample || { data: d, entry: e };
+                if (!Array.isArray(e.qty_lines) || e.qty_lines.length) misflagged++;
+                if (!(Math.abs((e.debit || 0) - (e.credit || 0)) > 0)) misflagged++;
+                // Opening-balance rows are not bills and are never flagged.
+                if (/^opening\b/i.test(String(e.description || '').trim())) misflagged++;
+                if (/^opn/i.test(String(e.reference_no || '').trim())) misflagged++;
+            }
+            // A purchase row that does show quantity lines is never flagged, and
+            // a real milk bill is never left unflagged. Opening-balance rows and
+            // parties that never supplied milk are not bills, so they may be blank.
+            if (!e.qty_unreconciled && Array.isArray(e.qty_lines) && e.qty_lines.length === 0
+                && !(Array.isArray(e.items) && e.items.length)
+                && Math.abs((e.debit || 0) - (e.credit || 0)) > 0) {
+                const desc = String(e.description || '').trim();
+                const ref = String(e.reference_no || '').trim();
+                const isOpen = /^opening\b/i.test(desc) || /^opn/i.test(ref);
+                const partyMilk = db.prepare('SELECT 1 FROM milk_collections WHERE party_id = ? LIMIT 1').get(p.id);
+                if (!isOpen && (partyMilk || /milk/i.test(desc))) misflagged++;
+            }
+        }
+        totalFlagged += Number(d.qty_unreconciled_count) || 0;
+        if (d.qty_unreconciled_count !== d.entries.filter(e => e.qty_unreconciled).length) misflagged++;
+    }
+    check('an unreconciled purchase row is flagged when the data has one', flagged > 0, `${flagged}`);
+    check('flagged rows carry no quantity or item lines', misflagged === 0, `${misflagged} wrong`);
+    check('the reported count equals the flagged rows', totalFlagged === flagged,
+        `${totalFlagged} vs ${flagged}`);
+    if (sample) {
+        const d = sample.data;
+        check('a flagged row still shows its recorded amount',
+            sample.entry.debit > 0 || sample.entry.credit > 0);
+        check('flagging does not move the closing balance',
+            Math.abs(d.closing_balance - (d.opening_balance + d.total_debit - d.total_credit)) < 0.005);
+    }
+    const src = fs.readFileSync(path.join(ROOT, 'renderer', 'js', 'statements.js'), 'utf8');
+    check('screen quantity cell carries the unreconciled marker', /e\.qty_unreconciled \? statementUnreconciledMark\(\)/.test(src));
+    check('the footnote is shown on screen and in print/PDF',
+        (src.match(/statementUnreconciledNote\(data\)/g) || []).length >= 2);
+    check('the footnote says totals are unchanged', /totals are exactly as recorded/.test(src));
+}
+
 db.close();
 fs.unlinkSync(TMP_DB);
 

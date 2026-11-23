@@ -326,11 +326,35 @@ function statementQtyCells(e) {
 
 /** Milk-type / shift cells: the row's own recorded values, or "Not applicable". */
 const ST_NA = '<span style="color:var(--text-light)">' + 'N/A' + '</span>';
+const ST_NOTE = '#8a5a00';
+
+/** Footnote marker for a purchase row the records could not reconcile. */
+function statementUnreconciledMark() {
+    return `<sup style="color:${ST_NOTE};font-weight:700" title="${escapeHtml(rl('No matching milk collection line', 'दूध सङ्कलन लाइन मिलेन'))}">†</sup>`;
+}
+
 function statementMilkTypeCell(e) {
+    if (e && e.qty_unreconciled) return `<span style="color:${ST_NOTE}">— ${statementUnreconciledMark()}</span>`;
     return e && e.milk_type_label ? escapeHtml(e.milk_type_label) : ST_NA;
 }
 function statementShiftCell(e) {
+    if (e && e.qty_unreconciled) return `<span style="color:${ST_NOTE}">— ${statementUnreconciledMark()}</span>`;
     return e && e.shift_label ? escapeHtml(e.shift_label) : ST_NA;
+}
+
+/**
+ * Footnote for a statement whose purchase rows could not be matched to a milk
+ * collection. It names the gap and says plainly that nothing was guessed and
+ * no amount changed. Shared by the screen, print, PDF and email views.
+ */
+function statementUnreconciledNote(data) {
+    const n = Number(data && data.qty_unreconciled_count) || 0;
+    if (!n) return '';
+    const text = rl(
+        `† ${n} purchase line${n === 1 ? '' : 's'} in this statement could not be matched to a milk collection line, so Milk Type and Quantity are left blank rather than guessed. The Debit / Credit amounts and all totals are exactly as recorded.`,
+        `† यो विवरणका ${n} खरिद लाइन दूध सङ्कलन लाइनसँग मिल्न सकेनन्, त्यसैले दूधको प्रकार र परिमाण अनुमान नगरी खाली छाडिएको छ। डेबिट / क्रेडिट र सबै जम्मा रकम यथावत् छन्।`
+    );
+    return `<div class="stmt-note">${escapeHtml(text)}</div>`;
 }
 
 /** Quantity text from a per-unit map: "1,200 L + 15 kg", or a dash. */
@@ -467,7 +491,7 @@ function renderStatementResult(data) {
             <td>${escapeHtml(e.description)}${statementPdcBadge(e)}</td>
             <td>${statementMilkTypeCell(e)}</td>
             <td>${statementShiftCell(e)}</td>
-            <td class="text-right" style="white-space:nowrap">${cells.qty === ST_DASH ? '' : cells.qty + (cells.unit ? ' ' + escapeHtml(cells.unit) : '')}</td>
+            <td class="text-right" style="white-space:nowrap">${cells.qty === ST_DASH ? (e.qty_unreconciled ? statementUnreconciledMark() : '') : cells.qty + (cells.unit ? ' ' + escapeHtml(cells.unit) : '')}</td>
             <td class="text-right" style="white-space:nowrap">${cells.rate === ST_DASH ? '' : cells.rate}</td>
             <td class="text-right">${e.debit > 0 ? formatCurrency(e.debit) : (e.is_memo ? ST_DASH : '')}</td>
             <td class="text-right">${e.credit > 0 ? formatCurrency(e.credit) : (e.is_memo ? ST_DASH : '')}</td>
@@ -488,6 +512,7 @@ function renderStatementResult(data) {
                     ${page ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();navigateTo('${page}')">↗ ${rl('Open the record', 'रेकर्ड खोल्नुहोस्')}</button>` : ''}
                 </div>
                 ${statementItemsList(e)}
+                ${e.qty_unreconciled ? `<div style="margin-top:6px;color:${ST_NOTE}">${escapeHtml(rl('No milk collection line is linked to this purchase row, so Milk Type and Quantity are not shown. The amount above is as recorded and is included in the totals.', 'यो खरिद लाइनसँग कुनै दूध सङ्कलन लाइन जोडिएको छैन, त्यसैले दूधको प्रकार र परिमाण देखाइएको छैन। माथिको रकम यथावत् छ र जम्मामा समावेश छ।'))}</div>` : ''}
             </td>
         </tr>`;
     }).join('');
@@ -531,6 +556,7 @@ function renderStatementResult(data) {
             #statementResult .stmt-table-screen th,
             #statementResult .stmt-table-screen td { white-space: nowrap; }
             #statementResult .stmt-table-screen td:nth-child(6) { white-space: normal; min-width: 220px; }
+            #statementResult .stmt-note { margin: 8px 2px 0; font-size: 11.5px; line-height: 1.45; color: #8a5a00; }
         </style>
         <div class="table-container">
             <table class="stmt-table-screen">
@@ -572,6 +598,7 @@ function renderStatementResult(data) {
                 </tfoot>
             </table>
         </div>
+        ${statementUnreconciledNote(data)}
         ${statementQtySummaryHtml(data)}
     `;
 }
@@ -673,7 +700,7 @@ function buildStatementHtml(data, settings) {
             `<td class="particulars">${escapeHtml(e.description)}</td>` +
             `<td>${statementMilkTypeCell(e)}</td>` +
             `<td>${statementShiftCell(e)}</td>` +
-            `<td class="num">${c.qty === ST_DASH ? '' : c.qty + (c.unit ? ' ' + escapeHtml(c.unit) : '')}</td>` +
+            `<td class="num">${c.qty === ST_DASH ? (e.qty_unreconciled ? '<sup>†</sup>' : '') : c.qty + (c.unit ? ' ' + escapeHtml(c.unit) : '')}</td>` +
             `<td class="num">${c.rateValue == null ? '' : stmtMoney(c.rateValue)}</td>` +
             `<td class="num">${e.debit > 0 ? stmtMoney(e.debit) : '-'}</td>` +
             `<td class="num">${e.credit > 0 ? stmtMoney(e.credit) : '-'}</td>` +
@@ -695,6 +722,7 @@ function buildStatementHtml(data, settings) {
             table.stmt-qty-summary { width: 62%; margin-left: auto; margin-right: 0; table-layout: fixed; }
             table.stmt-qty-summary th, table.stmt-qty-summary td { padding: 3px 6px; }
             .filters-line { margin: 2px 0 10px; font-size: 8pt; color: #444; text-align: center; }
+            .stmt-note { margin: 5px 1px 0; font-size: 6.8pt; line-height: 1.35; color: #8a5a00; }
             .value-cards { grid-template-columns: repeat(5, 1fr); }
             .value-card .value-number { font-size: 11.5pt; }
         </style>
@@ -731,6 +759,7 @@ function buildStatementHtml(data, settings) {
                 <tr class="total-row"><td colspan="10"><strong>${rlt('total')}</strong></td><td class="num"><strong>${stmtMoney(data.total_debit)}</strong></td><td class="num"><strong>${stmtMoney(data.total_credit)}</strong></td><td class="num"><strong>${stmtMoney(data.closing_balance)}</strong></td><td></td></tr>
             </tbody>
         </table>
+        ${statementUnreconciledNote(data)}
         <div class="summary no-break">
             <div class="summary-row total"><span>${rlt('closing_balance')}</span><span>${formatCurrency(data.closing_balance)} ${closingLabel}</span></div>
         </div>

@@ -758,6 +758,29 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         e.shift_label = shifts.map(s => titleCaseMilk(s)).join(' · ');
     }
 
+    // A purchase row that carries an amount but has neither a linked milk
+    // collection nor its own goods lines is an import that did not reconcile:
+    // its Milk Type / Quantity cannot be shown. Flag it (read-only) so the
+    // statement says so, instead of leaving the reader to assume the milk was
+    // never recorded. No amount, total or balance is touched by this flag.
+    // Only a milk bill can have a milk line missing: an opening-balance row or
+    // a party that never supplied milk is not a gap, so it is never flagged.
+    let partyHasMilkCollections = false;
+    try {
+        partyHasMilkCollections = !!db.prepare('SELECT 1 FROM milk_collections WHERE party_id = ? LIMIT 1').get(party_id);
+    } catch (e) { /* no collections table — nothing to match anyway */ }
+    for (const e of entries) {
+        if (e.reference_type !== 'purchase') continue;
+        const desc = String(e.description || '').trim();
+        const ref = String(e.reference_no || '').trim();
+        if (/^opening\b/i.test(desc) || /^opn/i.test(ref)) continue; // opening balance, not a bill
+        const milkish = partyHasMilkCollections || /milk/i.test(desc);
+        const amount = Math.abs((e.debit || 0) - (e.credit || 0));
+        const hasMilk = (milkByEntry[e.id] || []).length > 0;
+        const hasItems = Array.isArray(e.items) && e.items.length > 0;
+        e.qty_unreconciled = amount > 0 && milkish && !hasMilk && !hasItems;
+    }
+
     // The filters narrow the STATEMENT (and its totals), never the opening
     // balance: the balance carried into the period is a fact of the account.
     if (milkTypeFilter || shiftFilter) {
@@ -952,6 +975,9 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         // sales quantities stay in separate buckets, so they are never added
         // into one misleading "total business quantity".
         qty_summary: summariseQuantities(entriesWithBalance),
+        // How many shown purchase rows could not be tied to a milk collection —
+        // named in the footnote, never corrected by guessing quantity or rate.
+        qty_unreconciled_count: entriesWithBalance.filter(e => e.qty_unreconciled).length,
         // The filters applied to THIS statement (echoed into print and PDF).
         filters: {
             transaction_type: transaction_type || '',
