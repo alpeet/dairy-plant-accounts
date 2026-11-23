@@ -79,6 +79,7 @@ const MANIFEST = [
     'test-bank-accounts.js',
     // party statement item/quantity/rate detail + column set
     'test-statement-items.js',
+    'test-statement-quantity.js',
     // every Monthly Report figure is traceable to its rows
     'test-report-drilldown.js',
     // reporting & acceptance
@@ -97,7 +98,8 @@ const MANIFEST = [
 const EXCLUDED = {
     'test-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime',
     'test-statement-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime',
-    'test-purchase-vs-sales-pdf.js': 'Electron-only print/PDF check — npx electron scripts/audit/test-purchase-vs-sales-pdf.js'
+    'test-purchase-vs-sales-pdf.js': 'Electron-only print/PDF check — npx electron scripts/audit/test-purchase-vs-sales-pdf.js',
+    'test-statement-quantity-pdf.js': 'Electron-only print/PDF check — npx electron scripts/audit/test-statement-quantity-pdf.js'
 };
 
 const filter = (process.argv[2] || '').toLowerCase();

@@ -140,6 +140,112 @@ function titleCaseMilk(t) {
     return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
 }
 
+// ── Milk type / shift classification ─────────────────────────────────
+// Statement rows carry the milk type and shift RECORDED on their own
+// transaction (milk_collections for milk purchases and collections). A sales
+// or goods line has no shift column, and its milk type is only taken from the
+// product NAME when that name states one ("Cow Milk" → cow). Anything else
+// stays unclassified — a missing value is never guessed.
+const MILK_TYPE_VALUES = ['cow', 'buffalo', 'mixed'];
+
+function classifyMilkType(explicit, productName) {
+    const raw = String(explicit || '').trim().toLowerCase();
+    if (MILK_TYPE_VALUES.includes(raw)) return raw;
+    const name = String(productName || '').toLowerCase();
+    if (/\bmix(ed)?\b/.test(name)) return 'mixed';
+    if (/\bbuffalo\b/.test(name)) return 'buffalo';
+    if (/\bcow\b/.test(name)) return 'cow';
+    return '';
+}
+
+/** 'morning' / 'evening' / 'combined' only — never a made-up shift. */
+function normaliseShift(s) {
+    const v = String(s || '').trim().toLowerCase();
+    return (v === 'morning' || v === 'evening' || v === 'combined') ? v : '';
+}
+
+/** One quantity bucket (purchases or sales) for the statement summary. */
+function emptyQtyBucket() {
+    return {
+        total_qty: 0, by_unit: {},
+        cow: 0, buffalo: 0, mixed: 0, other: 0,
+        morning: 0, evening: 0, shift_unknown: 0,
+        // Every figure also keeps its own per-unit split, so a report never
+        // adds litres to kilograms and calls the result a quantity.
+        cow_by_unit: {}, buffalo_by_unit: {}, mixed_by_unit: {},
+        other_by_unit: {}, morning_by_unit: {}, evening_by_unit: {},
+        shift_unknown_by_unit: {},
+        rows: 0
+    };
+}
+
+/**
+ * Quantity summary for the statement, computed ONLY from the quantity lines of
+ * the rows currently shown (so it follows every filter). Purchase litres and
+ * sales litres are kept in separate buckets — they are never added together
+ * into one "business quantity". Payment / advance / expense rows carry no
+ * quantity lines and therefore cannot affect any total.
+ */
+function summariseQuantities(entries) {
+    const purchase = emptyQtyBucket();
+    const sales = emptyQtyBucket();
+    const touched = { purchase: false, sale: false };
+
+    for (const e of entries) {
+        const lines = Array.isArray(e.qty_lines) ? e.qty_lines : [];
+        for (const l of lines) {
+            const qty = Number(l.quantity) || 0;
+            if (!(qty > 0)) continue;
+            const bucket = l.kind === 'sale' ? sales : purchase;
+            touched[l.kind === 'sale' ? 'sale' : 'purchase'] = true;
+            bucket.total_qty += qty;
+            const unit = String(l.unit || '').trim();
+            const addUnit = (key) => {
+                const map = bucket[key] || (bucket[key] = {});
+                map[unit] = (map[unit] || 0) + qty;
+            };
+            addUnit('by_unit');
+            if (MILK_TYPE_VALUES.includes(l.milk_type)) {
+                bucket[l.milk_type] += qty;
+                addUnit(l.milk_type + '_by_unit');
+            } else {
+                bucket.other += qty;
+                addUnit('other_by_unit');
+            }
+            if (l.shift === 'morning') { bucket.morning += qty; addUnit('morning_by_unit'); }
+            else if (l.shift === 'evening') { bucket.evening += qty; addUnit('evening_by_unit'); }
+            else { bucket.shift_unknown += qty; addUnit('shift_unknown_by_unit'); }
+        }
+        if (lines.some(l => (Number(l.quantity) || 0) > 0)) {
+            if (lines.some(l => l.kind === 'sale')) sales.rows++;
+            if (lines.some(l => l.kind !== 'sale')) purchase.rows++;
+        }
+    }
+
+    const fields = ['total_qty', 'cow', 'buffalo', 'mixed', 'other', 'morning', 'evening', 'shift_unknown'];
+    for (const b of [purchase, sales]) {
+        for (const k of fields) b[k] = round2(b[k]);
+        for (const k of Object.keys(b)) {
+            if (!/_by_unit$/.test(k) && k !== 'by_unit') continue;
+            for (const u of Object.keys(b[k])) b[k][u] = round2(b[k][u]);
+        }
+    }
+
+    const units = [...new Set([...Object.keys(purchase.by_unit), ...Object.keys(sales.by_unit)])];
+    const net = { total_qty: round2(sales.total_qty - purchase.total_qty), by_unit: {}, meaningful: false };
+    for (const u of units) net.by_unit[u] = round2((sales.by_unit[u] || 0) - (purchase.by_unit[u] || 0));
+    net.meaningful = touched.purchase && touched.sale && units.length === 1;
+
+    return {
+        purchase,
+        sales,
+        net,
+        has_purchase: purchase.total_qty > 0,
+        has_sales: sales.total_qty > 0,
+        has_quantity: purchase.total_qty > 0 || sales.total_qty > 0
+    };
+}
+
 /**
  * Format ONE milk transaction as statement particulars:
  *   "Buffalo Milk 240 L @91.45 | Fat 5.9 | SNF 8.5"
@@ -314,10 +420,10 @@ function attachEntryItemDetails(db, partyId, entries) {
  * Builds from ledger_entries with party info and opening balance.
  *
  * @param {object} db - better-sqlite3 database instance
- * @param {object} opts - { party_id, from_date, to_date }
+ * @param {object} opts - { party_id, from_date, to_date, transaction_type, source, reference, milk_type, shift }
  * @returns {object} { party, opening_balance, entries[], total_debit, total_credit, closing_balance }
  */
-function getPartyStatement(db, { party_id, from_date, to_date, transaction_type, source, reference } = {}) {
+function getPartyStatement(db, { party_id, from_date, to_date, transaction_type, source, reference, milk_type, shift } = {}) {
     if (!party_id) throw new Error('Party ID is required');
 
     const party = db.prepare("SELECT * FROM parties WHERE id = ?").get(party_id);
@@ -346,6 +452,7 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                 ELSE ''
             END as reference_no,
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.milk_type END AS milk_type,
+            CASE WHEN le.reference_type = 'milk_collection' THEN mc.shift END AS milk_shift,
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.quantity_liters END AS milk_quantity,
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.rate END AS milk_rate,
             CASE WHEN le.reference_type = 'milk_collection' THEN mc.fat_percent END AS milk_fat,
@@ -429,6 +536,10 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
     });
 
     const entries = periodRows;
+    // The statement's rows. Kept mutable so the milk-type / shift filters can
+    // narrow them AFTER the milk detail is resolved (a filter needs to know
+    // each row's own recorded milk type and shift, which is not a ledger column).
+    let shownEntries = entries;
 
     // Milk detail for purchase rows: resolve EACH ledger row to its OWN
     // purchase and attach only that purchase's milk collections.
@@ -472,7 +583,7 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                 const ph = ids.map(() => '?').join(',');
                 const lines = db.prepare(`
                     SELECT mc.id, mc.purchase_ref_id, mc.milk_type, mc.quantity_liters, mc.rate, mc.amount,
-                           mc.fat_percent, mc.snf_percent, mc.extra_per_unit
+                           mc.fat_percent, mc.snf_percent, mc.extra_per_unit, mc.shift
                     FROM milk_collections mc
                     WHERE mc.purchase_ref_id IN (${ph})
                     ORDER BY mc.date, mc.id
@@ -489,7 +600,7 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                 // repeated rows on a bill never show the same line twice.
                 const lineValue = l => (l.amount != null ? Number(l.amount) : Number(l.quantity_liters || 0) * Number(l.rate || 0));
                 const matchByDateAmount = db.prepare(`
-                    SELECT id, milk_type, quantity_liters, rate, amount, fat_percent, snf_percent, extra_per_unit
+                    SELECT id, milk_type, quantity_liters, rate, amount, fat_percent, snf_percent, extra_per_unit, shift
                     FROM milk_collections
                     WHERE party_id = ? AND date = ? AND ABS(COALESCE(amount, quantity_liters * rate) - ?) <= 0.01
                     ORDER BY id LIMIT 1
@@ -547,6 +658,114 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
     // the same helper the party ledger modal uses, so the two views agree.
     attachEntryItemDetails(db, party_id, entries);
 
+    // ── Quantity, milk type and shift per row ───────────────────────────
+    // Every row's own quantity comes from its source transaction and nothing
+    // else: milk lines for milk purchases and collections, the goods lines for
+    // invoice / bill rows. A row with no quantity record gets an empty list, so
+    // nothing is invented. Each milk collection is counted ONCE (a collection
+    // already shown on its purchase bill is not counted again).
+    const countedCollectionIds = new Set();
+    for (const arr of Object.values(milkByEntry)) {
+        for (const l of arr || []) countedCollectionIds.add(Number(l.id));
+    }
+
+    const qtyLinesForEntry = (e) => {
+        const lines = [];
+        const add = (l) => {
+            if (!l) return;
+            const qty = Number(l.quantity);
+            if (!isFinite(qty) || qty <= 0) return; // no fake/zero quantity rows
+            lines.push(l);
+        };
+        if (e.reference_type === 'purchase') {
+            const milk = milkByEntry[e.id] || [];
+            for (const l of milk) {
+                add({
+                    kind: 'purchase',
+                    milk_type: classifyMilkType(l.milk_type),
+                    shift: normaliseShift(l.shift),
+                    quantity: Number(l.quantity_liters),
+                    rate: Number(l.rate),
+                    unit: 'L',
+                    product_name: titleCaseMilk(l.milk_type) + ' Milk',
+                    source: 'milk_collections',
+                    source_id: l.id
+                });
+            }
+            // A goods bill has no milk line — its own purchase_items are the
+            // recorded quantity and rate.
+            if (!lines.length) {
+                for (const it of (Array.isArray(e.items) ? e.items : [])) {
+                    add({
+                        kind: 'purchase',
+                        milk_type: classifyMilkType('', it.product_name),
+                        shift: '',
+                        quantity: Number(it.quantity),
+                        rate: Number(it.rate),
+                        unit: it.unit || '',
+                        product_name: it.product_name || '',
+                        source: 'purchase_items'
+                    });
+                }
+            }
+        } else if (e.reference_type === 'milk_collection') {
+            // A milk ledger row whose collection is already the milk line of a
+            // purchase bill is not counted a second time.
+            if (!countedCollectionIds.has(Number(e.reference_id))) {
+                add({
+                    kind: 'purchase',
+                    milk_type: classifyMilkType(e.milk_type),
+                    shift: normaliseShift(e.milk_shift),
+                    quantity: Number(e.milk_quantity),
+                    rate: Number(e.milk_rate),
+                    unit: 'L',
+                    product_name: titleCaseMilk(e.milk_type) + ' Milk',
+                    source: 'milk_collections',
+                    source_id: e.reference_id
+                });
+            }
+        } else if (e.reference_type === 'sale') {
+            for (const it of (Array.isArray(e.items) ? e.items : [])) {
+                add({
+                    kind: 'sale',
+                    milk_type: classifyMilkType('', it.product_name),
+                    shift: '',
+                    quantity: Number(it.quantity),
+                    rate: Number(it.rate),
+                    unit: it.unit || '',
+                    product_name: it.product_name || '',
+                    source: 'sales_items'
+                });
+            }
+        }
+        return lines;
+    };
+
+    const milkTypeFilter = MILK_TYPE_VALUES.includes(String(milk_type || '').toLowerCase())
+        ? String(milk_type).toLowerCase() : '';
+    const shiftFilter = ['morning', 'evening'].includes(String(shift || '').toLowerCase())
+        ? String(shift).toLowerCase() : '';
+
+    for (const e of entries) {
+        const allLines = qtyLinesForEntry(e);
+        e.qty_lines_all = allLines;
+        const keep = l => (!milkTypeFilter || l.milk_type === milkTypeFilter)
+            && (!shiftFilter || l.shift === shiftFilter);
+        e.qty_lines = (milkTypeFilter || shiftFilter) ? allLines.filter(keep) : allLines;
+        const types = [...new Set(e.qty_lines.map(l => l.milk_type).filter(Boolean))];
+        e.milk_type_label = types.map(t => titleCaseMilk(t)).join(' · ');
+        const shifts = [...new Set(e.qty_lines.map(l => l.shift).filter(Boolean))];
+        e.shift_label = shifts.map(s => titleCaseMilk(s)).join(' · ');
+    }
+
+    // The filters narrow the STATEMENT (and its totals), never the opening
+    // balance: the balance carried into the period is a fact of the account.
+    if (milkTypeFilter || shiftFilter) {
+        shownEntries = entries.filter(e => Array.isArray(e.qty_lines) && e.qty_lines.length > 0);
+    } else {
+        shownEntries = entries;
+    }
+
     // ── Post-Dated Cheques (PDC) ──
     // A held cheque is a promise, not money. It is shown as a ZERO-AMOUNT memo
     // line so the statement never implies the invoice was paid while the cheque
@@ -595,12 +814,15 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
             }
 
             // Memo lines: everything that has not (yet) moved money.
-            for (const c of pdcRows) {
+            for (const c of (milkTypeFilter || shiftFilter ? [] : pdcRows)) {
                 if (c.status === 'CLEARED') continue;
                 const memoDate = c.status === 'BOUNCED' ? (c.bounce_date || c.txn_date)
                     : c.status === 'CANCELLED' ? (c.cancel_date || c.txn_date)
                         : c.txn_date;
                 if (!memoDate || memoDate < from || memoDate > to) continue;
+                // A milk-type / shift filter selects quantity transactions only;
+                // a zero-amount cheque memo line is not one of them.
+                if (milkTypeFilter || shiftFilter) continue;
                 const statusText = c.status === 'HELD' ? 'Held (not yet banked)'
                     : c.status === 'DEPOSITED' ? 'Deposited (presented, not cleared)'
                         : c.status === 'BOUNCED' ? `Bounced${c.bounce_reason ? ' — ' + c.bounce_reason : ''}`
@@ -608,6 +830,10 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                 entries.push({
                     id: null,
                     party_id,
+                    qty_lines: [],
+                    qty_lines_all: [],
+                    milk_type_label: '',
+                    shift_label: '',
                     date: memoDate,
                     reference_type: 'pdc',
                     reference_id: c.id,
@@ -631,12 +857,13 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                 if (a.date === b.date) return (a.id || 0) - (b.id || 0);
                 return a.date < b.date ? -1 : 1;
             });
+            shownEntries = entries;
         }
     } catch (e) { /* no PDC register on this database — statement is unaffected */ }
 
     // Calculate running balance
     let runningBalance = openingBalance;
-    const entriesWithBalance = entries.map(entry => {
+    const entriesWithBalance = shownEntries.map(entry => {
         // In ledger_entries: debit = amount owed by party (sale), credit = amount paid/received
         // For customers (type=customer or both): debit increases balance (they owe more), credit decreases
         // For suppliers: credit increases balance (we owe more), debit decreases
@@ -692,20 +919,20 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         };
     });
 
-    const totalDebit = entries.reduce((s, e) => s + (e.debit || 0), 0);
-    const totalCredit = entries.reduce((s, e) => s + (e.credit || 0), 0);
+    const totalDebit = shownEntries.reduce((s, e) => s + (e.debit || 0), 0);
+    const totalCredit = shownEntries.reduce((s, e) => s + (e.credit || 0), 0);
     const closingBalance = openingBalance + totalDebit - totalCredit;
 
     // Purchase / milk and payment totals for the statement summary block
     const totals = {
-        purchase_total: entries.reduce((s, e) => s + (e.reference_type === 'purchase' ? (e.credit - e.debit) : 0), 0),
-        milk_total: entries.reduce((s, e) => {
+        purchase_total: shownEntries.reduce((s, e) => s + (e.reference_type === 'purchase' ? (e.credit - e.debit) : 0), 0),
+        milk_total: shownEntries.reduce((s, e) => {
             if (e.reference_type !== 'milk_collection') return s;
             return s + (e.milk_quantity != null ? Math.abs(e.milk_quantity * (e.milk_rate || 0)) : (e.credit - e.debit));
         }, 0),
-        sales_total: entries.reduce((s, e) => s + (e.reference_type === 'sale' ? (e.debit - e.credit) : 0), 0),
-        paid_total: entries.reduce((s, e) => s + (e.reference_type === 'payment_made' ? (e.debit - e.credit) : 0), 0),
-        received_total: entries.reduce((s, e) => s + (e.reference_type === 'payment_received' ? (e.credit - e.debit) : 0), 0)
+        sales_total: shownEntries.reduce((s, e) => s + (e.reference_type === 'sale' ? (e.debit - e.credit) : 0), 0),
+        paid_total: shownEntries.reduce((s, e) => s + (e.reference_type === 'payment_made' ? (e.debit - e.credit) : 0), 0),
+        received_total: shownEntries.reduce((s, e) => s + (e.reference_type === 'payment_received' ? (e.credit - e.debit) : 0), 0)
     };
     totals.supply_total = totals.purchase_total + totals.milk_total;
     totals.payment_total = totals.paid_total + totals.received_total;
@@ -721,6 +948,18 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         total_credit: totalCredit,
         closing_balance: closingBalance,
         totals,
+        // Quantity / litre summary for the rows actually shown. Purchase and
+        // sales quantities stay in separate buckets, so they are never added
+        // into one misleading "total business quantity".
+        qty_summary: summariseQuantities(entriesWithBalance),
+        // The filters applied to THIS statement (echoed into print and PDF).
+        filters: {
+            transaction_type: transaction_type || '',
+            source: source || '',
+            reference: reference || '',
+            milk_type: milkTypeFilter,
+            shift: shiftFilter
+        },
         // Post-dated cheques are shown separately: what is still expected through
         // a cheque and is therefore NOT part of the closing balance yet.
         pdc: {
@@ -762,4 +1001,4 @@ function listPartiesWithBalance(db, { type, as_of_date } = {}) {
     });
 }
 
-module.exports = { getPartyStatement, listPartiesWithBalance, attachEntryItemDetails };
+module.exports = { getPartyStatement, listPartiesWithBalance, attachEntryItemDetails, summariseQuantities, classifyMilkType };
