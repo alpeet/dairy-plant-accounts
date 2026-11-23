@@ -101,9 +101,21 @@ function ledgerCoversDerived(ledger, d) {
                 && Number(e.reference_id) === Number(d.source_id);
         }
         if (d.source_table === 'petty_cash') {
-            return e.reference_type === 'adjustment'
+            if (e.reference_type === 'adjustment'
                 && String(e.description || '').startsWith('PETTY:')
-                && Number(e.reference_id) === Number(d.source_id);
+                && Number(e.reference_id) === Number(d.source_id)) return true;
+            // A voucher that lives in the Payment / Advance register is already
+            // on the account through its own payment row (posted by the importer
+            // and by savePayment). The petty-cash row beside it records the cash
+            // box only — deriving it too would show the same payment twice.
+            if (d.party_id && d.amount != null) {
+                const amount = Number(d.amount) || 0;
+                return ledger.some(x => Number(x.party_id) === Number(d.party_id)
+                    && String(x.date) === String(d.date)
+                    && ['payment_made', 'advance'].includes(x.reference_type)
+                    && Math.abs((Number(x.debit) || 0) - amount) < 0.005);
+            }
+            return false;
         }
         if (d.source_table === 'other_expenses') {
             const isBill = d.type === 'expense';

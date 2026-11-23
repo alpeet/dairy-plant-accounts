@@ -134,6 +134,42 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         // Reports
         getSalesReport: (opts) => apiPost('/reports/sales', opts || {}),
         getPurchasesReport: (opts) => apiPost('/reports/purchases', opts || {}),
+
+        // Purchase vs Sales — daily comparison of the original bills/invoices
+        getPurchaseVsSales: (opts) => apiPost('/reports/purchase-vs-sales', opts || {}),
+        getPurchaseVsSalesHTML: (opts) => apiPost('/reports/purchase-vs-sales/html', opts || {}),
+        exportPurchaseVsSales: async (opts) => {
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                try {
+                    const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                    if (token) headers['Authorization'] = 'Bearer ' + token;
+                } catch (e) { /* storage unavailable */ }
+                const body = opts || {};
+                const response = await fetch('/api/export/purchase-vs-sales', {
+                    method: 'POST',
+                    headers,
+                    credentials: 'include',
+                    body: JSON.stringify(body)
+                });
+                if (!response.ok) {
+                    return { success: false, error: 'Export failed (HTTP ' + response.status + ')' };
+                }
+                const fileName = `Purchase_vs_Sales_${body.from_date || 'start'}_to_${body.to_date || 'end'}.xlsx`;
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                return { success: true, filePath: fileName };
+            } catch (err) {
+                return { success: false, error: err.message };
+            }
+        },
         getDayBook: (opts) => apiPost('/reports/daybook', opts || {}),
         getFarmerStatement: (opts) => apiPost('/reports/farmer-statement', opts || {}),
         getReceivables: () => apiPost('/reports/receivables'),
@@ -185,6 +221,8 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         savePettyCash: (data) => apiPost('/petty-cash/save', data),
         deletePettyCash: (id) => apiPost('/petty-cash/delete', { id }),
         getPettyCashSummary: (opts) => apiPost('/petty-cash/summary', opts || {}),
+        assignPettyCashParty: (data) => apiPost('/petty-cash/assign-party', data || {}),
+        getPettyCashPartyReview: () => apiPost('/petty-cash/party-review', {}),
 
         // Bank Transactions
         getBankList: (opts) => apiPost('/bank/list', opts || {}),

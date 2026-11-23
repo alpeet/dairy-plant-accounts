@@ -70,6 +70,8 @@ const MANIFEST = [
     // milk on a purchase bill counted once, rent typed as income not as a receipt
     'test-party-ledger-derived.js',
     'test-accounting-dates.js',
+    // advance module UI flows + manual petty-cash party review
+    'test-advance-party-ui.js',
     'test-excel-sync.js',
     'test-excel-import-routing.js',
     'test-expenses-routing.js',
@@ -82,6 +84,10 @@ const MANIFEST = [
     // reporting & acceptance
     'test-report-lang.js',
     'test-management-reports.js',
+    // Purchase vs Sales — daily comparison of the original bills/invoices
+    'test-purchase-vs-sales.js',
+    // Import → payment → supplier statement flow (Payment/Petty/Expense sheets)
+    'test-excel-statement-flow.js',
     'test-erp-acceptance.js',
     'test-trust-pack.js',
     // .xlsx part surgery (the lossless Monthly Report sheet writer)
@@ -90,7 +96,8 @@ const MANIFEST = [
 
 const EXCLUDED = {
     'test-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime',
-    'test-statement-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime'
+    'test-statement-pdf.js': 'Electron-only (app.whenReady) — run via the Electron runtime',
+    'test-purchase-vs-sales-pdf.js': 'Electron-only print/PDF check — npx electron scripts/audit/test-purchase-vs-sales-pdf.js'
 };
 
 const filter = (process.argv[2] || '').toLowerCase();

@@ -1036,6 +1036,52 @@ function runMigrations(db) {
         console.log('Migration 35 (accounting dates) skipped:', e35.message);
     }
 
+    // Migration 36: party-statement repair. An Excel fresh import used to
+    // rebuild petty cash / expenses / the Payment register without posting the
+    // supplier debit, so the statement showed no payment for those vouchers.
+    // This posts the missing row from the original register row — idempotent,
+    // no guessing (unlinked rows are left for manual review), no register row
+    // altered.
+    try {
+        const { ensurePartyStatementRows } = require('./operations/statement_repair');
+        ensurePartyStatementRows(db);
+    } catch (e36) {
+        console.log('Migration 36 (party statement repair) skipped:', e36.message);
+    }
+
+    // Migration 37: remove the Payment-sheet mirror rows an older importer
+    // created in petty_cash. The same voucher was written to BOTH `payments`
+    // (the register + supplier debit) and `petty_cash`, so cash was reduced
+    // twice and the P&L counted a supplier payment as operating expense.
+    // Only provable mirrors are removed: same party, date, amount and payee
+    // name, the payment note that the importer itself wrote, and no operator
+    // edit on the petty row. The Payment register row — the actual record — is
+    // never touched, so no history is lost. A backup is taken before any change.
+    try {
+        const mirrors = db.prepare(`
+            SELECT pc.id, pc.date, pc.amount, pc.paid_to
+              FROM petty_cash pc
+              JOIN payments p ON p.party_id = pc.party_id AND p.type = 'payment'
+                              AND p.date = pc.date AND ABS(p.amount - pc.amount) < 0.005
+              JOIN parties pt ON pt.id = pc.party_id
+             WHERE UPPER(TRIM(pt.name)) = UPPER(TRIM(pc.paid_to))
+               AND (p.notes = 'Payment: ' || COALESCE(pc.description, '')
+                    OR (COALESCE(pc.description, '') = '' AND p.notes = 'Payment'))
+               AND NOT EXISTS (SELECT 1 FROM audit_log a
+                                WHERE a.table_name = 'petty_cash' AND a.record_id = pc.id AND a.action = 'update')
+        `).all();
+        if (mirrors.length) {
+            const delLedger = db.prepare("DELETE FROM ledger_entries WHERE reference_type = 'adjustment' AND reference_id = ? AND description LIKE 'PETTY:%'");
+            const delPc = db.prepare('DELETE FROM petty_cash WHERE id = ?');
+            db.transaction(() => {
+                for (const m of mirrors) { delLedger.run(m.id); delPc.run(m.id); }
+            })();
+            console.log(`Migration 37 (payment mirror rows): removed ${mirrors.length} duplicate petty-cash row(s) that the Payment register already records`);
+        }
+    } catch (e37) {
+        console.log('Migration 37 (payment mirror rows) skipped:', e37.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

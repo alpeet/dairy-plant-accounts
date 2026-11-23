@@ -645,6 +645,14 @@ authHandle('export:daily-account', async (event, { outputPath } = {}) => {
 });
 
 // Excel-style stock statement (req 17) — same engine as the on-screen report.
+// Purchase vs Sales report workbook — same filtered data as the screen/PDF.
+authHandle('export:purchase-vs-sales', async (event, opts = {}) => {
+    if (!db) return { success: false, error: 'Database not ready' };
+    const { exportPurchaseVsSalesExcel } = require('./shared/export-purchase-vs-sales');
+    const savePath = (opts && opts.outputPath) || path.join(getDbDir(), 'Purchase_vs_Sales_Export.xlsx');
+    return exportPurchaseVsSalesExcel(db, savePath, opts || {});
+});
+
 authHandle('export:stock-statement', async (event, opts = {}) => {
     if (!db) return { success: false, error: 'Database not ready' };
     const savePath = (opts && opts.outputPath) || path.join(getDbDir(), 'Stock_Statement_Export.xlsx');
@@ -908,6 +916,16 @@ authHandle('db:reports:management', async (event, params = {}) => {
     return safeRun(() => ops.getManagementReport(db, params));
 });
 
+// --- Purchase vs Sales (daily comparison of the original bills/invoices) ---
+authHandle('db:reports:purchase-vs-sales', async (event, params = {}) => {
+    return safeRun(() => ops.getPurchaseVsSales(db, params || {}));
+});
+
+// Print / PDF document — built by the SAME engine the screen uses.
+authHandle('db:reports:purchase-vs-sales-html', async (event, params = {}) => {
+    return safeRun(() => require('./shared/report-purchase-vs-sales').buildPurchaseVsSalesHTML(db, params || {}));
+});
+
 authHandle('db:reports:stock-statement', async (event, params = {}) => {
     return safeRun(() => ops.getStockStatement(db, params));
 });
@@ -1042,6 +1060,15 @@ authHandle('db:petty-cash:delete', async (event, id) => {
 
 authHandle('db:petty-cash:summary', async (event, params = {}) => {
     return safeRun(() => ops.getPettyCashSummary(db, params));
+});
+
+// Party assigned to an existing voucher by the operator (no guessing).
+authHandle('db:petty-cash:assign-party', async (event, data = {}) => {
+    return safeRun(() => ops.assignPettyCashParty(db, { ...data, changed_by: currentUser && currentUser.id }));
+});
+
+authHandle('db:petty-cash:party-review', async () => {
+    return safeRun(() => ops.getPettyCashPartyReviewStats(db));
 });
 
 // --- Bank Transactions ---
@@ -1850,7 +1877,7 @@ authHandle('db:restore:from-file', async () => {
 });
 
 // --- Print handlers ---
-authHandle('print:pdf', async (event, { html, landscape, pageSize } = {}) => {
+authHandle('print:pdf', async (event, { html, landscape, pageSize, filename, pageNumbers, footerLeft } = {}) => {
     try {
         // Read paper size from settings (DB), fall back to passed param, then default
         let paperSize = pageSize || 'A4';
@@ -1899,9 +1926,20 @@ authHandle('print:pdf', async (event, { html, landscape, pageSize } = {}) => {
             </html>
         `;
 
-        await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fullHtml)}`);
+        // A long report (thousands of detail rows) is far too large for a data:
+        // URL, so the document is written to a temporary file and loaded from
+        // disk. Small documents keep the existing data-URL path.
+        let tempDir = null;
+        if (fullHtml.length > 400000) {
+            tempDir = fs.mkdtempSync(path.join(app.getPath('temp'), 'prarambha-pdf-'));
+            const htmlPath = path.join(tempDir, 'report.html');
+            fs.writeFileSync(htmlPath, fullHtml, 'utf8');
+            await printWindow.loadFile(htmlPath);
+        } else {
+            await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fullHtml)}`);
+        }
 
-        const pdfData = await printWindow.webContents.printToPDF({
+        const pdfOptions = {
             printBackground: true,
             landscape: landscape || false,
             pageSize: paperSize,
@@ -1909,12 +1947,32 @@ authHandle('print:pdf', async (event, { html, landscape, pageSize } = {}) => {
             // previously produced a nearly-blank PDF (10" margins). The page
             // margins are now controlled by the @page rule in print.css.
             margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 }
-        });
+        };
+        if (pageNumbers) {
+            // Real "Page X of Y" footer (Chromium fills pageNumber/totalPages).
+            const footerText = String(footerLeft || '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            pdfOptions.displayHeaderFooter = true;
+            pdfOptions.headerTemplate = '<span></span>';
+            pdfOptions.footerTemplate = '<div style="width:100%;padding:0 10mm;font-size:7pt;color:#777;font-family:Arial,Helvetica,sans-serif;">'
+                + '<span>' + footerText + '</span>'
+                + '<span style="float:right;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>'
+                + '</div>';
+        }
+        const pdfData = await printWindow.webContents.printToPDF(pdfOptions);
 
-        // Show save dialog
+        if (tempDir) {
+            try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) { /* temp cleanup */ }
+            tempDir = null;
+        }
+
+        // Show save dialog (the report's own suggested filename when given)
+        const suggested = filename
+            ? String(filename).replace(/[\\/:*?"<>|]+/g, '_')
+            : `dairy-report-${new Date().toISOString().split('T')[0]}.pdf`;
         const result = await dialog.showSaveDialog(mainWindow, {
             filters: [{ name: 'PDF', extensions: ['pdf'] }],
-            defaultPath: `dairy-report-${new Date().toISOString().split('T')[0]}.pdf`
+            defaultPath: /\.pdf$/i.test(suggested) ? suggested : suggested + '.pdf'
         });
 
         if (!result.canceled && result.filePath) {

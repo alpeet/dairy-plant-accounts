@@ -1166,6 +1166,15 @@ app.post('/api/reports/management', (req, res) => {
     res.json(safeRun(() => ops.getManagementReport(db, req.body || {})));
 });
 
+// Purchase vs Sales — original purchase bills vs sales invoices, day by day.
+app.post('/api/reports/purchase-vs-sales', (req, res) => {
+    res.json(safeRun(() => ops.getPurchaseVsSales(db, req.body || {})));
+});
+
+app.post('/api/reports/purchase-vs-sales/html', (req, res) => {
+    res.json(safeRun(() => require('./shared/report-purchase-vs-sales').buildPurchaseVsSalesHTML(db, req.body || {})));
+});
+
 app.post('/api/reports/stock-statement', (req, res) => {
     res.json(safeRun(() => ops.getStockStatement(db, req.body || {})));
 });
@@ -1391,6 +1400,15 @@ app.post('/api/petty-cash/delete', requireRole('operator'), (req, res) => {
 
 app.post('/api/petty-cash/summary', (req, res) => {
     res.json(safeRun(() => ops.getPettyCashSummary(db, req.body || {})));
+});
+
+// Party assigned to an existing voucher by the operator (no guessing).
+app.post('/api/petty-cash/assign-party', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.assignPettyCashParty(db, { ...(req.body || {}), changed_by: req.user?.id || null })));
+});
+
+app.post('/api/petty-cash/party-review', (req, res) => {
+    res.json(safeRun(() => ops.getPettyCashPartyReviewStats(db)));
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -2176,6 +2194,28 @@ app.post('/api/export/monthly-report', requireAuth, (req, res) => {
                     if (!res.headersSent) {
                         res.json({ success: false, error: 'Download failed: ' + err.message });
                     }
+                }
+            });
+        } else {
+            res.json(result);
+        }
+    } catch (err) {
+        res.json({ success: false, error: err.message });
+    }
+});
+
+app.post('/api/export/purchase-vs-sales', requireAuth, (req, res) => {
+    try {
+        const { exportPurchaseVsSalesExcel } = require('./shared/export-purchase-vs-sales');
+        const body = req.body || {};
+        const fileName = `Purchase_vs_Sales_${(body.from_date || 'start')}_to_${(body.to_date || 'end')}.xlsx`;
+        const outputPath = path.join(dbDir, fileName);
+        const result = exportPurchaseVsSalesExcel(db, outputPath, body);
+        if (result.success) {
+            res.download(result.filePath, fileName, (err) => {
+                if (err) {
+                    console.error('Purchase vs Sales export download error:', err.message);
+                    if (!res.headersSent) res.json({ success: false, error: 'Download failed: ' + err.message });
                 }
             });
         } else {

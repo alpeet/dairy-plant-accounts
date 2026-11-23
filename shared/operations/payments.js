@@ -336,6 +336,17 @@ function deletePayment(db, id) {
     const payment = db.prepare("SELECT * FROM payments WHERE id = ?").get(id);
     if (!payment) throw new Error('Payment not found');
 
+    // An advance already applied to a bill is part of that bill's settlement:
+    // deleting the payment would leave the bill paid by nothing. Refuse until
+    // the allocation is removed.
+    ensureAdvanceAllocations(db);
+    const allocations = db.prepare(
+        'SELECT COUNT(*) AS n FROM advance_allocations WHERE advance_payment_id = ?'
+    ).get(id).n;
+    if (allocations > 0) {
+        throw new Error(`This advance is already applied to ${allocations} bill(s). Remove the allocation before deleting it.`);
+    }
+
     const trx = db.transaction(() => {
         // If this payment is linked to milk collections, revert their status
         if (payment.reference_type === 'milk_collection') {
@@ -385,13 +396,14 @@ function updatePayment(db, data) {
         });
 
         db.prepare(
-            "UPDATE payments SET date = ?, accounting_date = ?, accounting_date_source = ?, mode = ?, notes = ?, transaction_type = ? WHERE id = ?"
+            "UPDATE payments SET date = ?, accounting_date = ?, accounting_date_source = ?, mode = ?, notes = ?, bank_reference = ?, transaction_type = ? WHERE id = ?"
         ).run(
             dates.date,
             dates.accounting_date,
             dates.source,
             data.mode || existing.mode,
             data.notes !== undefined ? data.notes : existing.notes,
+            data.bank_reference !== undefined ? data.bank_reference : (existing.bank_reference || ''),
             newType,
             data.id
         );

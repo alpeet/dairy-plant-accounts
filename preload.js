@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('api', {
     getDayBook: (opts) => ipcRenderer.invoke('db:reports:daybook', opts),
     getReceivables: () => ipcRenderer.invoke('db:reports:receivables'),
     getPayables: () => ipcRenderer.invoke('db:reports:payables'),
+    getPurchaseVsSales: (opts) => ipcRenderer.invoke('db:reports:purchase-vs-sales', opts),
+    getPurchaseVsSalesHTML: (opts) => ipcRenderer.invoke('db:reports:purchase-vs-sales-html', opts),
     getSalesRegister: (opts) => ipcRenderer.invoke('db:reports:sales-register', opts),
     getPurchaseRegister: (opts) => ipcRenderer.invoke('db:reports:purchase-register', opts),
     getProfitLoss: (opts) => ipcRenderer.invoke('db:reports:profit-loss', opts),
@@ -105,6 +107,8 @@ contextBridge.exposeInMainWorld('api', {
     savePettyCash: (data) => ipcRenderer.invoke('db:petty-cash:save', data),
     deletePettyCash: (id) => ipcRenderer.invoke('db:petty-cash:delete', id),
     getPettyCashSummary: (opts) => ipcRenderer.invoke('db:petty-cash:summary', opts),
+    assignPettyCashParty: (data) => ipcRenderer.invoke('db:petty-cash:assign-party', data),
+    getPettyCashPartyReview: () => ipcRenderer.invoke('db:petty-cash:party-review'),
 
     // Bank Transactions
     getBankList: (opts) => ipcRenderer.invoke('db:bank:list', opts),
@@ -306,6 +310,7 @@ contextBridge.exposeInMainWorld('api', {
     // Export to Daily Account Pro Excel
     exportDailyAccount: (opts) => ipcRenderer.invoke('export:daily-account', opts),
     exportStockStatement: (opts) => ipcRenderer.invoke('export:stock-statement', opts),
+    exportPurchaseVsSales: (opts) => ipcRenderer.invoke('export:purchase-vs-sales', opts),
 
     // Import from Dairy Account Pro Excel (filePath optional — shows a picker when omitted)
     importExcelFromFile: (opts) => ipcRenderer.invoke('excel:import-file', opts),

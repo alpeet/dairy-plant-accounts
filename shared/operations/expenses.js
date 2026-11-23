@@ -289,5 +289,8 @@ function getExpensesSummary(db, { from_date, to_date } = {}) {
 
 module.exports = {
     listOtherExpenses, getOtherExpense, saveOtherExpense, deleteOtherExpense,
-    getExpenseCategories, getExpensesSummary, isIncomeCategory
+    getExpenseCategories, getExpensesSummary, isIncomeCategory,
+    // Shared by the Excel importer so an imported party-linked expense posts
+    // the exact same two statement rows as one typed in the app.
+    postExpenseLedger
 };

@@ -70,7 +70,8 @@ const {
     saveDenomination, deleteDenomination
 } = require('./denominations');
 const {
-    listPettyCash, getPettyCash, savePettyCash, deletePettyCash, getPettyCashSummary
+    listPettyCash, getPettyCash, savePettyCash, deletePettyCash, getPettyCashSummary,
+    assignPettyCashParty, getPettyCashPartyReviewStats
 } = require('./petty_cash');
 const {
     listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
@@ -115,6 +116,10 @@ const {
     EXPENSE_CATEGORIES, normalizeExpenseCategory,
     getExpenseAnalysis, getBoardReport, getManagementReport
 } = require('./management_reports');
+
+// ── Purchase vs Sales — daily comparison of the original purchase bills and
+// sales invoices (never Party_Ledger, never payments/collections).
+const { getPurchaseVsSales } = require('./purchase_vs_sales');
 
 // ── Cash Deposits ──
 const {
@@ -243,6 +248,7 @@ module.exports = {
 
     // Petty Cash
     listPettyCash, getPettyCash, savePettyCash, deletePettyCash, getPettyCashSummary,
+    assignPettyCashParty, getPettyCashPartyReviewStats,
 
     // Salary
     listSalaryRecords, getSalaryRecord, saveSalaryRecord, deleteSalaryRecord, getSalarySummary,
@@ -277,6 +283,7 @@ module.exports = {
     seedAdvanceRent: prepaidRent.seedAdvanceRent,
     EXPENSE_CATEGORIES, normalizeExpenseCategory,
     getExpenseAnalysis, getBoardReport, getManagementReport,
+    getPurchaseVsSales,
 
     // Cash Deposits
     listCashDeposits, getCashDeposit, saveCashDeposit,

@@ -1929,13 +1929,28 @@ function importPettyCashSheet(db, data, { log, mode, sheetName }) {
     // idempotent and prevents a second post when the same advance also appears
     // in the Advance sheet.
     const postAdvanceLedger = true;
+    // Who the voucher paid — exact, unique party-name match only (never fuzzy).
+    // A name that matches nothing stays unlinked and is flagged for review, so
+    // the operator assigns it in Petty Cash → 👤 instead of a guess being made.
+    const { resolveParty: exactParty } = require('./operations/accounting_dates');
+    const { postPettyLedgerRow } = require('./operations/petty_cash');
+    const { postExpenseLedger } = require('./operations/expenses');
+    const linkParty = (name) => {
+        const r = exactParty(db, { paid_to: name });
+        return { party_id: r.party_id || null, review: r.party_id ? 0 : (String(name || '').trim() ? 1 : 0) };
+    };
+    // The Payment sheet's own register row (type='payment') posts the party
+    // statement; posting a PETTY row for the same voucher would double it.
+    const isPaymentSheet = sheetName === 'Payment';
+    const isAdvanceSheet = sheetName === 'Advance';
+    const postPettyStatementRow = !toOtherExpenses && !isPaymentSheet && !isAdvanceSheet;
     const insertPC = db.prepare(`
-        INSERT INTO petty_cash (voucher_no, date, expense_head, description, amount, paid_to, payment_mode, remarks, approved_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+        INSERT INTO petty_cash (voucher_no, date, accounting_date, expense_head, description, amount, paid_to, payment_mode, remarks, approved_by, party_id, party_review)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
     `);
     const insertOE = db.prepare(`
-        INSERT INTO other_expenses (date, category, expense_head, description, amount, paid_to, payment_mode, reference_no, remarks, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        INSERT INTO other_expenses (date, accounting_date, category, expense_head, description, amount, paid_amount, payment_status, paid_to, payment_mode, reference_no, remarks, created_by, party_id, party_review)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, ?, ?, NULL, ?, ?)
     `);
     const insertPay = db.prepare(`
         INSERT INTO payments (party_id, date, type, transaction_type, amount, mode, reference_type, notes, created_by)
@@ -1995,20 +2010,56 @@ function importPettyCashSheet(db, data, { log, mode, sheetName }) {
             const head = desc || 'Payment';
             const key = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|${head.toLowerCase()}|${desc.toLowerCase()}`;
             if (existingPC.has(key)) { report.skipped_dup++; continue; }
+            const linked = linkParty(customer);
+            if (!linked.party_id && String(customer || '').trim()) {
+                report.unmatched.push(`${date} | ${customer} | ${paid} | ${head}`);
+            }
             if (toOtherExpenses) {
                 // Already in the petty-cash box (same voucher typed in both sheets).
                 // Keep the one that is already recorded rather than duplicating it
                 // into a second register.
                 const oeK = oeKey(date, paid, customer, head, desc);
                 if (existingOE.has(oeK)) { report.skipped_dup++; continue; }
-                insertOE.run(date, type === 'PETTY CASH' ? 'Operating' : 'Operating', head, desc, paid, customer, payMode, receiptNo || '', '');
+                const info = insertOE.run(date, date, 'Operating', head, desc, paid, paid, customer, payMode, receiptNo || '', '', linked.party_id, linked.review);
+                // A party-linked expense reaches that party's statement exactly
+                // as one typed in the Expenses screen: the bill credit and the
+                // paid debit, both tagged EXPENSE:. The P&L still reads the
+                // single other_expenses row.
+                postExpenseLedger(db, Number(info.lastInsertRowid), {
+                    party_id: linked.party_id, category: 'Operating', head,
+                    reference_no: receiptNo || '', date, accounting_date: date,
+                    amount: paid, paid_amount: paid, mode: payMode
+                });
                 existingOE.add(oeK);
                 report.other_expense = (report.other_expense || 0) + 1;
                 report.office = (report.office || 0) + 1;
+                if (linked.party_id) report.linked++;
+
+                continue;
+            }
+            // The Payment sheet is a PAYMENT REGISTER, not the petty-cash box.
+            // Its row belongs in `payments` (postPaymentRegisterRows), which
+            // already records the cash/bank movement and the supplier debit.
+            // Mirroring it into petty_cash counted the same money as a second
+            // cash expense and inflated the P&L.
+            if (isPaymentSheet) {
+                existingPC.add(key);
+                report.payment++;
                 continue;
             }
             seq++;
-            insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, head, desc, paid, customer, payMode, '');
+            const voucherNo = receiptNo || `PC-${String(seq).padStart(4, '0')}`;
+            const info = insertPC.run(voucherNo, date, date, head, desc, paid, customer, payMode, '', linked.party_id, linked.review);
+            // PETTY CASH vouchers own their party statement row. Payment-sheet
+            // vouchers are posted by postPaymentRegisterRows and Advance-sheet
+            // vouchers by the advance payment row below — never twice.
+            if (postPettyStatementRow && linked.party_id) {
+                postPettyLedgerRow(db, {
+                    id: Number(info.lastInsertRowid), date, accounting_date: date,
+                    voucher_no: voucherNo, expense_head: head, amount: paid
+                }, linked.party_id);
+                report.linked = (report.linked || 0) + 1;
+            }
             existingPC.add(key);
             report.payment++;
             if (type === 'OFFICE EXPENSES' || type === 'PETTY CASH') report.office = (report.office || 0) + 1;
@@ -2017,7 +2068,7 @@ function importPettyCashSheet(db, data, { log, mode, sheetName }) {
             const pcKey = `${date}|${Math.round(paid * 100)}|${customer.toLowerCase()}|advance|${(desc || 'advance paid').toLowerCase()}`;
             seq++;
             if (!existingPC.has(pcKey)) {
-                insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, 'Advance', desc || 'Advance paid', paid, customer, payMode, '');
+                insertPC.run(receiptNo || `PC-${String(seq).padStart(4, '0')}`, date, date, 'Advance', desc || 'Advance paid', paid, customer, payMode, '', pid || null, pid ? 0 : 1);
                 existingPC.add(pcKey);
                 report.advance++;
             }
@@ -2143,10 +2194,14 @@ function postPaymentRegisterRows(db, data, { mode, log }) {
             report.added++;
 
             // Party statement: one posting per payment, never a second one.
-            if (mode !== 'fresh' && !findLedger.get(pid, date, paid)) {
+            // Fresh mode clears ledger_entries, so it must post here too — the
+            // old `mode !== 'fresh'` guard is why a fresh import left the
+            // Payment sheet's supplier debits out of every statement.
+            if (!findLedger.get(pid, date, paid)) {
                 postPaymentLedger(db, {
                     id: Number(info.lastInsertRowid), party_id: pid, date,
-                    type: 'payment', amount: paid, mode: payMode, transaction_type: null
+                    accounting_date: date, type: 'payment', amount: paid,
+                    mode: payMode, transaction_type: null
                 });
                 report.ledger_posted++;
             }
@@ -3220,6 +3275,20 @@ function runExcelImport(db, excelPath, opts = {}) {
     // 7b. Payment / Expenses / Advance registers — the vouchers that live in
     // their own sheets instead of PETTY CASH (see importRegisterSheets).
     results.registers = importRegisterSheets(db, workbook, { mode, log });
+
+    // 7c. Make sure every party-linked register row has exactly one statement
+    // posting (Payment register debit, petty voucher rows, expense bill/paid).
+    // Idempotent; also repairs rows a previous import left unposted.
+    try {
+        const { ensurePartyStatementRows } = require('./operations/statement_repair');
+        const repair = ensurePartyStatementRows(db);
+        results.statementRepair = repair;
+        log(`  🔗 Party statements: ${repair.payments_posted} payment(s), ${repair.petty_posted} petty voucher(s), ${repair.expenses_posted} expense(s) posted`
+            + (repair.skipped ? `, ${repair.skipped} already present` : '')
+            + (repair.errors.length ? `, ⚠️ ${repair.errors.length} failed` : ''));
+    } catch (e) {
+        log(`  ⚠️ Party statement repair failed: ${e.message}`);
+    }
 
     // 8. Bank transactions (QR/bank statement rows with auto-match)
     const bankSheetName = workbook.SheetNames.includes('BANK RECON') ? 'BANK RECON' : null;

@@ -159,6 +159,10 @@ function collectModuleRows(db) {
         payments = db.prepare(`SELECT id, party_id, date, type, transaction_type, amount, notes,
                                       reference_type, reference_id FROM payments`).all();
     } catch (e) { payments = []; }
+    // Money-out payments already on the account by their own row. A petty-cash
+    // voucher from the Payment / Advance sheet is the cash-box view of the same
+    // voucher; deriving it again would show the payment twice.
+    const paymentDebitKey = new Set();
     for (const p of payments) {
         const side = paymentSide(p);
         if (!side) continue;
@@ -172,6 +176,9 @@ function collectModuleRows(db) {
             debit: side.side === 'dr' ? MONEY(p.amount) : 0,
             credit: side.side === 'cr' ? MONEY(p.amount) : 0
         });
+        if (side.side === 'dr') {
+            paymentDebitKey.add(`${p.party_id}|${p.date}|${Math.round((Number(p.amount) || 0) * 100)}`);
+        }
     }
 
     // ── Petty Cash ──────────────────────────────────────────────
@@ -186,6 +193,7 @@ function collectModuleRows(db) {
     } catch (e) { petty = []; }
     for (const pc of petty) {
         const isAdvance = String(pc.expense_head || '').trim().toUpperCase() === 'ADVANCE';
+        if (paymentDebitKey.has(`${pc.party_id}|${pc.date}|${Math.round((Number(pc.amount) || 0) * 100)}`)) continue;
         add({
             party_id: pc.party_id, date: pc.date,
             accounting_date: pc.accounting_date || pc.date,

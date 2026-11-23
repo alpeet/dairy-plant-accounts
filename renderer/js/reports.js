@@ -38,6 +38,10 @@ async function renderReports() {
                 <span class="label">🧑‍🌾 Farmer Statement</span>
                 <span class="value" style="font-size:16px">With FAT/SNF →</span>
             </div>
+            <div class="summary-card card-warning" style="cursor:pointer" onclick="showPurchaseVsSales()">
+                <span class="label">⚖️ Purchase vs Sales</span>
+                <span class="value" style="font-size:16px">Daily Comparison →</span>
+            </div>
             <div class="summary-card card-info" style="cursor:pointer" onclick="exportDailyAccountExcel()">
                 <span class="label">📁 Export to Excel</span>
                 <span class="value" style="font-size:16px">Daily Account Pro →</span>
@@ -526,6 +530,558 @@ async function showOutstandingReport() {
             </div>
         </div>
     `;
+}
+
+// ============================================================
+// Purchase vs Sales — daily comparison report
+// ============================================================
+// Sources: the original purchase bills and sales invoices (see
+// shared/operations/purchase_vs_sales.js). The difference shown is
+// Sales − Purchase: a trading gap, never a profit figure.
+
+const PVS_PAGE_SIZE = 100;
+
+function pvsQty(qty, unit) {
+    const n = Number(qty) || 0;
+    if (!n) return '0.00';
+    const label = unit === 'mixed' ? '' : (unit ? ' ' + unit : '');
+    return formatNumber(n) + label + (unit === 'mixed' ? ' <span style="font-size:10px;color:var(--text-light)">(mixed)</span>' : '');
+}
+
+function pvsDifference(value) {
+    const n = Number(value) || 0;
+    if (Math.abs(n) < 0.005) return '<span style="color:var(--text-light)">' + formatCurrency(0) + '</span>';
+    const colour = n > 0 ? 'var(--accent)' : 'var(--danger)';
+    const sign = n > 0 ? '+' : '−';
+    return `<span style="color:${colour};font-weight:600">${sign}${formatCurrency(Math.abs(n))}</span>`;
+}
+
+function pvsMoney(value, zeroDash) {
+    const n = Number(value) || 0;
+    if (zeroDash && !n) return '<span style="color:var(--text-light)">—</span>';
+    return formatCurrency(n);
+}
+
+function pvsOptionList(options, selected) {
+    return options.map(option => {
+        const value = typeof option === 'object' ? option.id : option;
+        const label = typeof option === 'object' ? option.name : option;
+        return `<option value="${escapeHtml(String(value))}" ${String(selected) === String(value) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+}
+
+function pvsRowsFor(lines, page, side) {
+    const start = (page - 1) * PVS_PAGE_SIZE;
+    const slice = lines.slice(start, start + PVS_PAGE_SIZE);
+    if (!slice.length) {
+        return `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-light)">No ${side} records for this selection</td></tr>`;
+    }
+    let lastDate = null;
+    return slice.map(line => {
+        const rows = [];
+        if (line.date !== lastDate) {
+            lastDate = line.date;
+            rows.push(`<tr style="background:var(--bg)"><td colspan="9" style="font-weight:600;font-size:12px">${formatDate(line.date)} <span style="color:var(--text-light);font-weight:400">(${line.date})</span></td></tr>`);
+        }
+        rows.push(`<tr>
+            <td style="white-space:nowrap">${escapeHtml(line.date)}</td>
+            <td>${escapeHtml(line.party_name)}</td>
+            <td style="white-space:nowrap">${escapeHtml(line.reference)}</td>
+            <td>${escapeHtml(line.product)}</td>
+            <td class="text-right" style="white-space:nowrap">${line.quantity ? formatNumber(line.quantity) : '—'}</td>
+            <td style="white-space:nowrap">${line.unit ? escapeHtml(line.unit) : '—'}</td>
+            <td class="text-right" style="white-space:nowrap">${line.rate ? formatCurrency(line.rate) : '—'}</td>
+            <td class="text-right" style="white-space:nowrap">${formatCurrency(line.amount)}</td>
+            <td style="white-space:nowrap">${statusBadge(line.status)}</td>
+        </tr>`);
+        return rows.join('');
+    }).join('');
+}
+
+function pvsPager(side, page, pages, total) {
+    const label = side === 'purchase' ? 'purchase' : 'sales';
+    const first = total ? (page - 1) * PVS_PAGE_SIZE + 1 : 0;
+    const last = Math.min(page * PVS_PAGE_SIZE, total);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 4px">
+        <div style="font-size:12px;color:var(--text-light)">Showing ${first}–${last} of ${total} ${label} rows</div>
+        <div class="btn-group" style="align-items:center">
+            <button class="btn btn-secondary btn-sm" onclick="pvsPage('${side}', ${page - 1})" ${page <= 1 ? 'disabled' : ''}>‹ Prev</button>
+            <span style="font-size:12px;padding:0 6px">Page ${page} of ${pages}</span>
+            <button class="btn btn-secondary btn-sm" onclick="pvsPage('${side}', ${page + 1})" ${page >= pages ? 'disabled' : ''}>Next ›</button>
+        </div>
+    </div>`;
+}
+
+function pvsScreenHTML(data, state) {
+    const summary = data.summary || {};
+    const purchasePages = Math.max(1, Math.ceil(data.purchase_lines.length / PVS_PAGE_SIZE));
+    const salesPages = Math.max(1, Math.ceil(data.sales_lines.length / PVS_PAGE_SIZE));
+    const purchasePage = Math.min(Math.max(1, Number(state.page_purchase) || 1), purchasePages);
+    const salesPage = Math.min(Math.max(1, Number(state.page_sales) || 1), salesPages);
+
+    const purchasePartyRows = data.purchase_parties.length
+        ? data.purchase_parties.map(row => `<tr style="cursor:pointer" onclick="pvsShowParty('purchase', '${row.party_id == null ? 'none' : row.party_id}')" title="View this supplier's purchase records">
+                <td><strong>${escapeHtml(row.party_name)}</strong></td>
+                <td class="text-right">${row.transactions}</td>
+                <td class="text-right">${pvsQty(row.quantity, row.quantity_unit)}</td>
+                <td class="text-right">${formatCurrency(row.amount)}</td>
+            </tr>`).join('')
+        : '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-light)">No purchases in this period</td></tr>';
+
+    const salesPartyRows = data.sales_parties.length
+        ? data.sales_parties.map(row => `<tr style="cursor:pointer" onclick="pvsShowParty('sales', '${row.party_id == null ? 'none' : row.party_id}')" title="View this customer's sales records">
+                <td><strong>${escapeHtml(row.party_name)}</strong></td>
+                <td class="text-right">${row.transactions}</td>
+                <td class="text-right">${pvsQty(row.quantity, row.quantity_unit)}</td>
+                <td class="text-right">${formatCurrency(row.amount)}</td>
+            </tr>`).join('')
+        : '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-light)">No sales in this period</td></tr>';
+
+    const dailyRows = data.daily.length
+        ? data.daily.map(day => `<tr style="cursor:pointer" onclick="pvsShowDay('${day.date}')" title="Click to view this day's purchase and sales records">
+                <td><strong>${formatDate(day.date)}</strong> <span style="color:var(--text-light);font-size:11px">(${day.date})</span></td>
+                <td class="text-right">${pvsMoney(day.purchase_amount, true)}</td>
+                <td class="text-right">${pvsMoney(day.sales_amount, true)}</td>
+                <td class="text-right">${pvsDifference(day.difference)}</td>
+            </tr>`).join('')
+        : '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-light)">No activity in this period</td></tr>';
+
+    const rangeNote = data.zero_days_filled
+        ? `All ${data.day_count} days of the period are listed, including days with no activity.`
+        : `${data.day_count} days with activity in the period.`;
+
+    return `
+        <div class="card-header">
+            <h2>⚖️ Purchase vs Sales — Daily Comparison</h2>
+            <div class="btn-group">
+                <button class="btn btn-info btn-sm" onclick="pvsPrint()">🖨 Print Report</button>
+                <button class="btn btn-primary btn-sm" onclick="pvsExportPDF()">📄 Export PDF</button>
+                <button class="btn btn-success btn-sm" onclick="pvsExportExcel()">📊 Excel</button>
+            </div>
+        </div>
+
+        <div class="filter-bar">
+            <div class="form-group"><label>From Date</label><input type="date" class="form-control" id="pvsFrom" value="${escapeHtml(state.from)}"></div>
+            <div class="form-group"><label>To Date</label><input type="date" class="form-control" id="pvsTo" value="${escapeHtml(state.to)}"></div>
+            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-sm" onclick="pvsApply()">Apply Filter</button></div>
+            <div class="form-group"><label>Quick Range</label>
+                <div class="btn-group">
+                    <button class="btn btn-secondary btn-sm" onclick="pvsPreset('today')">Today</button>
+                    <button class="btn btn-secondary btn-sm" onclick="pvsPreset('yesterday')">Yesterday</button>
+                    <button class="btn btn-secondary btn-sm" onclick="pvsPreset('this_week')">This Week</button>
+                    <button class="btn btn-secondary btn-sm" onclick="pvsPreset('this_month')">This Month</button>
+                    <button class="btn btn-secondary btn-sm" onclick="pvsPreset('last_month')">Previous Month</button>
+                    <button class="btn btn-secondary btn-sm" onclick="pvsCustom()">Custom</button>
+                    <button class="btn btn-danger btn-sm" onclick="pvsReset()">Reset Filter</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="filter-bar">
+            <div class="form-group"><label>Supplier / Purchase Party</label>
+                <select class="form-control" id="pvsPurchaseParty">
+                    <option value="">All Suppliers</option>
+                    ${pvsOptionList(data.options.purchase_parties, state.purchase_party_id)}
+                </select>
+            </div>
+            <div class="form-group"><label>Customer / Sales Party</label>
+                <select class="form-control" id="pvsSalesParty">
+                    <option value="">All Customers</option>
+                    ${pvsOptionList(data.options.sales_parties, state.sales_party_id)}
+                </select>
+            </div>
+            <div class="form-group"><label>Product / Item</label>
+                <select class="form-control" id="pvsProduct">
+                    <option value="">All Items</option>
+                    ${pvsOptionList(data.options.products, state.product)}
+                </select>
+            </div>
+            <div class="form-group"><label>Reference</label><input type="text" class="form-control" id="pvsReference" value="${escapeHtml(state.reference)}" placeholder="Bill / Invoice no"></div>
+            <div class="form-group"><label>Cash / Credit</label>
+                <select class="form-control" id="pvsMode">
+                    <option value="">All Modes</option>
+                    <option value="cash" ${state.payment_mode === 'cash' ? 'selected' : ''}>Cash</option>
+                    <option value="credit" ${state.payment_mode === 'credit' ? 'selected' : ''}>Credit</option>
+                    <option value="bank" ${state.payment_mode === 'bank' ? 'selected' : ''}>Bank</option>
+                    <option value="upi" ${state.payment_mode === 'upi' ? 'selected' : ''}>UPI</option>
+                </select>
+            </div>
+            <div class="form-group"><label>&nbsp;</label>
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px">
+                    <input type="checkbox" id="pvsZeroDays" ${state.include_zero_days ? 'checked' : ''}> Include days with no activity
+                </label>
+            </div>
+        </div>
+
+        <div class="summary-cards" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px">
+            <div class="summary-card card-danger" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Total Purchase Amount</span>
+                <span class="value" style="font-size:19px">${formatCurrency(summary.purchase_amount)}</span>
+                <span class="sub">${summary.purchase_transactions} purchase bills</span>
+            </div>
+            <div class="summary-card card-success" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Total Sales Amount</span>
+                <span class="value" style="font-size:19px">${formatCurrency(summary.sales_amount)}</span>
+                <span class="sub">${summary.sales_transactions} sales invoices</span>
+            </div>
+            <div class="summary-card ${summary.difference >= 0 ? 'card-info' : 'card-warning'}" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Purchase vs Sales Difference</span>
+                <span class="value" style="font-size:19px">${pvsDifference(summary.difference)}</span>
+                <span class="sub">Sales − Purchase · trading gap, not profit</span>
+            </div>
+            <div class="summary-card card-primary" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Purchase Quantity</span>
+                <span class="value" style="font-size:19px">${pvsQty(summary.purchase_quantity, summary.purchase_quantity_unit)}</span>
+                <span class="sub">${summary.purchase_parties} suppliers</span>
+            </div>
+            <div class="summary-card card-primary" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Sales Quantity</span>
+                <span class="value" style="font-size:19px">${pvsQty(summary.sales_quantity, summary.sales_quantity_unit)}</span>
+                <span class="sub">${summary.sales_parties} customers</span>
+            </div>
+            <div class="summary-card card-warning" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Purchase Transactions</span>
+                <span class="value" style="font-size:19px">${summary.purchase_transactions}</span>
+                <span class="sub">${data.purchase_lines.length} detail rows</span>
+            </div>
+            <div class="summary-card card-warning" style="margin:0;padding:12px">
+                <span class="label" style="min-height:30px">Sales Transactions</span>
+                <span class="value" style="font-size:19px">${summary.sales_transactions}</span>
+                <span class="sub">${data.sales_lines.length} detail rows</span>
+            </div>
+        </div>
+
+        <div style="margin-bottom:16px;padding:10px 14px;background:var(--bg);border-left:3px solid var(--primary);border-radius:6px;font-size:12px;color:var(--text-light)">
+            Purchases are the original purchase bills and sales are the original sales invoices dated inside the selected period.
+            The difference is <strong>Sales − Purchase</strong>; it is a trading comparison, <strong>not profit</strong> (operating expenses, stock changes and
+            other income are not included). Supplier payments and customer collections are money settlements — they never add to these totals.
+        </div>
+
+        <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;flex-wrap:wrap;gap:8px">
+                <h3 style="margin:0;font-size:15px">Daily Comparison</h3>
+                <span style="font-size:12px;color:var(--text-light)">${rangeNote} Click a day to see its records.</span>
+            </div>
+            <div class="table-container" style="max-height:460px;overflow:auto">
+                <table>
+                    <thead><tr><th>Date</th><th class="text-right">Purchase Amount</th><th class="text-right">Sales Amount</th><th class="text-right">Difference</th></tr></thead>
+                    <tbody>${dailyRows}</tbody>
+                    <tfoot><tr>
+                        <td><strong>Total — ${data.day_count} days</strong></td>
+                        <td class="text-right"><strong>${formatCurrency(summary.purchase_amount)}</strong></td>
+                        <td class="text-right"><strong>${formatCurrency(summary.sales_amount)}</strong></td>
+                        <td class="text-right">${pvsDifference(summary.difference)}</td>
+                    </tr></tfoot>
+                </table>
+            </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(560px,1fr));gap:16px;margin-bottom:16px">
+            <div class="card">
+                <div style="padding:12px 16px"><h3 style="margin:0;font-size:15px">Purchase Parties (Suppliers)</h3></div>
+                <div class="table-container" style="max-height:360px;overflow:auto">
+                    <table>
+                        <thead><tr><th>Supplier Name</th><th class="text-right">Bills</th><th class="text-right">Total Quantity</th><th class="text-right">Total Purchase</th></tr></thead>
+                        <tbody>${purchasePartyRows}</tbody>
+                        <tfoot><tr><td><strong>Total — ${data.purchase_parties.length} suppliers</strong></td><td class="text-right"><strong>${summary.purchase_transactions}</strong></td><td class="text-right"><strong>${pvsQty(summary.purchase_quantity, summary.purchase_quantity_unit)}</strong></td><td class="text-right"><strong>${formatCurrency(summary.purchase_amount)}</strong></td></tr></tfoot>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div style="padding:12px 16px"><h3 style="margin:0;font-size:15px">Sales Parties (Customers)</h3></div>
+                <div class="table-container" style="max-height:360px;overflow:auto">
+                    <table>
+                        <thead><tr><th>Customer Name</th><th class="text-right">Invoices</th><th class="text-right">Total Quantity</th><th class="text-right">Total Sales</th></tr></thead>
+                        <tbody>${salesPartyRows}</tbody>
+                        <tfoot><tr><td><strong>Total — ${data.sales_parties.length} customers</strong></td><td class="text-right"><strong>${summary.sales_transactions}</strong></td><td class="text-right"><strong>${pvsQty(summary.sales_quantity, summary.sales_quantity_unit)}</strong></td><td class="text-right"><strong>${formatCurrency(summary.sales_amount)}</strong></td></tr></tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;flex-wrap:wrap;gap:8px">
+                <h3 style="margin:0;font-size:15px">Purchase Details</h3>
+                <span style="font-size:12px;color:var(--text-light)">Grouped by purchase date — ${summary.purchase_transactions} bills</span>
+            </div>
+            <div class="table-container" style="overflow-x:auto">
+                <table style="min-width:1000px">
+                    <thead><tr><th>Date</th><th>Supplier</th><th>Bill No</th><th>Item</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Rate</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
+                    <tbody>${pvsRowsFor(data.purchase_lines, purchasePage, 'purchase')}</tbody>
+                </table>
+            </div>
+            ${pvsPager('purchase', purchasePage, purchasePages, data.purchase_lines.length)}
+        </div>
+
+        <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;flex-wrap:wrap;gap:8px">
+                <h3 style="margin:0;font-size:15px">Sales Details</h3>
+                <span style="font-size:12px;color:var(--text-light)">Grouped by sales date — ${summary.sales_transactions} invoices</span>
+            </div>
+            <div class="table-container" style="overflow-x:auto">
+                <table style="min-width:1000px">
+                    <thead><tr><th>Date</th><th>Customer</th><th>Invoice No</th><th>Item</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Rate</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
+                    <tbody>${pvsRowsFor(data.sales_lines, salesPage, 'sales')}</tbody>
+                </table>
+            </div>
+            ${pvsPager('sales', salesPage, salesPages, data.sales_lines.length)}
+        </div>
+
+        <div style="font-size:11px;color:var(--text-light);padding:4px 4px 12px">
+            Reconciled with the original records: purchases ${formatCurrency(data.reconciliation.purchase_document_total)}
+            across ${data.reconciliation.purchase_documents} bills, sales ${formatCurrency(data.reconciliation.sales_document_total)}
+            across ${data.reconciliation.sales_documents} invoices.
+            ${data.reconciliation.purchase_reconciled && data.reconciliation.sales_reconciled ? '' : '<span style="color:var(--danger)"> Detail rows do not fully reconcile with the document totals.</span>'}
+        </div>
+    `;
+}
+
+async function showPurchaseVsSales(state = {}) {
+    const container = document.getElementById('reportContent');
+    if (!container) return;
+    document.getElementById('topActions').innerHTML = '';
+
+    const preset = getDatePreset('this_month');
+    const current = Object.assign({
+        from: preset.from,
+        to: preset.to,
+        purchase_party_id: '',
+        sales_party_id: '',
+        product: '',
+        reference: '',
+        payment_mode: '',
+        include_zero_days: true,
+        page_purchase: 1,
+        page_sales: 1
+    }, state);
+
+    container.innerHTML = '<div class="card" style="padding:30px;text-align:center;color:var(--text-light)">Building the report…</div>';
+
+    const result = await window.api.getPurchaseVsSales({
+        from_date: current.from || undefined,
+        to_date: current.to || undefined,
+        purchase_party_id: current.purchase_party_id || undefined,
+        sales_party_id: current.sales_party_id || undefined,
+        product: current.product || undefined,
+        reference: current.reference || undefined,
+        payment_mode: current.payment_mode || undefined,
+        include_zero_days: !!current.include_zero_days
+    });
+
+    if (!result || !result.success) {
+        container.innerHTML = `<div class="card" style="padding:30px;color:var(--danger)">Could not build the Purchase vs Sales report: ${escapeHtml((result && result.error) || 'unknown error')}</div>`;
+        return;
+    }
+
+    window._pvsState = current;
+    window._pvsData = result.data;
+    container.innerHTML = pvsScreenHTML(result.data, current);
+}
+
+/** Current filter values from the screen (falls back to the last applied state). */
+function pvsCurrentFilters(overrides = {}) {
+    const state = window._pvsState || {};
+    const value = (id, fallback) => {
+        const el = document.getElementById(id);
+        return el ? el.value : fallback;
+    };
+    const zeroEl = document.getElementById('pvsZeroDays');
+    return Object.assign({}, state, {
+        from: value('pvsFrom', state.from || ''),
+        to: value('pvsTo', state.to || ''),
+        purchase_party_id: value('pvsPurchaseParty', state.purchase_party_id || ''),
+        sales_party_id: value('pvsSalesParty', state.sales_party_id || ''),
+        product: value('pvsProduct', state.product || ''),
+        reference: value('pvsReference', state.reference || ''),
+        payment_mode: value('pvsMode', state.payment_mode || ''),
+        include_zero_days: zeroEl ? zeroEl.checked : !!state.include_zero_days
+    }, overrides);
+}
+
+function pvsApply() {
+    showPurchaseVsSales(pvsCurrentFilters({ page_purchase: 1, page_sales: 1 }));
+}
+
+function pvsPreset(name) {
+    const preset = getDatePreset(name);
+    const fromEl = document.getElementById('pvsFrom');
+    const toEl = document.getElementById('pvsTo');
+    if (fromEl) fromEl.value = preset.from;
+    if (toEl) toEl.value = preset.to;
+    pvsApply();
+}
+
+function pvsCustom() {
+    const fromEl = document.getElementById('pvsFrom');
+    if (fromEl) { fromEl.focus(); fromEl.select && fromEl.select(); }
+    showToast('Pick your own From and To dates, then press Apply Filter', 'info', 3000);
+}
+
+function pvsReset() {
+    const preset = getDatePreset('this_month');
+    showPurchaseVsSales({ from: preset.from, to: preset.to });
+}
+
+function pvsPage(side, page) {
+    const overrides = side === 'purchase' ? { page_purchase: page } : { page_sales: page };
+    showPurchaseVsSales(pvsCurrentFilters(overrides));
+}
+
+/** Drill-down: one supplier's purchases (or one customer's sales) in the period. */
+function pvsShowParty(side, partyId) {
+    const data = window._pvsData;
+    if (!data) return;
+    const isPurchase = side === 'purchase';
+    const key = String(partyId);
+    const lines = (isPurchase ? data.purchase_lines : data.sales_lines)
+        .filter(line => String(line.party_id == null ? 'none' : line.party_id) === key);
+    const party = (isPurchase ? data.purchase_parties : data.sales_parties)
+        .find(row => String(row.party_id == null ? 'none' : row.party_id) === key);
+
+    if (!lines.length) {
+        showToast('No ' + (isPurchase ? 'purchase' : 'sales') + ' records for this party in the selected period', 'warning');
+        return;
+    }
+
+    const total = lines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+    const quantity = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
+    const rows = lines.map(line => `<tr>
+        <td style="white-space:nowrap">${escapeHtml(line.date)}</td>
+        <td style="white-space:nowrap">${escapeHtml(line.reference)}</td>
+        <td>${escapeHtml(line.product)}</td>
+        <td class="text-right" style="white-space:nowrap">${line.quantity ? formatNumber(line.quantity) : '—'}</td>
+        <td>${line.unit ? escapeHtml(line.unit) : '—'}</td>
+        <td class="text-right" style="white-space:nowrap">${line.rate ? formatCurrency(line.rate) : '—'}</td>
+        <td class="text-right" style="white-space:nowrap">${formatCurrency(line.amount)}</td>
+        <td style="white-space:nowrap">${statusBadge(line.status)}</td>
+    </tr>`).join('');
+
+    showModal(`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 10px">
+            <h3 style="margin:0">${escapeHtml(party ? party.party_name : 'Party')} — ${isPurchase ? 'Purchase Details' : 'Sales Details'}</h3>
+            <button class="btn btn-danger btn-sm" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">
+            ${escapeHtml(data.from_date || 'Start')} → ${escapeHtml(data.to_date || 'Today')} ·
+            ${lines.length} detail rows · ${formatNumber(quantity)} quantity · <strong>${formatCurrency(total)}</strong>
+        </div>
+        <div class="table-container" style="max-height:60vh;overflow:auto">
+            <table>
+                <thead><tr><th>Date</th><th>Ref No</th><th>Item</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Rate</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `);
+}
+
+/** Drill-down: everything bought and sold on one date. */
+function pvsShowDay(date) {
+    const data = window._pvsData;
+    if (!data) return;
+    const purchaseLines = data.purchase_lines.filter(line => line.date === date);
+    const salesLines = data.sales_lines.filter(line => line.date === date);
+    const purchaseTotal = purchaseLines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+    const salesTotal = salesLines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+
+    const rowsOf = (lines) => lines.length
+        ? lines.map(line => `<tr>
+                <td>${escapeHtml(line.party_name)}</td>
+                <td style="white-space:nowrap">${escapeHtml(line.reference)}</td>
+                <td>${escapeHtml(line.product)}</td>
+                <td class="text-right" style="white-space:nowrap">${line.quantity ? formatNumber(line.quantity) : '—'}</td>
+                <td>${line.unit ? escapeHtml(line.unit) : '—'}</td>
+                <td class="text-right" style="white-space:nowrap">${formatCurrency(line.amount)}</td>
+                <td style="white-space:nowrap">${statusBadge(line.status)}</td>
+            </tr>`).join('')
+        : '<tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-light)">No records on this date</td></tr>';
+
+    showModal(`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 10px">
+            <h3 style="margin:0">${formatDate(date)} — Records</h3>
+            <button class="btn btn-danger btn-sm" onclick="closeModal()">✕</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-light);margin-bottom:10px">
+            Purchase <strong>${formatCurrency(purchaseTotal)}</strong> · Sales <strong>${formatCurrency(salesTotal)}</strong> ·
+            Difference ${pvsDifference(salesTotal - purchaseTotal)}
+        </div>
+        <h4 style="margin:10px 0 6px;font-size:13px">Purchases (${purchaseLines.length} rows)</h4>
+        <div class="table-container" style="max-height:32vh;overflow:auto">
+            <table>
+                <thead><tr><th>Supplier</th><th>Bill No</th><th>Item</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
+                <tbody>${rowsOf(purchaseLines)}</tbody>
+            </table>
+        </div>
+        <h4 style="margin:14px 0 6px;font-size:13px">Sales (${salesLines.length} rows)</h4>
+        <div class="table-container" style="max-height:32vh;overflow:auto">
+            <table>
+                <thead><tr><th>Customer</th><th>Invoice No</th><th>Item</th><th class="text-right">Qty</th><th>Unit</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
+                <tbody>${rowsOf(salesLines)}</tbody>
+            </table>
+        </div>
+    `);
+}
+
+/** Print and PDF both use the server-built document so they cannot drift. */
+async function pvsDocument() {
+    const filters = pvsCurrentFilters();
+    const result = await window.api.getPurchaseVsSalesHTML({
+        from_date: filters.from || undefined,
+        to_date: filters.to || undefined,
+        purchase_party_id: filters.purchase_party_id || undefined,
+        sales_party_id: filters.sales_party_id || undefined,
+        product: filters.product || undefined,
+        reference: filters.reference || undefined,
+        payment_mode: filters.payment_mode || undefined,
+        include_zero_days: !!filters.include_zero_days
+    });
+    if (!result || !result.success) {
+        showToast('Could not build the report document: ' + ((result && result.error) || 'unknown error'), 'error');
+        return null;
+    }
+    return result.data;
+}
+
+async function pvsPrint() {
+    const doc = await pvsDocument();
+    if (!doc) return;
+    printHTML(doc.html);
+}
+
+async function pvsExportPDF() {
+    const doc = await pvsDocument();
+    if (!doc) return;
+    const result = await window.api.printToPDF({
+        html: doc.html,
+        filename: doc.filename,
+        pageNumbers: true,
+        footerLeft: doc.title
+    });
+    if (result && result.success) {
+        showToast('PDF saved' + (result.path && result.path !== 'printed' ? ': ' + result.path : ''), 'success');
+    } else if (result && result.canceled) {
+        showToast('PDF export cancelled', 'info');
+    } else {
+        showToast('PDF export failed: ' + ((result && result.error) || 'unknown error'), 'error');
+    }
+}
+
+async function pvsExportExcel() {
+    const filters = pvsCurrentFilters();
+    const result = await window.api.exportPurchaseVsSales({
+        from_date: filters.from || undefined,
+        to_date: filters.to || undefined,
+        purchase_party_id: filters.purchase_party_id || undefined,
+        sales_party_id: filters.sales_party_id || undefined,
+        product: filters.product || undefined,
+        reference: filters.reference || undefined,
+        payment_mode: filters.payment_mode || undefined,
+        include_zero_days: !!filters.include_zero_days
+    });
+    if (result && result.success) {
+        showToast('Excel export saved' + (result.filePath ? ': ' + result.filePath : ''), 'success');
+    } else {
+        showToast('Excel export failed: ' + ((result && result.error) || 'unknown error'), 'error');
+    }
 }
 
 // ============================================================
@@ -1062,6 +1618,17 @@ window.applyPurchasesReport = applyPurchasesReport;
 window.applyDayBook = applyDayBook;
 window.applySalesRegister = applySalesRegister;
 window.applyPurchaseRegister = applyPurchaseRegister;
+window.showPurchaseVsSales = showPurchaseVsSales;
+window.pvsApply = pvsApply;
+window.pvsPreset = pvsPreset;
+window.pvsCustom = pvsCustom;
+window.pvsReset = pvsReset;
+window.pvsPage = pvsPage;
+window.pvsShowParty = pvsShowParty;
+window.pvsShowDay = pvsShowDay;
+window.pvsPrint = pvsPrint;
+window.pvsExportPDF = pvsExportPDF;
+window.pvsExportExcel = pvsExportExcel;
 window.printSalesReport = printSalesReport;
 window.exportSalesReportPDF = exportSalesReportPDF;
 window.printPurchasesReport = printPurchasesReport;
