@@ -190,6 +190,10 @@ function summariseQuantities(entries) {
     const purchase = emptyQtyBucket();
     const sales = emptyQtyBucket();
     const touched = { purchase: false, sale: false };
+    // Item-wise totals: one row per product name AND unit. A litre and a
+    // kilogram can never share a row, and two different products are never
+    // summed into one figure.
+    const itemTotals = new Map();
 
     for (const e of entries) {
         const lines = Array.isArray(e.qty_lines) ? e.qty_lines : [];
@@ -199,6 +203,18 @@ function summariseQuantities(entries) {
             const bucket = l.kind === 'sale' ? sales : purchase;
             touched[l.kind === 'sale' ? 'sale' : 'purchase'] = true;
             bucket.total_qty += qty;
+            const itemName = String(l.product_name || '').trim();
+            if (itemName) {
+                const itemUnit = String(l.unit || '').trim();
+                const ikey = itemName.toLowerCase() + '|' + itemUnit.toLowerCase();
+                let row = itemTotals.get(ikey);
+                if (!row) {
+                    row = { name: itemName, unit: itemUnit, purchase_qty: 0, sale_qty: 0 };
+                    itemTotals.set(ikey, row);
+                }
+                if (l.kind === 'sale') row.sale_qty += qty;
+                else row.purchase_qty += qty;
+            }
             const unit = String(l.unit || '').trim();
             const addUnit = (key) => {
                 const map = bucket[key] || (bucket[key] = {});
@@ -236,10 +252,24 @@ function summariseQuantities(entries) {
     for (const u of units) net.by_unit[u] = round2((sales.by_unit[u] || 0) - (purchase.by_unit[u] || 0));
     net.meaningful = touched.purchase && touched.sale && units.length === 1;
 
+    const items = [...itemTotals.values()]
+        .map(r => ({
+            name: r.name, unit: r.unit,
+            purchase_qty: round2(r.purchase_qty),
+            sale_qty: round2(r.sale_qty)
+        }))
+        .filter(r => r.purchase_qty > 0 || r.sale_qty > 0)
+        // Purchases first (biggest line first), then sales, then by name — a
+        // stable order so two reports of the same data never shuffle rows.
+        .sort((a, b) => (b.purchase_qty - a.purchase_qty)
+            || (b.sale_qty - a.sale_qty)
+            || a.name.localeCompare(b.name));
+
     return {
         purchase,
         sales,
         net,
+        items,
         has_purchase: purchase.total_qty > 0,
         has_sales: sales.total_qty > 0,
         has_quantity: purchase.total_qty > 0 || sales.total_qty > 0
@@ -704,6 +734,7 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                         rate: Number(it.rate),
                         unit: it.unit || '',
                         product_name: it.product_name || '',
+                        amount: it.amount != null ? Number(it.amount) : null,
                         source: 'purchase_items'
                     });
                 }
@@ -734,6 +765,7 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                     rate: Number(it.rate),
                     unit: it.unit || '',
                     product_name: it.product_name || '',
+                    amount: it.amount != null ? Number(it.amount) : null,
                     source: 'sales_items'
                 });
             }
@@ -756,6 +788,25 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         e.milk_type_label = types.map(t => titleCaseMilk(t)).join(' · ');
         const shifts = [...new Set(e.qty_lines.map(l => l.shift).filter(Boolean))];
         e.shift_label = shifts.map(s => titleCaseMilk(s)).join(' · ');
+
+        // ── Item-level display lines ───────────────────────────────────
+        // One bill can carry several products (and a milk bill a morning and
+        // an evening collection). Each recorded line is shown on its own line
+        // with its own product, quantity, unit, rate, milk type and shift. The
+        // row's debit/credit stay on the row ONCE, so a bill total is never
+        // duplicated by its items.
+        e.display_lines = e.qty_lines.map(l => ({
+            product_name: String(l.product_name || '').trim(),
+            quantity: Number(l.quantity),
+            unit: String(l.unit || '').trim(),
+            rate: (l.rate == null || !isFinite(Number(l.rate))) ? null : Number(l.rate),
+            amount: l.amount != null ? round2(l.amount) : (l.rate == null ? null : round2(Number(l.quantity) * Number(l.rate))),
+            milk_type: l.milk_type || '',
+            milk_type_label: l.milk_type ? titleCaseMilk(l.milk_type) : '',
+            shift: l.shift || '',
+            shift_label: l.shift ? titleCaseMilk(l.shift) : '',
+            kind: l.kind
+        }));
     }
 
     // A purchase row that carries an amount but has neither a linked milk

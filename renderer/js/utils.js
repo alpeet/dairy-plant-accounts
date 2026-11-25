@@ -313,7 +313,7 @@ function getPaperSize() {
     return 'A4';
 }
 
-async function printHTML(html) {
+async function printHTML(html, opts = {}) {
     let paperSize = getPaperSize();
     // Try to get fresh settings if cache is empty
     if (paperSize === 'A4' && typeof getSettingsCached === 'function') {
@@ -337,7 +337,7 @@ async function printHTML(html) {
     doc.write('<html><head><title>Print</title>');
     doc.write('<style>');
     doc.write(PRINT_CSS);
-    doc.write(`@page { size: ${paperSize}; }`);
+    doc.write(`@page { size: ${paperSize}${opts.orientation ? ' ' + opts.orientation : ''}; }`);
     doc.write('</style></head><body>');
     doc.write(html);
     doc.write('</body></html>');

@@ -259,11 +259,14 @@ console.log('\n— 10. Screen, print and PDF share the columns and summary —')
     check('Shift column in the shared plan', /rl\('Shift'/.test(src));
     check('quantity summary is rendered on screen', /statementQtySummaryHtml\(data\)/.test(src));
     check('quantity summary is in the print/PDF document', /statementQtySummaryHtml\(data\)/.test(src));
-    check('print document repeats table headers (thead)', /statementTableHead\(\)/.test(src));
+    check('print document repeats table headers (thead)',
+        /statementTableHead\(cols\)/.test(src) && /thead\s*\{\s*display: table-header-group/.test(src));
     check('PDF asks for page numbers', /pageNumbers:\s*true/.test(src));
     check('PDF filename names the party and the range',
         /Party_Statement_\$\{safe\(data\.party\.name\)\}_\$\{data\.from_date\}_to_\$\{data\.to_date\}\.pdf/.test(src));
-    check('PDF is landscape A4', /landscape:\s*true/.test(src) && /size: A4 landscape/.test(src));
+    check('PDF orientation follows the visible columns (A4 landscape / portrait)',
+        /landscape:\s*statementPrintLayout\(data\)\.landscape/.test(src)
+        && /size: A4 \$\{lay\.landscape \? 'landscape' : 'portrait'\}/.test(src));
     check('filters are echoed into print/PDF', /statementFilterText\(data\)/.test(src));
 }
 
@@ -315,7 +318,8 @@ console.log('\n— 11. Unreconciled purchase rows are flagged, never guessed —
             Math.abs(d.closing_balance - (d.opening_balance + d.total_debit - d.total_credit)) < 0.005);
     }
     const src = fs.readFileSync(path.join(ROOT, 'renderer', 'js', 'statements.js'), 'utf8');
-    check('screen quantity cell carries the unreconciled marker', /e\.qty_unreconciled \? statementUnreconciledMark\(\)/.test(src));
+    check('screen quantity cell carries the unreconciled marker',
+        /e\.qty_unreconciled\) return `<td class="\$\{num\}">\$\{statementUnreconciledMark\(\)\}/.test(src));
     check('the footnote is shown on screen and in print/PDF',
         (src.match(/statementUnreconciledNote\(data\)/g) || []).length >= 2);
     check('the footnote says totals are unchanged', /totals are exactly as recorded/.test(src));

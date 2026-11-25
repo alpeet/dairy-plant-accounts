@@ -247,12 +247,12 @@ console.log('\n— 8. listPartiesWithBalance unaffected —');
     check('balances are numbers', parties.every(p => typeof p.balance === 'number' || p.balance == null));
 }
 
-console.log('\n— 9. Statement columns: Qty/Rate kept, item detail via particulars —');
+console.log('\n— 9. Statement columns: Qty/Rate/Unit kept, item detail via particulars —');
 {
     const src = fs.readFileSync(path.join(ROOT, 'renderer', 'js', 'statements.js'), 'utf8');
-    // Screen, print and PDF share one column plan (STATEMENT_COLUMNS) and one
-    // row builder; assert on the plan and on the cells it writes.
-    const plan = src.slice(src.indexOf('const STATEMENT_COLUMNS'), src.indexOf('function statementColgroup'));
+    // Screen, print and PDF share one column plan (STATEMENT_COLUMN_DEFS) and
+    // one cell builder; assert on the plan and on the cells it writes.
+    const plan = src.slice(src.indexOf('const STATEMENT_COLUMN_DEFS'), src.indexOf('function statementColgroup'));
     check('the statement has a column plan', plan.length > 0);
     check('Quantity column is present', /rlt\('quantity'\)/.test(plan));
     check('Rate column is present', /rlt\('rate'\)/.test(plan));
@@ -261,11 +261,11 @@ console.log('\n— 9. Statement columns: Qty/Rate kept, item detail via particul
     check('Running-balance column is present', /rlt\('balance'\)/.test(plan));
     check('Milk Type column is present', /rl\('Milk Type'/.test(plan));
     check('Shift column is present', /rl\('Shift'/.test(plan));
-    check('no Item/Product column of its own', !/rlt\('item'\)|Item \/ Product/.test(plan));
-    check('no Unit column', !/rlt\('unit'\)/.test(plan));
+    check('Unit column is present', /rl\('Unit'/.test(plan));
+    check('Particulars / Item column is present', /Particulars \/ Item/.test(plan));
     check('plan width adds up to 100%',
         (plan.match(/width: '(\d+)%'/g) || []).reduce((s, w) => s + parseInt(w.replace(/\D/g, ''), 10), 0) === 100);
-    check('rows still print qty and rate cells', /c\.qty/.test(src) && /c\.rate/.test(src));
+    check('rows still print qty and rate cells', /line\.quantity/.test(src) && /line\.rate/.test(src));
     const pj = fs.readFileSync(path.join(ROOT, 'renderer', 'js', 'party.js'), 'utf8');
     check('party ledger modal prints qty and rate', /c\.qty/.test(pj) && /c\.rate/.test(pj));
     check('party ledger modal has no Item/Unit columns',
