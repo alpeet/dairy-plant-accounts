@@ -2,22 +2,26 @@
    Prarambha Account & Stock Management - Login Page Styles
    ============================================================ */
 
+/* Glass theme (v1.4.66): frosted card over a blurred warm background */
 :root {
-    --primary: #1a5276;
-    --primary-light: #2e86c1;
-    --primary-dark: #0e2f4a;
-    --accent: #27ae60;
+    --primary: #3b6ef0;
+    --primary-light: #5b8bff;
+    --primary-dark: #2750c4;
+    --accent: #17a673;
     --danger: #e74c3c;
     --warning: #f39c12;
-    --bg: #f0f2f5;
+    --bg: #f6f1ea;
     --bg-white: #ffffff;
-    --text: #2c3e50;
-    --text-light: #7f8c8d;
-    --border: #dce1e8;
+    --text: #1b2340;
+    --text-light: #5f6b85;
+    --border: rgba(27, 35, 64, 0.14);
     --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    --shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
-    --shadow-hover: 0 8px 40px rgba(0, 0, 0, 0.16);
-    --radius: 12px;
+    --glass: rgba(255, 255, 255, 0.62);
+    --glass-line: rgba(255, 255, 255, 0.7);
+    --glass-blur: blur(26px) saturate(170%);
+    --shadow: 0 24px 60px -24px rgba(31, 41, 80, 0.40), 0 4px 14px -8px rgba(31, 41, 80, 0.16);
+    --shadow-hover: 0 32px 74px -26px rgba(31, 41, 80, 0.48), 0 6px 18px -10px rgba(31, 41, 80, 0.20);
+    --radius: 24px;
 }
 
 * {
@@ -28,7 +32,14 @@
 
 body {
     font-family: var(--font);
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    background-color: var(--bg);
+    background-image:
+        radial-gradient(760px 520px at 4% 6%, #ffe2c4 0%, rgba(255, 226, 196, 0) 62%),
+        radial-gradient(700px 500px at 96% 2%, #dfe8ff 0%, rgba(223, 232, 255, 0) 60%),
+        radial-gradient(700px 560px at 80% 98%, #ffdbe6 0%, rgba(255, 219, 230, 0) 62%),
+        radial-gradient(820px 620px at 12% 98%, #d9f2ea 0%, rgba(217, 242, 234, 0) 60%),
+        linear-gradient(158deg, #fdf8f1 0%, #f5f1fb 52%, #eef3ff 100%);
+    background-repeat: no-repeat;
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -38,7 +49,7 @@ body {
     overflow: hidden;
 }
 
-/* Background pattern */
+/* Soft bloom behind the card — the "out of focus" backdrop */
 body::before {
     content: '';
     position: absolute;
@@ -46,8 +57,10 @@ body::before {
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle at 30% 40%, rgba(46, 134, 193, 0.08) 0%, transparent 50%),
-                radial-gradient(circle at 70% 60%, rgba(39, 174, 96, 0.05) 0%, transparent 50%);
+    background: radial-gradient(circle at 34% 38%, rgba(91, 139, 255, 0.16) 0%, transparent 52%),
+                radial-gradient(circle at 70% 64%, rgba(255, 176, 120, 0.18) 0%, transparent 50%),
+                radial-gradient(circle at 60% 20%, rgba(255, 219, 230, 0.20) 0%, transparent 48%);
+    filter: blur(30px);
     pointer-events: none;
 }
 
@@ -59,11 +72,18 @@ body::before {
 }
 
 .login-card {
-    background: var(--bg-white);
+    background: var(--glass);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-line);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     padding: 40px 36px 32px;
     animation: loginFadeIn 0.5s ease;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .login-card { background: rgba(255, 255, 255, 0.95); }
 }
 
 @keyframes loginFadeIn {
@@ -155,11 +175,11 @@ body::before {
     width: 100%;
     padding: 10px 14px;
     border: 1.5px solid var(--border);
-    border-radius: 8px;
+    border-radius: 12px;
     font-size: 14px;
     font-family: var(--font);
     color: var(--text);
-    background: #fafbfc;
+    background: rgba(255, 255, 255, 0.82);
     transition: all 0.2s ease;
     outline: none;
 }
@@ -167,7 +187,7 @@ body::before {
 .form-control:focus {
     border-color: var(--primary-light);
     background: var(--bg-white);
-    box-shadow: 0 0 0 3px rgba(46, 134, 193, 0.12);
+    box-shadow: 0 0 0 3px rgba(91, 139, 255, 0.22);
 }
 
 .form-control::placeholder {
@@ -179,7 +199,7 @@ body::before {
     width: 100%;
     padding: 11px 20px;
     border: none;
-    border-radius: 8px;
+    border-radius: 12px;
     font-size: 15px;
     font-weight: 600;
     font-family: var(--font);
@@ -209,7 +229,7 @@ body::before {
 
 .login-btn:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(26, 82, 118, 0.3);
+    box-shadow: 0 12px 28px -12px rgba(59, 110, 240, 0.85);
 }
 
 .login-btn:active {
@@ -314,7 +334,7 @@ body::before {
     gap: 20px;
     margin-top: 20px;
     padding-top: 18px;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid rgba(27, 35, 64, 0.10);
 }
 
 .login-link {
@@ -336,7 +356,7 @@ body::before {
     text-align: center;
     margin-top: 20px;
     padding-top: 18px;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid rgba(27, 35, 64, 0.10);
 }
 
 .login-footer p {

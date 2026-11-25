@@ -1776,3 +1776,245 @@ table tbody tr:hover { background: var(--primary-soft); }
     margin-right: 2px;
 }
 .report-lang-btn { padding: 4px 10px !important; font-size: 11.5px !important; }
+
+/* ============================================================
+   GLASS THEME (v1.4.66)
+   ------------------------------------------------------------
+   Frosted-glass shell over a soft, blurred warm background:
+   translucent KPI/summary cards and panels, hairline white
+   borders, deep soft shadows. Dense data tables stay on solid
+   near-white surfaces so figures remain crisp and print white.
+   Purely additive: tokens + presentation only, no markup,
+   class or id contract used by the pages changes.
+   ============================================================ */
+
+:root {
+    --primary: #3b6ef0;
+    --primary-light: #5b8bff;
+    --primary-dark: #2750c4;
+    --primary-soft: rgba(59, 110, 240, 0.08);
+    --accent: #17a673;
+    --accent-light: #22c58b;
+    --info: #3b82f6;
+    --bg: #f6f1ea;
+    --text: #1b2340;
+    --text-light: #5f6b85;
+    --border: rgba(27, 35, 64, 0.10);
+    --border-strong: rgba(27, 35, 64, 0.16);
+    --radius: 18px;
+    --radius-sm: 12px;
+    --ring: 0 0 0 3px rgba(91, 139, 255, 0.22);
+
+    /* Glass tokens */
+    --glass: rgba(255, 255, 255, 0.58);
+    --glass-strong: rgba(255, 255, 255, 0.78);
+    --glass-line: rgba(255, 255, 255, 0.65);
+    --glass-line-soft: rgba(27, 35, 64, 0.06);
+    --glass-blur: blur(22px) saturate(165%);
+    --glass-shadow: 0 10px 34px -14px rgba(31, 41, 80, 0.28), 0 2px 8px -4px rgba(31, 41, 80, 0.10);
+    --glass-shadow-hover: 0 22px 52px -18px rgba(31, 41, 80, 0.36), 0 4px 12px -6px rgba(31, 41, 80, 0.14);
+}
+
+/* ── Ambient background: warm, out-of-focus colour fields ── */
+body {
+    background-color: var(--bg);
+    background-image:
+        radial-gradient(760px 520px at 4% 6%, #ffe2c4 0%, rgba(255, 226, 196, 0) 62%),
+        radial-gradient(700px 500px at 94% 2%, #dfe8ff 0%, rgba(223, 232, 255, 0) 60%),
+        radial-gradient(680px 560px at 78% 96%, #ffdbe6 0%, rgba(255, 219, 230, 0) 62%),
+        radial-gradient(820px 620px at 16% 98%, #d9f2ea 0%, rgba(217, 242, 234, 0) 60%),
+        linear-gradient(158deg, #fdf8f1 0%, #f5f1fb 52%, #eef3ff 100%);
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+
+/* ── Sidebar: floating deep-glass panel ── */
+.sidebar {
+    margin: 14px 0 14px 14px;
+    height: calc(100vh - 28px);
+    border-radius: 22px;
+    background:
+        radial-gradient(360px 200px at 18% 0%, rgba(120, 160, 255, 0.28), transparent 70%),
+        linear-gradient(180deg, rgba(26, 34, 64, 0.94) 0%, rgba(18, 25, 50, 0.92) 100%);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 26px 60px -28px rgba(18, 25, 50, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    overflow: hidden auto;
+}
+.sidebar-header { border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.nav-item.active {
+    background: linear-gradient(90deg, rgba(91, 139, 255, 0.34), rgba(91, 139, 255, 0.08));
+    box-shadow: inset 2px 0 0 #7ba4ff;
+}
+.nav-item { border-radius: 11px; }
+.sidebar-logout-btn { border-radius: 11px; }
+
+/* ── Top bar: straight glass strip ── */
+.top-bar {
+    margin: 14px 14px 0;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.62);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-line);
+    box-shadow: var(--glass-shadow);
+    min-height: 58px;
+    padding: 12px 22px;
+}
+.top-bar .page-title { color: var(--text); }
+
+/* ── Content canvas ── */
+.page-content { background: transparent; padding: 18px 16px 36px; }
+
+/* ── Glass surfaces ── */
+.card,
+.summary-card,
+.kpi-card {
+    background: var(--glass);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-line);
+    box-shadow: var(--glass-shadow);
+    border-radius: 18px;
+}
+.card:hover,
+.summary-card:hover,
+.kpi-card:hover {
+    box-shadow: var(--glass-shadow-hover);
+    background: var(--glass-strong);
+}
+.card-header { border-bottom: 1px solid var(--glass-line-soft); }
+.card-header h2, .card-header h3 { color: var(--text); }
+
+.kpi-grid { gap: 16px; }
+.kpi-card {
+    border-top: 2px solid rgba(59, 110, 240, 0.55);
+    padding: 16px 18px;
+}
+.kpi-card.kpi-primary { border-top-color: var(--primary); }
+.kpi-card.kpi-info    { border-top-color: var(--info); }
+.kpi-card.kpi-success { border-top-color: var(--accent); }
+.kpi-card.kpi-warning { border-top-color: var(--warning); }
+.kpi-card.kpi-danger  { border-top-color: var(--danger); }
+
+.summary-card {
+    border-top: 2px solid rgba(59, 110, 240, 0.45);
+    background: var(--glass);
+}
+.summary-card.card-primary { border-top-color: var(--primary); }
+.summary-card.card-success { border-top-color: var(--accent); }
+.summary-card.card-danger  { border-top-color: var(--danger); }
+.summary-card.card-warning { border-top-color: var(--warning); }
+.summary-card.card-info    { border-top-color: var(--info); }
+.summary-card .value { color: var(--text); }
+
+/* ── Tables: solid, crisp, no glass over numbers ── */
+.table-container {
+    background: #ffffff;
+    border: 1px solid rgba(27, 35, 64, 0.08);
+    border-radius: 16px;
+    box-shadow: 0 10px 28px -22px rgba(18, 25, 50, 0.45);
+}
+table { background: #ffffff; }
+table thead {
+    background: linear-gradient(180deg, #f9fbff 0%, #f2f5fc 100%);
+    color: #46536e;
+}
+table th { border-bottom: 1px solid rgba(27, 35, 64, 0.10); }
+table tbody tr:nth-child(even) { background: #fbfcfe; }
+table tbody tr:hover { background: #eff4ff; }
+
+/* ── Forms: frosted fields ── */
+.form-control {
+    background: rgba(255, 255, 255, 0.88);
+    border-color: var(--border-strong);
+    border-radius: 11px;
+}
+select.form-control {
+    background-color: rgba(255, 255, 255, 0.88);
+    background-position: right 10px center;
+}
+.form-control:focus { background: #ffffff; }
+
+/* ── Buttons ── */
+.btn { border-radius: 11px; }
+.btn-primary {
+    background: linear-gradient(180deg, #5585ff 0%, var(--primary) 100%);
+    box-shadow: 0 6px 16px -8px rgba(59, 110, 240, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.btn-primary:hover { background: linear-gradient(180deg, var(--primary) 0%, var(--primary-dark) 100%); }
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(8px);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+/* ── Charts: soft gradient bars ── */
+.chart-bar {
+    background: linear-gradient(180deg, #8fb2ff 0%, #3b6ef0 100%);
+    border-radius: 8px 8px 3px 3px;
+    box-shadow: 0 8px 18px -12px rgba(59, 110, 240, 0.9);
+    opacity: 1;
+}
+.chart-bar:hover { transform: translateY(-1px); }
+.chart-bar.purchase-bar {
+    background: linear-gradient(180deg, #ffd0a1 0%, #ef8f38 100%);
+    box-shadow: 0 8px 18px -12px rgba(239, 143, 56, 0.9);
+}
+
+/* ── Modals / toasts: thicker glass, lifted ── */
+.modal-overlay {
+    background: rgba(24, 30, 56, 0.42);
+    backdrop-filter: blur(8px) saturate(120%);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+}
+.modal {
+    background: var(--glass-strong);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-line);
+    border-radius: 22px;
+    box-shadow: 0 40px 90px -30px rgba(18, 25, 50, 0.55);
+}
+.modal-header, .modal-footer { background: rgba(255, 255, 255, 0.55); }
+.toast {
+    background: var(--glass-strong);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-line);
+    border-radius: 14px;
+    box-shadow: var(--glass-shadow-hover);
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar-thumb { background: rgba(27, 35, 64, 0.22); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(27, 35, 64, 0.38); background-clip: content-box; }
+
+/* Browsers without backdrop-filter: fall back to near-opaque surfaces */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .card, .summary-card, .kpi-card, .top-bar, .modal, .toast {
+        background: rgba(255, 255, 255, 0.94);
+    }
+}
+
+@media (max-width: 900px) {
+    .sidebar { margin: 10px 0 10px 10px; height: calc(100vh - 20px); }
+    .top-bar { margin: 10px 10px 0; }
+    .page-content { padding: 14px 10px 28px; }
+}
+
+/* Print: flat white, no glass, no colour fields */
+@media print {
+    body { background: #ffffff !important; }
+    .sidebar, .top-bar { display: none !important; }
+    .page-content { padding: 0; background: transparent !important; }
+    .card, .summary-card, .kpi-card, .modal, .toast, .table-container {
+        background: #ffffff !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        box-shadow: none !important;
+        border: 1px solid #ccc !important;
+    }
+    .chart-bar { box-shadow: none !important; }
+}
