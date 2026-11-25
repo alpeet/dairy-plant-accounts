@@ -102,6 +102,13 @@ if (typeof location !== 'undefined' && location.protocol === 'file:') {
         deleteProduct: (id) => apiPost('/products/delete', { id }),
         getProductRateHistory: (opts) => apiPost('/products/rate-history', opts || {}),
 
+        // Units of measure
+        getUnits: (opts) => apiPost('/units/list', opts || {}),
+        saveUnit: (unit) => apiPost('/units/save', unit),
+        deactivateUnit: (code) => apiPost('/units/deactivate', { code }),
+        getUnitUsage: (code) => apiPost('/units/usage', { code }),
+        getProductUnitSettings: (opts) => apiPost('/units/product-settings', opts || {}),
+
         // Stock
         getStockCurrent: (opts) => apiPost('/stock/current', opts || {}),
         getStockMovements: (opts) => apiPost('/stock/movements', opts || {}),

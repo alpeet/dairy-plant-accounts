@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld('api', {
     getProducts: (opts) => ipcRenderer.invoke('db:products:list', opts),
     getProduct: (id) => ipcRenderer.invoke('db:products:get', id),
     saveProduct: (product) => ipcRenderer.invoke('db:products:save', product),
+    getUnits: (opts) => ipcRenderer.invoke('db:units:list', opts || {}),
+    saveUnit: (unit) => ipcRenderer.invoke('db:units:save', unit),
+    deactivateUnit: (code) => ipcRenderer.invoke('db:units:deactivate', code),
+    getUnitUsage: (code) => ipcRenderer.invoke('db:units:usage', code),
+    getProductUnitSettings: (opts) => ipcRenderer.invoke('db:units:product-settings', opts || {}),
     deleteProduct: (id) => ipcRenderer.invoke('db:products:delete', id),
     getProductRateHistory: (opts) => ipcRenderer.invoke('db:products:rate-history', opts),
 

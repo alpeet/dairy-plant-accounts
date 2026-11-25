@@ -168,6 +168,8 @@ async function renderInvoiceGenerator() {
     // Seed one empty item row and stash products/settings for row builders
     window._invProducts = products;
     window._invSettings = settings;
+    // Unit picker options for the invoice rows (sales unit loads per product)
+    window._invUnits = (typeof getUnitsForEntry === 'function') ? await getUnitsForEntry() : [];
     addInvoiceItemRow();
 
     // Live preview + totals on any change inside the builder
@@ -205,7 +207,9 @@ function setupInvoiceItemListeners(row) {
         select.addEventListener('change', function () {
             const option = this.options[this.selectedIndex];
             if (option.dataset.rate) rate.value = option.dataset.rate;
-            if (option.dataset.unit) row.querySelector('.sale-unit').value = option.dataset.unit;
+            const unitSel = row.querySelector('.sale-unit');
+            if (unitSel && option.dataset.salesUnit) unitSel.value = option.dataset.salesUnit;
+            else if (option.dataset.unit && unitSel) unitSel.value = option.dataset.unit;
             // Show the name field only when "-- Manual item (type name) --" is chosen
             if (nameInput) nameInput.style.display = this.value === 'manual' ? '' : 'none';
             if (nameInput && this.value === 'manual') nameInput.focus();
@@ -226,13 +230,13 @@ function addInvoiceItemRow() {
         <td>
             <select class="form-control sale-product-select" style="font-size:13px">
                 <option value="">-- Select Product --</option>
-                ${(window._invProducts || []).map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
+                ${(window._invProducts || []).map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-sales-unit="${escapeHtml(p.sales_unit || p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
                 <option value="manual">✍️ Manual item — type any name</option>
             </select>
             <input type="text" class="form-control sale-product-name" placeholder="Type item name..." style="font-size:13px;margin-top:4px;display:none" maxlength="100">
         </td>
         <td><input type="number" class="form-control sale-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
-        <td><input type="text" class="form-control sale-unit" value="kg" style="font-size:13px"></td>
+        <td><select class="form-control sale-unit" style="font-size:13px">${(window._invUnits || []).length ? (window._invUnits || []).map(u => `<option value="${escapeHtml(u.code)}"${String(u.code) === 'kg' ? ' selected' : ''}>${escapeHtml(u.code)}</option>`).join('') : '<option value="kg" selected>kg</option>'}</select></td>
         <td><input type="number" class="form-control sale-rate" value="0" min="0" step="0.01" style="font-size:13px"></td>
         <td><input type="number" class="form-control sale-amount" value="0" readonly style="font-size:13px;background:#f5f5f5"></td>
         <td><button type="button" class="item-remove-btn" onclick="this.closest('tr').remove(); calcInvoiceTotals(); updateInvoicePreview();">×</button></td>
@@ -260,7 +264,7 @@ function _resolveInvoiceItemProduct(row) {
 function _invProductOptionsHtml(selectedId) {
     // Rebuild the product options exactly like sales.js rows
     return window._invProducts ? window._invProducts.map(p =>
-        `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}" ${selectedId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+        `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-sales-unit="${escapeHtml(p.sales_unit || p.unit)}" data-rate="${p.rate}" ${selectedId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
     ).join('') : '';
 }
 

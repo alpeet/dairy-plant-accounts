@@ -6,6 +6,8 @@
  */
 
 const { logAudit } = require('./audit');
+const { validateProductUnits, normalizeUnit, sameUnit } = require('./unit_conversion');
+const { ensureUnits } = require('./units');
 
 /**
  * System "Plant Helper" products used to track internal plant operations
@@ -92,23 +94,77 @@ function saveProduct(db, product) {
     const name = String(product.name || '').trim();
     if (!name) throw new Error('Product name is required');
     assertProductNotExpense(name);
+    ensureUnits(db);
+
+    // ── Unit settings ──────────────────────────────────────────────────
+    // Every product carries three units and, where they differ, an explicit
+    // factor (1 purchase unit = N stock units). `unit` is kept as the stock
+    // unit for older screens that still read the single column.
+    const stockUnit = normalizeUnit(product.stock_unit || product.unit) || 'kg';
+    const purchaseUnit = normalizeUnit(product.purchase_unit || product.unit) || stockUnit;
+    const salesUnit = normalizeUnit(product.sales_unit || product.unit) || stockUnit;
+    const purchaseFactor = Number(product.purchase_factor) > 0 ? Number(product.purchase_factor) : 1;
+    const salesFactor = Number(product.sales_factor) > 0 ? Number(product.sales_factor) : 1;
+    const precisionRaw = Number(product.decimal_precision);
+    const decimalPrecision = Number.isInteger(precisionRaw) ? precisionRaw : 2;
+    const unitConfig = {
+        name, stock_unit: stockUnit, purchase_unit: purchaseUnit, sales_unit: salesUnit,
+        purchase_factor: purchaseFactor, sales_factor: salesFactor, decimal_precision: decimalPrecision
+    };
+    const unitErrors = validateProductUnits(unitConfig);
+    if (unitErrors.length) throw new Error(unitErrors.join(' · '));
 
     const trx = db.transaction(() => {
         if (product.id) {
             const oldProduct = db.prepare("SELECT * FROM products WHERE id = ?").get(product.id);
             if (!oldProduct) throw new Error('Product not found');
+
+            // A historical quantity is meaningless without the unit it was
+            // measured in, so the stock unit is frozen once stock has moved.
+            const oldStockUnit = normalizeUnit(oldProduct.stock_unit || oldProduct.unit) || 'kg';
+            if (!sameUnit(oldStockUnit, stockUnit)) {
+                const moves = db.prepare(
+                    "SELECT COUNT(*) n FROM stock_movements WHERE product_id = ? AND type != 'opening'"
+                ).get(product.id).n;
+                if (moves > 0) {
+                    throw new Error(`Stock unit cannot be changed from ${oldStockUnit} to ${stockUnit}: ${moves} historical stock movement(s) are recorded in ${oldStockUnit}. Archive this product and create a new one instead — past quantities are never reinterpreted.`);
+                }
+            }
+
+            // Purchase / sales unit changes affect how FUTURE lines convert;
+            // historical lines keep their own unit. Still, a unit used by
+            // existing transactions needs an explicit confirmation.
+            const unitsChanged = !sameUnit(oldProduct.purchase_unit || oldProduct.unit, purchaseUnit)
+                || !sameUnit(oldProduct.sales_unit || oldProduct.unit, salesUnit)
+                || Math.abs(Number(oldProduct.purchase_factor || 1) - purchaseFactor) > 1e-9
+                || Math.abs(Number(oldProduct.sales_factor || 1) - salesFactor) > 1e-9;
+            if (unitsChanged && product.confirm_unit_change !== true) {
+                const lines = db.prepare(
+                    `SELECT (SELECT COUNT(*) FROM purchase_items WHERE product_id = ?)
+                          + (SELECT COUNT(*) FROM sales_items WHERE product_id = ?) AS c`
+                ).get(product.id, product.id).c;
+                if (lines > 0) {
+                    const err = new Error(`UNIT_CHANGE_CONFIRM_REQUIRED:${lines}`);
+                    err.code = 'UNIT_CHANGE_CONFIRM_REQUIRED';
+                    err.lines = lines;
+                    throw err;
+                }
+            }
+
             db.prepare(
                 `UPDATE products SET name=?, unit=?, category=?, opening_stock=?, reorder_level=?, rate=?, gst_rate=?, hsn_code=?, notes=?,
                     code=?, active=?, is_stocked=?, is_saleable=?, is_purchaseable=?, is_produced=?,
+                    purchase_unit=?, sales_unit=?, stock_unit=?, purchase_factor=?, sales_factor=?, decimal_precision=?,
                     updated_at=datetime('now','localtime') WHERE id=?`
             ).run(
-                name, product.unit || 'kg', product.category || '',
+                name, stockUnit, product.category || '',
                 product.opening_stock || 0, product.reorder_level || 0,
                 product.rate || 0, product.gst_rate || 0, product.hsn_code || '',
                 product.notes || '',
                 product.code || '', product.active === 0 ? 0 : 1,
                 product.is_stocked === 0 ? 0 : 1, product.is_saleable === 0 ? 0 : 1,
                 product.is_purchaseable === 0 ? 0 : 1, product.is_produced === 0 ? 0 : 1,
+                purchaseUnit, salesUnit, stockUnit, purchaseFactor, salesFactor, decimalPrecision,
                 product.id
             );
             // Rate history — only when the rate actually changed.
@@ -128,16 +184,18 @@ function saveProduct(db, product) {
         } else {
             const result = db.prepare(
                 `INSERT INTO products (name, unit, category, opening_stock, reorder_level, rate, gst_rate, hsn_code, notes,
-                    code, active, is_stocked, is_saleable, is_purchaseable, is_produced)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                    code, active, is_stocked, is_saleable, is_purchaseable, is_produced,
+                    purchase_unit, sales_unit, stock_unit, purchase_factor, sales_factor, decimal_precision)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             ).run(
-                name, product.unit || 'kg', product.category || '',
+                name, stockUnit, product.category || '',
                 product.opening_stock || 0, product.reorder_level || 0,
                 product.rate || 0, product.gst_rate || 0, product.hsn_code || '',
                 product.notes || '',
                 product.code || '', product.active === 0 ? 0 : 1,
                 product.is_stocked === 0 ? 0 : 1, product.is_saleable === 0 ? 0 : 1,
-                product.is_purchaseable === 0 ? 0 : 1, product.is_produced === 0 ? 0 : 1
+                product.is_purchaseable === 0 ? 0 : 1, product.is_produced === 0 ? 0 : 1,
+                purchaseUnit, salesUnit, stockUnit, purchaseFactor, salesFactor, decimalPrecision
             );
             const newId = result.lastInsertRowid;
             logAudit(db, 'products', newId, 'create', null, product, product.created_by);

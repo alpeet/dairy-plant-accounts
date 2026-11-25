@@ -983,6 +983,29 @@ app.post('/api/products/rate-history', (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
+// Units of measure (product purchase / sales / stock units)
+// ──────────────────────────────────────────────────────────────
+app.post('/api/units/list', (req, res) => {
+    res.json(safeRun(() => ops.listUnits(db, req.body || {})));
+});
+
+app.post('/api/units/save', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.saveUnit(db, req.body || {})));
+});
+
+app.post('/api/units/deactivate', requireRole('operator'), (req, res) => {
+    res.json(safeRun(() => ops.deactivateUnit(db, req.body.code)));
+});
+
+app.post('/api/units/usage', (req, res) => {
+    res.json(safeRun(() => ops.unitUsage(db, req.body.code)));
+});
+
+app.post('/api/units/product-settings', (req, res) => {
+    res.json(safeRun(() => ops.productUnitSettings(db, req.body || {})));
+});
+
+// ──────────────────────────────────────────────────────────────
 // Stock
 // ──────────────────────────────────────────────────────────────
 app.post('/api/stock/current', (req, res) => {

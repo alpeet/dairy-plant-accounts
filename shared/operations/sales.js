@@ -10,6 +10,7 @@
 
 const { logAudit } = require('./audit');
 const { getSaleSettlements, paymentStatus, round2 } = require('./accounting');
+const { toStock } = require('./unit_conversion');
 // Lot costing is optional at runtime (tables may pre-date migration 23).
 let _costing = null;
 function lotCosting() {
@@ -130,11 +131,23 @@ function saveSale(db, saleData) {
         const tax = round2(_tax);
         const grand_total = round2(_grandTotal);
         const paid_amount = round2(_paidAmount);
-        const items = (rawItems || []).map(it => ({
-            ...it,
-            rate: round2(it.rate),
-            amount: round2(it.amount != null ? it.amount : (Number(it.quantity) || 0) * (Number(it.rate) || 0))
-        }));
+        // The invoice keeps the entered quantity, unit, rate and amount; the
+        // stock quantity is what inventory and costing use. A line whose unit
+        // cannot be converted to the product's stock unit is refused.
+        const items = (rawItems || []).map(it => {
+            const product = it.product_id
+                ? db.prepare('SELECT * FROM products WHERE id = ?').get(it.product_id)
+                : null;
+            const conv = toStock(product, it.quantity, it.unit);
+            if (!conv.ok) throw new Error(`${it.product_name || it.name || 'Sale line'}: ${conv.error}`);
+            return {
+                ...it,
+                rate: round2(it.rate),
+                amount: round2(it.amount != null ? it.amount : (Number(it.quantity) || 0) * (Number(it.rate) || 0)),
+                stock_quantity: conv.stock_qty,
+                stock_unit: conv.stock_unit
+            };
+        });
         // The stored status is derived from the money received at invoice time
         // (currency-precision aware) — the dropdown value is not trusted, and
         // every read recomputes it from the actual receipts anyway.
@@ -158,10 +171,11 @@ function saveSale(db, saleData) {
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
-                const newBalance = currentBal + item.quantity;
+                const oldStockQty = item.stock_quantity != null ? Number(item.stock_quantity) : Number(item.quantity) || 0;
+                const newBalance = currentBal + oldStockQty;
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'adjustment', ?, 0, ?, ?, 'Reversal of sale #' || ?, 'sale', ?)"
-                ).run(item.product_id, oldSale.date, item.quantity, newBalance, item.rate, oldSale.invoice_no, id);
+                ).run(item.product_id, oldSale.date, oldStockQty, newBalance, item.rate, oldSale.invoice_no, id);
             }
 
             // Remove old ledger, invoice-time receipt and items
@@ -177,8 +191,8 @@ function saveSale(db, saleData) {
             // Re-insert items with stock deduction (manual items without product_id skip stock)
             for (const item of items) {
                 db.prepare(
-                    "INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ).run(id, item.product_id || null, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+                    "INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount, stock_quantity, stock_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ).run(id, item.product_id || null, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount, item.stock_quantity, item.stock_unit);
 
                 if (!item.product_id) continue;
 
@@ -186,13 +200,13 @@ function saveSale(db, saleData) {
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
-                const newBalance = currentBal - item.quantity;
+                const newBalance = currentBal - item.stock_quantity;
 
                 _checkNegativeStock(db, newBalance, item.product_name || item.name);
 
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'sale', 0, ?, ?, ?, 'Sale ' || ?, 'sale', ?)"
-                ).run(item.product_id, date, item.quantity, newBalance, item.rate, invoice_no, id);
+                ).run(item.product_id, date, item.stock_quantity, newBalance, item.rate, invoice_no, id);
             }
 
             // Add ledger entry (Customer/Receivable DR · Sales CR)
@@ -212,7 +226,7 @@ function saveSale(db, saleData) {
                 for (const item of items) {
                     if (!item.product_id) continue;
                     try {
-                        const c = costingUpd.costSaleItem(db, { saleId: id, product_id: item.product_id, quantity: item.quantity, date });
+                        const c = costingUpd.costSaleItem(db, { saleId: id, product_id: item.product_id, quantity: item.stock_quantity, date });
                         lotCogs = round2(lotCogs + c.cogs);
                     } catch (e) {
                         if (/Insufficient lot stock|phantom stock/.test(e.message)) throw e;
@@ -233,8 +247,8 @@ function saveSale(db, saleData) {
 
             for (const item of items) {
                 db.prepare(
-                    "INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ).run(saleId, item.product_id || null, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+                    "INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount, stock_quantity, stock_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ).run(saleId, item.product_id || null, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount, item.stock_quantity, item.stock_unit);
 
                 // Manual (custom-typed) items without a product skip stock tracking
                 if (!item.product_id) continue;
@@ -243,13 +257,13 @@ function saveSale(db, saleData) {
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
-                const newBalance = currentBal - item.quantity;
+                const newBalance = currentBal - item.stock_quantity;
 
                 _checkNegativeStock(db, newBalance, item.product_name || item.name);
 
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'sale', 0, ?, ?, ?, 'Sale ' || ?, 'sale', ?)"
-                ).run(item.product_id, date, item.quantity, newBalance, item.rate, invoice_no, saleId);
+                ).run(item.product_id, date, item.stock_quantity, newBalance, item.rate, invoice_no, saleId);
             }
 
             // Customer/Receivable DR · Sales CR
@@ -269,7 +283,7 @@ function saveSale(db, saleData) {
                 for (const item of items) {
                     if (!item.product_id) continue;
                     try {
-                        const c = costing.costSaleItem(db, { saleId, product_id: item.product_id, quantity: item.quantity, date });
+                        const c = costing.costSaleItem(db, { saleId, product_id: item.product_id, quantity: item.stock_quantity, date });
                         lotCogs = round2(lotCogs + c.cogs);
                     } catch (e) {
                         if (/Insufficient lot stock|phantom stock/.test(e.message)) throw e;
@@ -306,10 +320,11 @@ function deleteSale(db, id, changedBy = null) {
                 "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
             ).get(item.product_id);
             const currentBal = lastBalance ? lastBalance.balance_after : 0;
-            const newBalance = currentBal + item.quantity;
+            const stockQty = item.stock_quantity != null ? Number(item.stock_quantity) : Number(item.quantity) || 0;
+            const newBalance = currentBal + stockQty;
             db.prepare(
                 "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'adjustment', ?, 0, ?, ?, 'Deleted Sale ' || ?, 'sale', ?)"
-            ).run(item.product_id, sale.date, item.quantity, newBalance, item.rate, sale.invoice_no, id);
+            ).run(item.product_id, sale.date, stockQty, newBalance, item.rate, sale.invoice_no, id);
         }
 
         // Remove ledger, invoice-time receipt and sale

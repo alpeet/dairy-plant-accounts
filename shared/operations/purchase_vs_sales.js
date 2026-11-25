@@ -433,14 +433,19 @@ function getPurchaseVsSales(db, opts = {}) {
     const difference = round2(salesSummary.amount - purchaseSummary.amount);
 
     // ── Daily comparison ─────────────────────────────────────────────────────
-    const purchaseDaily = new Map();   // date → {amount, quantity, docs:Set}
+    const purchaseDaily = new Map();   // date → {amount, quantity, units, docs:Set}
     const salesDaily = new Map();
     const collectDaily = (map, lines) => {
         for (const line of lines) {
-            if (!map.has(line.date)) map.set(line.date, { amount: 0, quantity: 0, docs: new Set() });
+            if (!map.has(line.date)) map.set(line.date, { amount: 0, quantity: 0, units: {}, docs: new Set() });
             const bucket = map.get(line.date);
             bucket.amount = round2(bucket.amount + line.amount);
             bucket.quantity = round2(bucket.quantity + line.quantity);
+            // Keep each day's quantity per unit: a day that bought 20 L and
+            // 5 kg must never present 25 as one quantity.
+            if (line.unit && Number(line.quantity)) {
+                bucket.units[line.unit] = round2((bucket.units[line.unit] || 0) + Number(line.quantity));
+            }
             bucket.docs.add(line.document_id);
         }
     };
@@ -455,6 +460,9 @@ function getPurchaseVsSales(db, opts = {}) {
             row[side + '_amount'] = bucket.amount;
             row[side + '_quantity'] = bucket.quantity;
             row[side + '_count'] = bucket.docs.size;
+            row[side + '_units'] = bucket.units;
+            const keys = Object.keys(bucket.units);
+            row[side + '_quantity_unit'] = keys.length === 1 ? keys[0] : (keys.length ? 'mixed' : '');
         }
     };
     seed(purchaseDaily, 'purchase');
@@ -590,7 +598,11 @@ function emptyDay(date) {
         purchase_quantity: 0,
         sales_quantity: 0,
         purchase_count: 0,
-        sales_count: 0
+        sales_count: 0,
+        purchase_units: {},
+        sales_units: {},
+        purchase_quantity_unit: '',
+        sales_quantity_unit: ''
     };
 }
 

@@ -125,11 +125,13 @@ function resetSaleFilter() {
 // Sale Form (Create / Edit)
 // ============================================================
 async function showSaleForm(saleId = null) {
-    const [productsResult, partiesResult, settings] = await Promise.all([
+    const [productsResult, partiesResult, settings, units] = await Promise.all([
         window.api.getProducts({ active_only: true }),
         window.api.getParties({ type: 'customer' }),
-        getSettingsCached()
+        getSettingsCached(),
+        window.getUnitsForEntry()
     ]);
+    saleUnits = units || [];
 
     const products = productsResult.success ? productsResult.data : [];
     const parties = partiesResult.success ? partiesResult.data : [];
@@ -194,13 +196,16 @@ async function showSaleForm(saleId = null) {
                                     <td>
                                         <select class="form-control sale-product-select" style="font-size:13px">
                                             <option value="">-- Select Product --</option>
-                                            ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
+                                            ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.stock_unit || p.unit)}" data-stock-unit="${escapeHtml(p.stock_unit || p.unit)}" data-purchase-unit="${escapeHtml(p.purchase_unit || p.unit)}" data-purchase-factor="${p.purchase_factor != null ? p.purchase_factor : 1}" data-sales-unit="${escapeHtml(p.sales_unit || p.unit)}" data-sales-factor="${p.sales_factor != null ? p.sales_factor : 1}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
                                             <option value="manual">✍️ Manual item — type any name</option>
                                         </select>
                                         <input type="text" class="form-control sale-product-name" placeholder="Type item name..." style="font-size:13px;margin-top:4px;display:none" maxlength="100">
                                     </td>
                                     <td><input type="number" class="form-control sale-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
-                                    <td><input type="text" class="form-control sale-unit" value="kg" style="font-size:13px"></td>
+                                    <td>
+                                        <select class="form-control sale-unit" style="font-size:13px">${saleUnitSelectHtml(saleUnits, 'kg')}</select>
+                                        <div class="sale-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
+                                    </td>
                                     <td><input type="number" class="form-control sale-rate" value="0" min="0" step="0.01" style="font-size:13px"></td>
                                     <td><input type="number" class="form-control sale-amount" value="0" readonly style="font-size:13px;background:#f5f5f5"></td>
                                     <td></td>
@@ -276,6 +281,45 @@ async function showSaleForm(saleId = null) {
     setupSaleAutoCalc();
 }
 
+// Unit pickers + live stock-conversion hint (mirrors the purchase screen).
+let saleUnits = [];
+const SALE_UNIT_METRIC = { l: ['volume', 1], ml: ['volume', 0.001], kg: ['mass', 1], g: ['mass', 0.001] };
+function saleUnitSelectHtml(units, selected) {
+    const list = (units && units.length) ? units.map(u => u.code) : ['L', 'ml', 'kg', 'g', 'pcs', 'packet', 'box'];
+    const all = list.includes(selected) || !selected ? list : [...list, selected];
+    return all.map(code => `<option value="${escapeHtml(code)}" ${code === selected ? 'selected' : ''}>${escapeHtml(code)}</option>`).join('');
+}
+function saleStockConversion(select, unit) {
+    const option = select && select.options[select.selectedIndex];
+    if (!option || !option.value || option.value === 'manual') return null;
+    const stockUnit = option.dataset.stockUnit || option.dataset.unit || '';
+    const factor = parseFloat(option.dataset.salesFactor || '1') || 1;
+    const from = String(unit || '').trim();
+    if (!from || !stockUnit) return null;
+    if (from.toLowerCase() === stockUnit.toLowerCase()) return { factor: 1, stockUnit };
+    const mf = SALE_UNIT_METRIC[from.toLowerCase()];
+    const mt = SALE_UNIT_METRIC[stockUnit.toLowerCase()];
+    if (mf && mt && mf[0] === mt[0]) return { factor: mf[1] / mt[1], stockUnit };
+    if (from.toLowerCase() === String(option.dataset.salesUnit || '').toLowerCase()) return { factor, stockUnit };
+    return { factor: null, stockUnit };
+}
+function updateSaleConversion(row) {
+    const select = row.querySelector('.sale-product-select');
+    const unit = row.querySelector('.sale-unit')?.value;
+    const qty = parseFloat(row.querySelector('.sale-qty')?.value || 0);
+    const hint = row.querySelector('.sale-conv');
+    if (!hint) return;
+    const conv = saleStockConversion(select, unit);
+    if (!conv) { hint.textContent = ''; return; }
+    if (conv.factor == null) {
+        hint.style.color = 'var(--danger)';
+        hint.textContent = `no conversion to ${conv.stockUnit}`;
+        return;
+    }
+    hint.style.color = 'var(--text-light)';
+    hint.textContent = `= ${formatNumber(qty * conv.factor)} ${conv.stockUnit} stock`;
+}
+
 function renderSaleItemRow(item, idx, products) {
     const isManual = !item.product_id;
     return `
@@ -283,13 +327,16 @@ function renderSaleItemRow(item, idx, products) {
             <td>
                 <select class="form-control sale-product-select" style="font-size:13px" data-index="${idx}">
                     <option value="">-- Select Product --</option>
-                    ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}" ${item.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+                    ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.stock_unit || p.unit)}" data-stock-unit="${escapeHtml(p.stock_unit || p.unit)}" data-purchase-unit="${escapeHtml(p.purchase_unit || p.unit)}" data-purchase-factor="${p.purchase_factor != null ? p.purchase_factor : 1}" data-sales-unit="${escapeHtml(p.sales_unit || p.unit)}" data-sales-factor="${p.sales_factor != null ? p.sales_factor : 1}" data-rate="${p.rate}" ${item.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
                     <option value="manual" ${isManual ? 'selected' : ''}>✍️ Manual item — type any name</option>
                 </select>
                 <input type="text" class="form-control sale-product-name" placeholder="Type item name..." value="${isManual ? escapeHtml(item.product_name || '') : ''}" style="font-size:13px;margin-top:4px;${isManual ? '' : 'display:none'}" maxlength="100">
             </td>
             <td><input type="number" class="form-control sale-qty" value="${item.quantity}" min="0" step="0.01" style="font-size:13px"></td>
-            <td><input type="text" class="form-control sale-unit" value="${escapeHtml(item.unit)}" style="font-size:13px"></td>
+            <td>
+                <select class="form-control sale-unit" style="font-size:13px">${saleUnitSelectHtml(saleUnits, item.unit || 'kg')}</select>
+                <div class="sale-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
+            </td>
             <td><input type="number" class="form-control sale-rate" value="${item.rate}" min="0" step="0.01" style="font-size:13px"></td>
             <td><input type="number" class="form-control sale-amount" value="${item.amount}" readonly style="font-size:13px;background:#f5f5f5"></td>
             <td><button type="button" class="item-remove-btn" onclick="this.closest('tr').remove(); calcSaleTotals();">×</button></td>
@@ -314,7 +361,10 @@ function addSaleItemRow() {
             <input type="text" class="form-control sale-product-name" placeholder="Type item name..." style="font-size:13px;margin-top:4px;display:none" maxlength="100">
         </td>
         <td><input type="number" class="form-control sale-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
-        <td><input type="text" class="form-control sale-unit" value="kg" style="font-size:13px"></td>
+        <td>
+            <select class="form-control sale-unit" style="font-size:13px">${saleUnitSelectHtml(saleUnits, 'kg')}</select>
+            <div class="sale-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
+        </td>
         <td><input type="number" class="form-control sale-rate" value="0" min="0" step="0.01" style="font-size:13px"></td>
         <td><input type="number" class="form-control sale-amount" value="0" readonly style="font-size:13px;background:#f5f5f5"></td>
         <td><button type="button" class="item-remove-btn" onclick="this.closest('tr').remove(); calcSaleTotals();">×</button></td>
@@ -328,25 +378,8 @@ function setupSaleAutoCalc() {
     document.getElementById('saleDiscountPct')?.addEventListener('input', calcSaleTotals);
     document.getElementById('saleDiscount')?.addEventListener('input', calcSaleTotals);
     document.getElementById('salePaid')?.addEventListener('input', calcSaleTotals);
-    document.querySelectorAll('#saleItemsBody select').forEach(sel => {
-        sel.addEventListener('change', function() {
-            const option = this.options[this.selectedIndex];
-            const row = this.closest('tr');
-            const nameInput = row.querySelector('.sale-product-name');
-            // Show/hide the manual name field when "Manual item" is chosen
-            if (nameInput) {
-                nameInput.style.display = this.value === 'manual' ? '' : 'none';
-                if (this.value === 'manual') nameInput.focus();
-            }
-            if (option.dataset.rate) {
-                row.querySelector('.sale-rate').value = option.dataset.rate;
-            }
-            if (option.dataset.unit) {
-                row.querySelector('.sale-unit').value = option.dataset.unit;
-            }
-            calcSaleTotals();
-        });
-    });
+    // One change handler per row only (setupItemListeners). A second listener
+    // here used to overwrite the auto-loaded unit with the stock unit.
     calcSaleTotals();
 }
 
@@ -359,23 +392,37 @@ function setupItemListeners(row) {
     const calc = () => {
         const amt = row.querySelector('.sale-amount');
         amt.value = (parseFloat(qty?.value || 0) * parseFloat(rate?.value || 0)).toFixed(2);
+        updateSaleConversion(row);
         calcSaleTotals();
     };
 
     qty?.addEventListener('input', calc);
     rate?.addEventListener('input', calc);
     if (nameInput) nameInput.addEventListener('input', calc);
+    row.querySelector('.sale-unit')?.addEventListener('change', calc);
     if (select) {
         select.addEventListener('change', function() {
             const option = this.options[this.selectedIndex];
             if (option.dataset.rate) rate.value = option.dataset.rate;
-            if (option.dataset.unit) row.querySelector('.sale-unit').value = option.dataset.unit;
+            // Configured sales unit loads automatically; another unit may be
+            // chosen and the hint shows the stock conversion (or its absence).
+            const unitSel = row.querySelector('.sale-unit');
+            if (unitSel && option.dataset.salesUnit) {
+                const wanted = option.dataset.salesUnit;
+                if (!unitSel.querySelector(`option[value="${wanted}"]`)) {
+                    unitSel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(wanted)}">${escapeHtml(wanted)}</option>`);
+                }
+                unitSel.value = wanted;
+            } else if (option.dataset.unit && unitSel) {
+                unitSel.value = option.dataset.unit;
+            }
             // Show the name field only when "Manual item" is chosen
             if (nameInput) nameInput.style.display = this.value === 'manual' ? '' : 'none';
             if (nameInput && this.value === 'manual') nameInput.focus();
             calc();
         });
     }
+    calc();
 }
 
 function calcSaleTotals() {

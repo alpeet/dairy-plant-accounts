@@ -20,10 +20,13 @@ function getCurrentStock(db, { search, active_only } = {}) {
     // movement" is only that one movement's quantity — it made the dashboard low-stock
     // list and the balance-sheet stock value read e.g. 19.5 L instead of 16,753 L.
     const closingBalance = `COALESCE((SELECT SUM(inward_qty - outward_qty) FROM stock_movements WHERE product_id = p.id), p.opening_stock)`;
+    // Stock quantities are always in the product's STOCK unit, never the unit
+    // a purchase or sale happened to be entered in.
     let query = `
         SELECT p.*,
             ${closingBalance} as current_stock,
-            ${closingBalance} as current_balance
+            ${closingBalance} as current_balance,
+            COALESCE(NULLIF(p.stock_unit,''), p.unit) as stock_unit
         FROM products p WHERE 1=1
     `;
     const params = [];
@@ -40,7 +43,9 @@ function getCurrentStock(db, { search, active_only } = {}) {
  * Get stock movement history with optional filters.
  */
 function getStockMovements(db, { product_id, from_date, to_date } = {}) {
-    let query = `SELECT sm.*, p.name as product_name, p.unit
+    let query = `SELECT sm.*, p.name as product_name,
+                        COALESCE(NULLIF(p.stock_unit,''), p.unit) as unit,
+                        p.unit as legacy_unit
                  FROM stock_movements sm JOIN products p ON sm.product_id = p.id WHERE 1=1`;
     const params = [];
     if (product_id) { query += " AND sm.product_id = ?"; params.push(product_id); }

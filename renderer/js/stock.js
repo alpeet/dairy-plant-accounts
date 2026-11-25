@@ -498,6 +498,24 @@ async function showProductForm(productId = null) {
     }
 
     const isEdit = !!product;
+    // Units come from Settings → Units (standard + custom). If that panel has
+    // never been opened, load them once here so the picker is never stale.
+    let units = window.__UNITS;
+    if (!units) {
+        try {
+            const ur = await window.api.getUnits({});
+            units = ur.success ? ur.data : [];
+            window.__UNITS = units;
+        } catch (e) { units = []; }
+    }
+    const stockUnit = product ? (product.stock_unit || product.unit || 'kg') : 'kg';
+    const purchaseUnit = product ? (product.purchase_unit || product.unit || stockUnit) : stockUnit;
+    const salesUnit = product ? (product.sales_unit || product.unit || stockUnit) : stockUnit;
+    const unitSelect = (name, selected) => `
+        <select class="form-control" name="${name}">
+            ${(units || []).filter(u => u.active || u.code === selected).map(u =>
+                `<option value="${escapeHtml(u.code)}" ${u.code === selected ? 'selected' : ''}>${escapeHtml(u.code)} — ${escapeHtml(u.name)}</option>`).join('')}
+        </select>`;
     const flag = (key, label) => `
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
             <input type="checkbox" name="${key}" ${!product || product[key] ? 'checked' : ''}> ${label}
@@ -522,19 +540,43 @@ async function showProductForm(productId = null) {
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Unit</label>
-                        <select class="form-control" name="unit">
-                            <option value="kg" ${product && product.unit === 'kg' ? 'selected' : ''}>Kg</option>
-                            <option value="liter" ${product && product.unit === 'liter' ? 'selected' : ''}>Liter</option>
-                            <option value="packet" ${product && product.unit === 'packet' ? 'selected' : ''}>Packet</option>
-                            <option value="piece" ${product && product.unit === 'piece' ? 'selected' : ''}>Piece</option>
-                            <option value="dozen" ${product && product.unit === 'dozen' ? 'selected' : ''}>Dozen</option>
-                            <option value="gram" ${product && product.unit === 'gram' ? 'selected' : ''}>Gram</option>
-                        </select>
+                        <label>Stock / Base Unit <span style="color:var(--danger)">*</span></label>
+                        ${unitSelect('stock_unit', stockUnit)}
+                        <small style="color:var(--text-light)">Inventory counts in this unit. It cannot be changed once stock has moved.</small>
                     </div>
                     <div class="form-group">
                         <label>Category</label>
                         <input type="text" class="form-control" name="category" value="${escapeHtml(product ? product.category : '')}" placeholder="e.g. Milk, Curd, Ghee">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Purchase Unit</label>
+                        ${unitSelect('purchase_unit', purchaseUnit)}
+                    </div>
+                    <div class="form-group">
+                        <label>1 purchase unit = … stock units</label>
+                        <input type="number" class="form-control" name="purchase_factor" value="${product && product.purchase_factor != null ? product.purchase_factor : 1}" min="0" step="0.001">
+                        <small style="color:var(--text-light)">Only needed when the purchase unit differs from the stock unit (e.g. 1 box = 12 pcs).</small>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Sales Unit</label>
+                        ${unitSelect('sales_unit', salesUnit)}
+                    </div>
+                    <div class="form-group">
+                        <label>1 sales unit = … stock units</label>
+                        <input type="number" class="form-control" name="sales_factor" value="${product && product.sales_factor != null ? product.sales_factor : 1}" min="0" step="0.001">
+                        <small style="color:var(--text-light)">Only needed when the sales unit differs from the stock unit.</small>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Quantity Decimals</label>
+                        <select class="form-control" name="decimal_precision">
+                            ${[0, 1, 2, 3, 4].map(n => `<option value="${n}" ${Number(product && product.decimal_precision != null ? product.decimal_precision : 2) === n ? 'selected' : ''}>${n} decimal${n === 1 ? '' : 's'}</option>`).join('')}
+                        </select>
                     </div>
                 </div>
                 <div class="form-row">
@@ -604,7 +646,13 @@ async function saveProduct(productId) {
         id: productId || null,
         name: formData.get('name'),
         code: formData.get('code') || '',
-        unit: formData.get('unit'),
+        unit: formData.get('stock_unit'),
+        stock_unit: formData.get('stock_unit'),
+        purchase_unit: formData.get('purchase_unit'),
+        sales_unit: formData.get('sales_unit'),
+        purchase_factor: num('purchase_factor'),
+        sales_factor: num('sales_factor'),
+        decimal_precision: Math.round(num('decimal_precision')),
         category: formData.get('category'),
         rate: num('rate'),
         rate_effective_from: formData.get('rate_effective_from') || '',
@@ -628,12 +676,23 @@ async function saveProduct(productId) {
         return;
     }
 
-    const result = await window.api.saveProduct(data);
+    let result = await window.api.saveProduct(data);
+    // Changing a unit that existing lines use needs an explicit confirmation.
+    if (!result.success && /UNIT_CHANGE_CONFIRM_REQUIRED/.test(String(result.error || ''))) {
+        const n = (String(result.error).match(/:(\d+)/) || [])[1] || '';
+        const ok = confirm(
+            `This product is used by ${n} existing transaction line(s).\n\n` +
+            `The new unit settings apply to FUTURE entries only — every past line keeps the unit, quantity and rate it was saved with, and stock is not re-converted.\n\nContinue?`
+        );
+        if (!ok) return;
+        result = await window.api.saveProduct({ ...data, confirm_unit_change: true });
+    }
     if (result.success) {
         showToast(`Product ${productId ? 'updated' : 'created'} successfully!`);
         closeModal();
         renderStock();
         clearSettingsCache();
+        if (typeof loadUnitsPanel === 'function' && document.getElementById('unitsTableBody')) loadUnitsPanel();
     } else {
         showToast(`Error: ${result.error}`, 'error');
     }

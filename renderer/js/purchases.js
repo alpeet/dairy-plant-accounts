@@ -119,11 +119,13 @@ function resetPurchaseFilter() {
 // Purchase Form
 // ============================================================
 async function showPurchaseForm(purchaseId = null) {
-    const [productsResult, partiesResult, settings] = await Promise.all([
+    const [productsResult, partiesResult, settings, units] = await Promise.all([
         window.api.getProducts({ active_only: true }),
         window.api.getParties({ type: 'supplier' }),
-        getSettingsCached()
+        getSettingsCached(),
+        window.getUnitsForEntry()
     ]);
+    purchaseUnits = units || [];
 
     const products = productsResult.success ? productsResult.data : [];
     const parties = partiesResult.success ? partiesResult.data : [];
@@ -189,11 +191,14 @@ async function showPurchaseForm(purchaseId = null) {
                                     <td>
                                         <select class="form-control purchase-product-select" style="font-size:13px">
                                             <option value="">-- Select Product --</option>
-                                            ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
+                                            ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.stock_unit || p.unit)}" data-stock-unit="${escapeHtml(p.stock_unit || p.unit)}" data-purchase-unit="${escapeHtml(p.purchase_unit || p.unit)}" data-purchase-factor="${p.purchase_factor != null ? p.purchase_factor : 1}" data-sales-unit="${escapeHtml(p.sales_unit || p.unit)}" data-sales-factor="${p.sales_factor != null ? p.sales_factor : 1}" data-rate="${p.rate}">${escapeHtml(p.name)}</option>`).join('')}
                                         </select>
                                     </td>
                                     <td><input type="number" class="form-control purchase-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
-                                    <td><input type="text" class="form-control purchase-unit" value="kg" style="font-size:13px"></td>
+                                    <td>
+                                        <select class="form-control purchase-unit" style="font-size:13px">${unitSelectHtml(purchaseUnits, 'kg')}</select>
+                                        <div class="purchase-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
+                                    </td>
                                     <td><input type="number" class="form-control purchase-rate" value="0" min="0" step="0.01" style="font-size:13px"></td>
                                     <td><input type="number" class="form-control purchase-amount" value="0" readonly style="font-size:13px;background:#f5f5f5"></td>
                                     <td></td>
@@ -266,17 +271,62 @@ async function showPurchaseForm(purchaseId = null) {
     setupPurchaseAutoCalc();
 }
 
+// Unit pickers and the live stock-conversion hint on each line.
+let purchaseUnits = [];
+const UNIT_METRIC = { l: ['volume', 1], ml: ['volume', 0.001], kg: ['mass', 1], g: ['mass', 0.001] };
+function unitLabel(u) { return String(u || '').trim(); }
+function unitSelectHtml(units, selected) {
+    const list = (units && units.length) ? units.map(u => u.code) : ['L', 'ml', 'kg', 'g', 'pcs', 'packet', 'box'];
+    const all = list.includes(selected) || !selected ? list : [...list, selected];
+    return all.map(code => `<option value="${escapeHtml(code)}" ${code === selected ? 'selected' : ''}>${escapeHtml(code)}</option>`).join('');
+}
+function lineStockConversion(select, unit, side) {
+    const option = select && select.options[select.selectedIndex];
+    if (!option || !option.value) return null;
+    const stockUnit = option.dataset.stockUnit || option.dataset.unit || '';
+    const factor = parseFloat(option.dataset[side === 'purchase' ? 'purchaseFactor' : 'salesFactor'] || '1') || 1;
+    const from = unitLabel(unit);
+    if (!from || !stockUnit) return null;
+    if (from.toLowerCase() === stockUnit.toLowerCase()) return { factor: 1, stockUnit };
+    const mf = UNIT_METRIC[from.toLowerCase()];
+    const mt = UNIT_METRIC[stockUnit.toLowerCase()];
+    if (mf && mt && mf[0] === mt[0]) return { factor: mf[1] / mt[1], stockUnit };
+    if (from.toLowerCase() === unitLabel(option.dataset[side === 'purchase' ? 'purchaseUnit' : 'salesUnit']).toLowerCase()) {
+        return { factor, stockUnit };
+    }
+    return { factor: null, stockUnit };
+}
+function updatePurchaseConversion(row) {
+    const select = row.querySelector('.purchase-product-select');
+    const unit = row.querySelector('.purchase-unit')?.value;
+    const qty = parseFloat(row.querySelector('.purchase-qty')?.value || 0);
+    const hint = row.querySelector('.purchase-conv');
+    if (!hint) return;
+    const conv = lineStockConversion(select, unit, 'purchase');
+    if (!conv) { hint.textContent = ''; return; }
+    if (conv.factor == null) {
+        hint.style.color = 'var(--danger)';
+        hint.textContent = `no conversion to ${conv.stockUnit}`;
+        return;
+    }
+    hint.style.color = 'var(--text-light)';
+    hint.textContent = `= ${formatNumber(qty * conv.factor)} ${conv.stockUnit} stock`;
+}
+
 function renderPurchaseItemRow(item, idx, products) {
     return `
         <tr>
             <td>
                 <select class="form-control purchase-product-select" style="font-size:13px">
                     <option value="">-- Select Product --</option>
-                    ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.unit)}" data-rate="${p.rate}" ${item.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+                    ${products.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-unit="${escapeHtml(p.stock_unit || p.unit)}" data-stock-unit="${escapeHtml(p.stock_unit || p.unit)}" data-purchase-unit="${escapeHtml(p.purchase_unit || p.unit)}" data-purchase-factor="${p.purchase_factor != null ? p.purchase_factor : 1}" data-sales-unit="${escapeHtml(p.sales_unit || p.unit)}" data-sales-factor="${p.sales_factor != null ? p.sales_factor : 1}" data-rate="${p.rate}" ${item.product_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
                 </select>
             </td>
             <td><input type="number" class="form-control purchase-qty" value="${item.quantity}" min="0" step="0.01" style="font-size:13px"></td>
-            <td><input type="text" class="form-control purchase-unit" value="${escapeHtml(item.unit)}" style="font-size:13px"></td>
+            <td>
+                <select class="form-control purchase-unit" style="font-size:13px">${unitSelectHtml(purchaseUnits, item.unit || 'kg')}</select>
+                <div class="purchase-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
+            </td>
             <td><input type="number" class="form-control purchase-rate" value="${item.rate}" min="0" step="0.01" style="font-size:13px"></td>
             <td><input type="number" class="form-control purchase-amount" value="${item.amount}" readonly style="font-size:13px;background:#f5f5f5"></td>
             <td><button type="button" class="item-remove-btn" onclick="this.closest('tr').remove(); calcPurchaseTotals();">×</button></td>
@@ -296,7 +346,10 @@ function addPurchaseItemRow() {
             </select>
         </td>
         <td><input type="number" class="form-control purchase-qty" value="1" min="0" step="0.01" style="font-size:13px"></td>
-        <td><input type="text" class="form-control purchase-unit" value="kg" style="font-size:13px"></td>
+        <td>
+            <select class="form-control purchase-unit" style="font-size:13px">${unitSelectHtml(purchaseUnits, 'kg')}</select>
+            <div class="purchase-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
+        </td>
         <td><input type="number" class="form-control purchase-rate" value="0" min="0" step="0.01" style="font-size:13px"></td>
         <td><input type="number" class="form-control purchase-amount" value="0" readonly style="font-size:13px;background:#f5f5f5"></td>
         <td><button type="button" class="item-remove-btn" onclick="this.closest('tr').remove(); calcPurchaseTotals();">×</button></td>
@@ -320,19 +373,34 @@ function setupPurchaseItemListeners(row) {
     const calc = () => {
         const amt = row.querySelector('.purchase-amount');
         amt.value = (parseFloat(qty?.value || 0) * parseFloat(rate?.value || 0)).toFixed(2);
+        updatePurchaseConversion(row);
         calcPurchaseTotals();
     };
 
     qty?.addEventListener('input', calc);
     rate?.addEventListener('input', calc);
+    row.querySelector('.purchase-unit')?.addEventListener('change', calc);
     if (select) {
         select.addEventListener('change', function() {
             const option = this.options[this.selectedIndex];
             if (option.dataset.rate) rate.value = option.dataset.rate;
-            if (option.dataset.unit) row.querySelector('.purchase-unit').value = option.dataset.unit;
+            // The configured purchase unit is loaded automatically; the user
+            // may still pick another unit, and the hint shows what it means
+            // in stock units (or says the conversion is missing).
+            const unitSel = row.querySelector('.purchase-unit');
+            if (unitSel && option.dataset.purchaseUnit) {
+                const wanted = option.dataset.purchaseUnit;
+                if (!unitSel.querySelector(`option[value="${wanted}"]`)) {
+                    unitSel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(wanted)}">${escapeHtml(wanted)}</option>`);
+                }
+                unitSel.value = wanted;
+            } else if (option.dataset.unit && unitSel) {
+                unitSel.value = option.dataset.unit;
+            }
             calc();
         });
     }
+    calc();
 }
 
 function calcPurchaseTotals() {

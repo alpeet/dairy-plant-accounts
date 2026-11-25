@@ -95,10 +95,33 @@ CREATE TABLE IF NOT EXISTS routes (
 -- ============================================================
 -- PRODUCTS (Master list)
 -- ============================================================
+-- ============================================================
+-- UNITS (standard + custom codes; a code is the stored identity)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS units (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'other',
+    to_base REAL NOT NULL DEFAULT 1,
+    base_code TEXT NOT NULL DEFAULT '',
+    is_system INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 100,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     unit TEXT NOT NULL DEFAULT 'kg',
+    purchase_unit TEXT DEFAULT '',
+    sales_unit TEXT DEFAULT '',
+    stock_unit TEXT DEFAULT '',
+    purchase_factor REAL DEFAULT 1,
+    sales_factor REAL DEFAULT 1,
+    decimal_precision INTEGER DEFAULT 2,
     category TEXT DEFAULT '',
     opening_stock REAL DEFAULT 0.0,
     reorder_level REAL DEFAULT 0.0,

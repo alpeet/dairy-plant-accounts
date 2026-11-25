@@ -17,6 +17,19 @@ function widths(sheet, columns) {
 }
 
 /**
+ * Quantity as text WITH its unit. A mixed day is written as
+ * "20 L + 5 kg", never as a single number that adds litres to kilograms.
+ */
+function qtyText(qty, unit, units) {
+    const n = Number(qty) || 0;
+    if (!n) return '0';
+    if (unit === 'mixed' && units) {
+        return Object.entries(units).map(([u, v]) => `${Number(v)} ${u}`).join(' + ');
+    }
+    return unit ? `${n} ${unit}` : String(n);
+}
+
+/**
  * Build the workbook in memory (also handy for tests).
  * @returns {object} xlsx workbook
  */
@@ -35,8 +48,8 @@ function buildPurchaseVsSalesWorkbook(db, opts = {}) {
         ['Total Purchase Amount', summary.purchase_amount],
         ['Total Sales Amount', summary.sales_amount],
         ['Difference (Sales - Purchase)', summary.difference],
-        ['Purchase Quantity', summary.purchase_quantity],
-        ['Sales Quantity', summary.sales_quantity],
+        ['Purchase Quantity', qtyText(summary.purchase_quantity, summary.purchase_quantity_unit, summary.purchase_units)],
+        ['Sales Quantity', qtyText(summary.sales_quantity, summary.sales_quantity_unit, summary.sales_units)],
         ['Purchase Transactions', summary.purchase_transactions],
         ['Sales Transactions', summary.sales_transactions],
         ['Purchase Parties', summary.purchase_parties],
@@ -49,27 +62,31 @@ function buildPurchaseVsSalesWorkbook(db, opts = {}) {
     XLSX.utils.book_append_sheet(wb, widths(XLSX.utils.aoa_to_sheet(summaryRows), [38, 28]), 'Summary');
 
     const dailyRows = [
-        ['Date', 'Purchase Amount', 'Sales Amount', 'Difference', 'Purchase Qty', 'Sales Qty', 'Purchase Bills', 'Sales Invoices'],
+        ['Date', 'Purchase Amount', 'Sales Amount', 'Difference', 'Purchase Qty (with unit)', 'Sales Qty (with unit)', 'Purchase Bills', 'Sales Invoices'],
         ...report.daily.map(day => [
             day.date, day.purchase_amount, day.sales_amount, day.difference,
-            day.purchase_quantity, day.sales_quantity, day.purchase_count, day.sales_count
+            qtyText(day.purchase_quantity, day.purchase_quantity_unit, day.purchase_units),
+            qtyText(day.sales_quantity, day.sales_quantity_unit, day.sales_units),
+            day.purchase_count, day.sales_count
         ]),
         ['Total', summary.purchase_amount, summary.sales_amount, summary.difference,
-            summary.purchase_quantity, summary.sales_quantity, summary.purchase_transactions, summary.sales_transactions]
+            qtyText(summary.purchase_quantity, summary.purchase_quantity_unit, summary.purchase_units),
+            qtyText(summary.sales_quantity, summary.sales_quantity_unit, summary.sales_units),
+            summary.purchase_transactions, summary.sales_transactions]
     ];
     XLSX.utils.book_append_sheet(wb, widths(XLSX.utils.aoa_to_sheet(dailyRows), [14, 16, 16, 14, 14, 14, 14, 14]), 'Daily_Comparison');
 
     const purchasePartyRows = [
-        ['Supplier', 'Transactions', 'Quantity', 'Purchase Amount'],
-        ...report.purchase_parties.map(row => [row.party_name, row.transactions, row.quantity, row.amount]),
-        ['Total', summary.purchase_transactions, summary.purchase_quantity, summary.purchase_amount]
+        ['Supplier', 'Transactions', 'Quantity (with unit)', 'Purchase Amount'],
+        ...report.purchase_parties.map(row => [row.party_name, row.transactions, qtyText(row.quantity, row.quantity_unit, row.units), row.amount]),
+        ['Total', summary.purchase_transactions, qtyText(summary.purchase_quantity, summary.purchase_quantity_unit, summary.purchase_units), summary.purchase_amount]
     ];
     XLSX.utils.book_append_sheet(wb, widths(XLSX.utils.aoa_to_sheet(purchasePartyRows), [34, 14, 16, 18]), 'Purchase_Parties');
 
     const salesPartyRows = [
-        ['Customer', 'Transactions', 'Quantity', 'Sales Amount'],
-        ...report.sales_parties.map(row => [row.party_name, row.transactions, row.quantity, row.amount]),
-        ['Total', summary.sales_transactions, summary.sales_quantity, summary.sales_amount]
+        ['Customer', 'Transactions', 'Quantity (with unit)', 'Sales Amount'],
+        ...report.sales_parties.map(row => [row.party_name, row.transactions, qtyText(row.quantity, row.quantity_unit, row.units), row.amount]),
+        ['Total', summary.sales_transactions, qtyText(summary.sales_quantity, summary.sales_quantity_unit, summary.sales_units), summary.sales_amount]
     ];
     XLSX.utils.book_append_sheet(wb, widths(XLSX.utils.aoa_to_sheet(salesPartyRows), [34, 14, 16, 18]), 'Sales_Parties');
 

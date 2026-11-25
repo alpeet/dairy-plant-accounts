@@ -12,6 +12,7 @@ const { logAudit } = require('./audit');
 const { round2 } = require('./accounting');
 const bsCalendar = require('../bs-calendar');
 const accountingDates = require('./accounting_dates');
+const { toStock } = require('./unit_conversion');
 
 /**
  * List purchases with optional filters.
@@ -76,11 +77,23 @@ function savePurchase(db, purchaseData) {
         const grand_total = round2(_grandTotal);
         const paid_amount = round2(_paidAmount);
         const { date, accounting_date } = dates;
-        const items = (rawItems || []).map(it => ({
-            ...it,
-            rate: round2(it.rate),
-            amount: round2(it.amount != null ? it.amount : (Number(it.quantity) || 0) * (Number(it.rate) || 0))
-        }));
+        // Each line keeps exactly what was entered (quantity, unit, rate,
+        // amount) and gains the stock quantity it represents. A unit that
+        // cannot be converted is refused here — never guessed.
+        const items = (rawItems || []).map(it => {
+            const product = it.product_id
+                ? db.prepare('SELECT * FROM products WHERE id = ?').get(it.product_id)
+                : null;
+            const conv = toStock(product, it.quantity, it.unit);
+            if (!conv.ok) throw new Error(`${it.product_name || it.name || 'Purchase line'}: ${conv.error}`);
+            return {
+                ...it,
+                rate: round2(it.rate),
+                amount: round2(it.amount != null ? it.amount : (Number(it.quantity) || 0) * (Number(it.rate) || 0)),
+                stock_quantity: conv.stock_qty,
+                stock_unit: conv.stock_unit
+            };
+        });
 
         if (id) {
             // ── Revert old purchase ──
@@ -93,10 +106,13 @@ function savePurchase(db, purchaseData) {
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
-                const newBalance = currentBal - item.quantity;
+                // Historical rows before migration 39 have no stock_quantity;
+                // their entered quantity WAS the stock quantity.
+                const oldStockQty = item.stock_quantity != null ? Number(item.stock_quantity) : Number(item.quantity) || 0;
+                const newBalance = currentBal - oldStockQty;
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'adjustment', 0, ?, ?, ?, 'Reversal of purchase #' || ?, 'purchase', ?)"
-                ).run(item.product_id, oldPurchase.date, item.quantity, newBalance, item.rate, oldPurchase.bill_no, id);
+                ).run(item.product_id, oldPurchase.date, oldStockQty, newBalance, item.rate, oldPurchase.bill_no, id);
             }
 
             // Remove old ledger and items
@@ -113,17 +129,17 @@ function savePurchase(db, purchaseData) {
             // Re-insert items with stock addition
             for (const item of items) {
                 db.prepare(
-                    "INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ).run(id, item.product_id, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+                    "INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount, stock_quantity, stock_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ).run(id, item.product_id, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount, item.stock_quantity, item.stock_unit);
 
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
-                const newBalance = currentBal + item.quantity;
+                const newBalance = currentBal + item.stock_quantity;
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'purchase', ?, 0, ?, ?, 'Purchase ' || ?, 'purchase', ?)"
-                ).run(item.product_id, date, item.quantity, newBalance, item.rate, bill_no, id);
+                ).run(item.product_id, date, item.stock_quantity, newBalance, item.rate, bill_no, id);
             }
 
             // Add ledger entry
@@ -145,17 +161,17 @@ function savePurchase(db, purchaseData) {
 
             for (const item of items) {
                 db.prepare(
-                    "INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ).run(purchaseId, item.product_id, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount);
+                    "INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount, stock_quantity, stock_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ).run(purchaseId, item.product_id, item.product_name || item.name, item.quantity, item.unit || 'kg', item.rate, item.amount, item.stock_quantity, item.stock_unit);
 
                 const lastBalance = db.prepare(
                     "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
                 ).get(item.product_id);
                 const currentBal = lastBalance ? lastBalance.balance_after : 0;
-                const newBalance = currentBal + item.quantity;
+                const newBalance = currentBal + item.stock_quantity;
                 db.prepare(
                     "INSERT INTO stock_movements (product_id, date, type, inward_qty, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'purchase', ?, 0, ?, ?, 'Purchase ' || ?, 'purchase', ?)"
-                ).run(item.product_id, date, item.quantity, newBalance, item.rate, bill_no, purchaseId);
+                ).run(item.product_id, date, item.stock_quantity, newBalance, item.rate, bill_no, purchaseId);
             }
 
             const outstanding = grand_total - paid_amount;
@@ -184,10 +200,11 @@ function deletePurchase(db, id, changedBy = null) {
                 "SELECT balance_after FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT 1"
             ).get(item.product_id);
             const currentBal = lastBalance ? lastBalance.balance_after : 0;
-            const newBalance = currentBal - item.quantity;
+            const stockQty = item.stock_quantity != null ? Number(item.stock_quantity) : Number(item.quantity) || 0;
+            const newBalance = currentBal - stockQty;
             db.prepare(
                 "INSERT INTO stock_movements (product_id, date, type, outward_qty, balance_after, rate, notes, reference_type, reference_id) VALUES (?, ?, 'purchase', ?, ?, ?, 'Deleted Purchase ' || ?, 'purchase', ?)"
-            ).run(item.product_id, purchase.date, item.quantity, newBalance, item.rate, purchase.bill_no, id);
+            ).run(item.product_id, purchase.date, stockQty, newBalance, item.rate, purchase.bill_no, id);
         }
 
         // Remove ledger and purchase

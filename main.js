@@ -731,6 +731,27 @@ authHandle('db:products:rate-history', async (event, params = {}) => {
     return safeRun(() => ops.getProductRateHistory(db, params || {}));
 });
 
+// --- Units of measure ---
+authHandle('db:units:list', async (event, params = {}) => {
+    return safeRun(() => ops.listUnits(db, params || {}));
+});
+
+authHandle('db:units:save', async (event, unit) => {
+    return safeRun(() => ops.saveUnit(db, unit || {}));
+});
+
+authHandle('db:units:deactivate', async (event, code) => {
+    return safeRun(() => ops.deactivateUnit(db, code));
+});
+
+authHandle('db:units:usage', async (event, code) => {
+    return safeRun(() => ops.unitUsage(db, code));
+});
+
+authHandle('db:units:product-settings', async (event, params = {}) => {
+    return safeRun(() => ops.productUnitSettings(db, params || {}));
+});
+
 // --- Stock ---
 authHandle('db:stock:current', async (event, params = {}) => {
     return safeRun(() => ops.getCurrentStock(db, params));

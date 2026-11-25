@@ -1100,6 +1100,97 @@ function runMigrations(db) {
         console.log('Migration 38 (milk statement links) skipped:', e38.message);
     }
 
+    // Migration 39: per-product purchase / sales / stock units with explicit
+    // conversion. ADDITIVE ONLY — columns and one table are added, every
+    // existing transaction keeps its quantity, unit, rate and amount. New
+    // `stock_quantity` columns are backfilled with the OLD behaviour
+    // (quantity === stock quantity) so closing stock is identical the moment
+    // the migration finishes; from then on only NEW lines convert.
+    // A copy of the database is taken before the columns are added.
+    try {
+        const unitCols = [
+            ['purchase_unit', "TEXT DEFAULT ''"], ['sales_unit', "TEXT DEFAULT ''"],
+            ['stock_unit', "TEXT DEFAULT ''"], ['purchase_factor', 'REAL DEFAULT 1'],
+            ['sales_factor', 'REAL DEFAULT 1'], ['decimal_precision', 'INTEGER DEFAULT 2']
+        ];
+        const have = new Set(db.prepare("PRAGMA table_info('products')").all().map(c => c.name));
+        const needProducts = unitCols.some(([name]) => !have.has(name));
+        const itemHave = (t) => new Set(db.prepare(`PRAGMA table_info('${t}')`).all().map(c => c.name));
+        const needItems = !itemHave('purchase_items').has('stock_quantity') || !itemHave('sales_items').has('stock_quantity');
+
+        if (needProducts || needItems) {
+            try {
+                const fs = require('fs');
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                db.pragma('wal_checkpoint(TRUNCATE)');
+                const dest = db.name.replace(/\.db$/, '') + '.bak-pre-unit-settings-' + stamp + '.db';
+                fs.copyFileSync(db.name, dest);
+                console.log('Unit-settings migration: database copied to', dest);
+            } catch (e) { console.log('Unit-settings migration: backup skipped —', e.message); }
+        }
+
+        for (const [name, type] of unitCols) {
+            if (!have.has(name)) db.exec(`ALTER TABLE products ADD COLUMN ${name} ${type}`);
+        }
+        for (const table of ['purchase_items', 'sales_items']) {
+            const cols = itemHave(table);
+            if (!cols.has('stock_quantity')) db.exec(`ALTER TABLE ${table} ADD COLUMN stock_quantity REAL`);
+            if (!cols.has('stock_unit')) db.exec(`ALTER TABLE ${table} ADD COLUMN stock_unit TEXT DEFAULT ''`);
+        }
+
+        const { ensureUnits, STANDARD_UNITS } = require('./operations/units');
+        ensureUnits(db);
+        const normalize = require('./operations/unit_conversion').normalizeUnit;
+        const codes = new Set(db.prepare('SELECT code FROM units').all().map(r => r.code));
+        const rows = db.prepare('SELECT id, unit, purchase_unit, sales_unit, stock_unit, purchase_factor, sales_factor, decimal_precision FROM products').all();
+        const upd = db.prepare(`UPDATE products SET purchase_unit=?, sales_unit=?, stock_unit=?,
+            purchase_factor=?, sales_factor=?, decimal_precision=?,
+            unit=COALESCE(NULLIF(?, ''), unit) WHERE id=?`);
+        const tx = db.transaction(() => {
+            for (const p of rows) {
+                const legacy = normalize(p.unit) || 'kg';
+                const stock = normalize(p.stock_unit) || legacy;
+                const purchase = normalize(p.purchase_unit) || stock;
+                const sales = normalize(p.sales_unit) || stock;
+                // A unit mentioned by a product but missing from the table is
+                // added as an active custom unit so no setting is unlabelled.
+                for (const c of [stock, purchase, sales]) {
+                    if (c && !codes.has(c)) {
+                        db.prepare("INSERT OR IGNORE INTO units (code, name, kind, is_system, active, sort_order) VALUES (?, ?, 'other', 0, 1, 500)").run(c, c);
+                        codes.add(c);
+                    }
+                }
+                const pf = Number(p.purchase_factor);
+                const sf = Number(p.sales_factor);
+                const dp = Number(p.decimal_precision);
+                upd.run(
+                    purchase, sales, stock,
+                    isFinite(pf) && pf > 0 ? pf : 1,
+                    isFinite(sf) && sf > 0 ? sf : 1,
+                    Number.isInteger(dp) && dp >= 0 && dp <= 4 ? dp : 2,
+                    stock, p.id
+                );
+            }
+        });
+        tx();
+
+        // Historical lines: today's meaning of `quantity` IS the stock quantity.
+        for (const table of ['purchase_items', 'sales_items']) {
+            db.prepare(`UPDATE ${table} SET stock_quantity = quantity WHERE stock_quantity IS NULL`).run();
+            db.prepare(`UPDATE ${table} SET stock_unit = COALESCE(NULLIF(stock_unit,''),
+                (SELECT COALESCE(NULLIF(p.stock_unit,''), p.unit) FROM products p WHERE p.id = ${table}.product_id), unit, '')
+                WHERE stock_unit IS NULL OR stock_unit = ''`).run();
+        }
+        if (needProducts || needItems) {
+            const p = db.prepare('SELECT COUNT(*) n FROM products').get().n;
+            const pi = db.prepare('SELECT COUNT(*) n FROM purchase_items').get().n;
+            const si = db.prepare('SELECT COUNT(*) n FROM sales_items').get().n;
+            console.log(`Unit settings ready: ${p} product(s), ${pi} purchase line(s), ${si} sales line(s); historical quantities untouched (stock quantity = entered quantity)`);
+        }
+    } catch (e39) {
+        console.log('Migration 39 (product units) skipped:', e39.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

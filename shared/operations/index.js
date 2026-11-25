@@ -23,6 +23,11 @@ const {
 } = require('./products');
 
 const {
+    ensureUnits, listUnits, saveUnit, deactivateUnit, unitUsage, productUnitSettings
+} = require('./units');
+const unitConversion = require('./unit_conversion');
+
+const {
     getCurrentStock, getStockMovements, adjustStock
 } = require('./stock');
 
@@ -184,8 +189,10 @@ module.exports = {
     listParties, getParty, saveParty, deleteParty, getPartyLedger,
 
     // Products
-    // Products
     listProducts, getProduct, saveProduct, deleteProduct, getProductRateHistory,
+
+    // Units
+    ensureUnits, listUnits, saveUnit, deactivateUnit, unitUsage, productUnitSettings, unitConversion,
 
     // Stock
     getCurrentStock, getStockMovements, adjustStock,

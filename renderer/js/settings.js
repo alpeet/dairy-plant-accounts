@@ -17,6 +17,7 @@ async function renderSettings() {
     const settings = result.data;
 
     const securityCodeCard = buildSecurityCodeCard(settings);
+    const unitsCard = buildUnitsCard();
     const dataCleanupCard = buildDataCleanupCard();
     const dataLocationCard = buildDataLocationCard();
 
@@ -174,6 +175,8 @@ async function renderSettings() {
             </div>
         </div>
 
+        ${unitsCard}
+
         ${userManagementCard}
 
         ${securityCodeCard}
@@ -317,6 +320,8 @@ async function renderSettings() {
     loadUsersList();
     // Load database table info
     loadTableInfo();
+    // Units & per-product purchase / sales / stock units
+    loadUnitsPanel();
     // Load CSV Import/Export tools
     renderCSVSection();
 }
@@ -2159,3 +2164,238 @@ window.exportTableCSV = exportTableCSV;
 window.importCSVFile = importCSVFile;
 window.exportAllTablesCSV = exportAllTablesCSV;
 window.downloadSingleCSV = downloadSingleCSV;
+
+// ============================================================
+// Units & Conversions (Settings → Units)
+// ============================================================
+// One vocabulary (`units`) and, per product, the three units it is bought,
+// sold and stocked in. A conversion factor is only needed where a unit
+// differs from the product's stock unit and is not a metric sibling
+// (L↔ml, kg↔g). Historical lines keep the unit they were entered in.
+
+function buildUnitsCard() {
+    return `
+        <div class="card" style="max-width:1100px;margin-top:20px">
+            <div class="card-header">
+                <h2>⚖️ Units &amp; Conversions</h2>
+            </div>
+            <div class="settings-section">
+                <p style="font-size:13px;color:var(--text-light);margin:0 0 12px">
+                    Every product stores stock in one <strong>stock unit</strong>. Purchases and sales may use a
+                    different unit; where they do, the factor says how many stock units one such unit contains
+                    (e.g. 1 box = 12 pcs). Litres and kilograms are never assumed to be equal. Changing a unit
+                    affects <strong>future</strong> entries only — past transactions keep the unit and quantity they were saved with.
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                    <button class="btn btn-primary btn-sm" onclick="showUnitForm()">➕ Add Unit</button>
+                    <button class="btn btn-secondary btn-sm" onclick="loadUnitsPanel()">🔄 Refresh</button>
+                </div>
+                <div id="unitFormWrap" style="display:none;background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Code (stored on every transaction)</label>
+                            <input type="text" class="form-control" id="unitFormCode" maxlength="12" placeholder="e.g. tin">
+                        </div>
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" class="form-control" id="unitFormName" placeholder="e.g. Tin">
+                        </div>
+                        <div class="form-group">
+                            <label>Kind</label>
+                            <select class="form-control" id="unitFormKind">
+                                <option value="other">Other</option>
+                                <option value="volume">Volume (L, ml)</option>
+                                <option value="mass">Mass (kg, g)</option>
+                                <option value="count">Count (pcs, packet, box)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-primary btn-sm" onclick="saveUnitForm()">💾 Save Unit</button>
+                        <button class="btn btn-secondary btn-sm" onclick="hideUnitForm()">Cancel</button>
+                    </div>
+                </div>
+
+                <h3 style="font-size:14px;margin:0 0 6px">Units</h3>
+                <div style="overflow-x:auto">
+                    <table class="data-table" style="width:100%;font-size:13px">
+                        <thead><tr><th>Code</th><th>Name</th><th>Kind</th><th>Used by</th><th>Status</th><th></th></tr></thead>
+                        <tbody id="unitsTableBody"><tr><td colspan="6" style="color:var(--text-light)">Loading units...</td></tr></tbody>
+                    </table>
+                </div>
+
+                <h3 style="font-size:14px;margin:20px 0 6px">Product units</h3>
+                <p style="font-size:12px;color:var(--text-light);margin:0 0 8px">
+                    “1 unit = … stock units” is only used when the purchase or sales unit differs from the stock unit.
+                </p>
+                <div style="overflow-x:auto">
+                    <table class="data-table" style="width:100%;font-size:13px">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Purchase unit</th><th>1 unit = … stock units</th>
+                                <th>Sales unit</th><th>1 unit = … stock units</th>
+                                <th>Stock unit</th><th>Decimals</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="productUnitsBody"><tr><td colspan="8" style="color:var(--text-light)">Loading products...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+let _unitsCache = null;
+async function loadUnitsPanel() {
+    const unitsBody = document.getElementById('unitsTableBody');
+    const productsBody = document.getElementById('productUnitsBody');
+    if (!unitsBody || !productsBody) return;
+    try {
+        const [unitsRes, productsRes] = await Promise.all([
+            window.api.getUnits({}),
+            window.api.getProductUnitSettings({})
+        ]);
+        const units = unitsRes.success ? unitsRes.data : [];
+        const products = productsRes.success ? productsRes.data : [];
+        _unitsCache = units;
+        window.__UNITS = units;
+
+        unitsBody.innerHTML = units.length ? units.map(u => `
+            <tr>
+                <td><strong>${escapeHtml(u.code)}</strong></td>
+                <td>${escapeHtml(u.name)}</td>
+                <td>${escapeHtml(u.kind)}</td>
+                <td style="color:var(--text-light)">${u.products_used != null ? u.products_used : ''}</td>
+                <td>${u.active ? '<span style="color:var(--success)">Active</span>' : '<span style="color:var(--text-light)">Inactive</span>'}</td>
+                <td style="white-space:nowrap">
+                    <button class="btn btn-secondary btn-sm" onclick="renameUnit('${escapeHtml(u.code)}')">✏️ Rename</button>
+                    ${u.is_system ? '<span style="font-size:11px;color:var(--text-light)">standard</span>'
+                        : (u.active ? `<button class="btn btn-secondary btn-sm" onclick="deactivateUnitRow('${escapeHtml(u.code)}')">Deactivate</button>` : '')}
+                </td>
+            </tr>`).join('') : '<tr><td colspan="6" style="color:var(--text-light)">No units</td></tr>';
+
+        const unitOptions = (selected) => units.filter(u => u.active || u.code === selected)
+            .map(u => `<option value="${escapeHtml(u.code)}" ${u.code === selected ? 'selected' : ''}>${escapeHtml(u.code)} — ${escapeHtml(u.name)}</option>`).join('');
+
+        productsBody.innerHTML = products.length ? products.map(p => `
+            <tr data-product-row="${p.id}">
+                <td><strong>${escapeHtml(p.name)}</strong>${p.active ? '' : ' <span style="color:var(--text-light)">(archived)</span>'}</td>
+                <td><select class="form-control pu" style="font-size:12px;min-width:110px">${unitOptions(p.purchase_unit)}</select></td>
+                <td><input type="number" class="form-control pfac" value="${p.purchase_factor}" min="0" step="0.001" style="font-size:12px;width:90px"></td>
+                <td><select class="form-control su" style="font-size:12px;min-width:110px">${unitOptions(p.sales_unit)}</select></td>
+                <td><input type="number" class="form-control sfac" value="${p.sales_factor}" min="0" step="0.001" style="font-size:12px;width:90px"></td>
+                <td><select class="form-control stu" style="font-size:12px;min-width:110px">${unitOptions(p.stock_unit)}</select></td>
+                <td><input type="number" class="form-control dp" value="${p.decimal_precision}" min="0" max="4" step="1" style="font-size:12px;width:64px"></td>
+                <td><button class="btn btn-primary btn-sm" onclick="saveProductUnitsRow(${p.id})">💾</button></td>
+            </tr>`).join('') : '<tr><td colspan="8" style="color:var(--text-light)">No products</td></tr>';
+    } catch (e) {
+        unitsBody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+function showUnitForm() {
+    const wrap = document.getElementById('unitFormWrap');
+    if (!wrap) return;
+    wrap.style.display = 'block';
+    document.getElementById('unitFormCode').value = '';
+    document.getElementById('unitFormName').value = '';
+    document.getElementById('unitFormCode').focus();
+}
+function hideUnitForm() {
+    const wrap = document.getElementById('unitFormWrap');
+    if (wrap) wrap.style.display = 'none';
+}
+
+async function saveUnitForm() {
+    const code = (document.getElementById('unitFormCode').value || '').trim();
+    const name = (document.getElementById('unitFormName').value || '').trim();
+    const kind = document.getElementById('unitFormKind').value;
+    if (!code) { showToast('Unit code is required', 'error'); return; }
+    const res = await window.api.saveUnit({ code, name, kind });
+    if (res.success) {
+        showToast(`Unit ${code} saved`);
+        hideUnitForm();
+        loadUnitsPanel();
+    } else {
+        showToast(`Error: ${res.error}`, 'error');
+    }
+}
+
+async function renameUnit(code) {
+    const unit = (_unitsCache || []).find(u => u.code === code);
+    const name = prompt(`Display name for ${code}:`, unit ? unit.name : code);
+    if (name == null) return;
+    const res = await window.api.saveUnit({ code, name });
+    if (res.success) { showToast('Unit renamed'); loadUnitsPanel(); }
+    else showToast(`Error: ${res.error}`, 'error');
+}
+
+async function deactivateUnitRow(code) {
+    if (!confirm(`Deactivate unit “${code}”? Existing transactions keep it; it just stops appearing in pickers.`)) return;
+    const res = await window.api.deactivateUnit(code);
+    if (res.success) { showToast('Unit deactivated'); loadUnitsPanel(); }
+    else showToast(res.error || 'Could not deactivate', 'error');
+}
+
+/**
+ * Save one product's unit settings. Changing a unit that existing lines use
+ * asks for confirmation first; history is never rewritten.
+ */
+async function saveProductUnitsRow(productId) {
+    const row = document.querySelector(`[data-product-row="${productId}"]`);
+    if (!row) return;
+    const got = await window.api.getProduct(productId);
+    if (!got.success || !got.data) { showToast('Product not found', 'error'); return; }
+    const p = got.data;
+    const num = (sel, dflt) => {
+        const v = parseFloat(row.querySelector(sel).value);
+        return isFinite(v) ? v : dflt;
+    };
+    const payload = {
+        ...p,
+        purchase_unit: row.querySelector('.pu').value,
+        purchase_factor: num('.pfac', 1),
+        sales_unit: row.querySelector('.su').value,
+        sales_factor: num('.sfac', 1),
+        stock_unit: row.querySelector('.stu').value,
+        decimal_precision: Math.round(num('.dp', 2))
+    };
+    let res = await window.api.saveProduct(payload);
+    if (!res.success && /UNIT_CHANGE_CONFIRM_REQUIRED/.test(String(res.error || ''))) {
+        const n = (String(res.error).match(/:(\d+)/) || [])[1] || '';
+        const ok = confirm(
+            `This product is used by ${n} existing transaction line(s).\n\n` +
+            `The new unit settings apply to FUTURE entries only — every past line keeps the unit, quantity and rate it was saved with, and stock is not re-converted.\n\nContinue?`
+        );
+        if (!ok) return;
+        res = await window.api.saveProduct({ ...payload, confirm_unit_change: true });
+    }
+    if (res.success) {
+        showToast('Unit settings saved');
+        loadUnitsPanel();
+        if (typeof clearSettingsCache === 'function') clearSettingsCache();
+    } else {
+        showToast(`Error: ${res.error}`, 'error');
+    }
+}
+
+/** Active units for entry screens (cached per page load). */
+async function getUnitsForEntry() {
+    if (window.__ACTIVE_UNITS) return window.__ACTIVE_UNITS;
+    try {
+        const res = await window.api.getUnits({ active_only: true });
+        window.__ACTIVE_UNITS = res.success ? res.data : [];
+    } catch (e) { window.__ACTIVE_UNITS = []; }
+    return window.__ACTIVE_UNITS || [];
+}
+
+window.buildUnitsCard = buildUnitsCard;
+window.loadUnitsPanel = loadUnitsPanel;
+window.showUnitForm = showUnitForm;
+window.hideUnitForm = hideUnitForm;
+window.saveUnitForm = saveUnitForm;
+window.renameUnit = renameUnit;
+window.deactivateUnitRow = deactivateUnitRow;
+window.saveProductUnitsRow = saveProductUnitsRow;
+window.getUnitsForEntry = getUnitsForEntry;
