@@ -3290,6 +3290,22 @@ function runExcelImport(db, excelPath, opts = {}) {
         log(`  ⚠️ Party statement repair failed: ${e.message}`);
     }
 
+    // 7d. Link every purchase statement row to the milk collections of its own
+    // bill. The statement used to re-discover that link by amount alone, which
+    // hid collections whose workbook ledger line carried a different figure;
+    // the importer knows the document (`purchase_ref_id`), so the link is
+    // recorded here. Idempotent; amounts are never touched.
+    try {
+        const { repairMilkLinks } = require('./operations/milk_links');
+        const milkLinks = repairMilkLinks(db);
+        results.milkLinks = milkLinks;
+        log(`  🔗 Milk links: ${milkLinks.linked} collection(s) linked to purchase rows`
+            + (milkLinks.orphans_removed ? `, ${milkLinks.orphans_removed} stale link(s) removed` : '')
+            + (milkLinks.ambiguous ? `, ${milkLinks.ambiguous} row(s) left unlinked` : ''));
+    } catch (e) {
+        log(`  ⚠️ Milk link repair failed: ${e.message}`);
+    }
+
     // 8. Bank transactions (QR/bank statement rows with auto-match)
     const bankSheetName = workbook.SheetNames.includes('BANK RECON') ? 'BANK RECON' : null;
     if (bankSheetName) {
@@ -3462,6 +3478,7 @@ function todayBSDate() {
 module.exports = {
     runExcelImport,
     importExcelFile,
+    importPurchases,
     importCollections,
     importPettyCashSheet,
     buildPartyIndex,

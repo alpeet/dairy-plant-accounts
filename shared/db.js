@@ -1082,6 +1082,24 @@ function runMigrations(db) {
         console.log('Migration 37 (payment mirror rows) skipped:', e37.message);
     }
 
+    // Migration 38: link purchase statement rows to their milk collections.
+    // The importer knows which bill produced every collection
+    // (milk_collections.purchase_ref_id); older databases were read with an
+    // amount-only guess, so a bill whose Party_Ledger line carried a different
+    // figure left its collections off the statement. The link is persisted
+    // once here and refreshed after every import. Idempotent, and it writes no
+    // amount: only rows in milk_statement_links.
+    try {
+        const { repairMilkLinks } = require('./operations/milk_links');
+        const milkLinks = repairMilkLinks(db);
+        if (milkLinks.linked || milkLinks.orphans_removed) {
+            console.log(`Milk statement links: ${milkLinks.linked} collection(s) linked to purchase rows`
+                + (milkLinks.ambiguous ? `, ${milkLinks.ambiguous} row(s) left unlinked` : ''));
+        }
+    } catch (e38) {
+        console.log('Migration 38 (milk statement links) skipped:', e38.message);
+    }
+
     // Backfill any parties that are still missing party_code (runs every startup)
     // This catches parties created by seed scripts, imports, or initial bulk inserts
     try {

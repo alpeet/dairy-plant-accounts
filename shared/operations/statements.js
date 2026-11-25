@@ -586,6 +586,15 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         ).get().n > 0;
         if (hasMilkRef) {
             const purchaseEntries = entries.filter(e => e.reference_type === 'purchase');
+            // Explicit links written by the importer / startup repair. A link is
+            // a fact recorded with the bill: this ledger line posts that milk
+            // line. It is used BEFORE the amount heuristic, so a line whose
+            // workbook amount drifted from the bill's milk line still shows the
+            // milk it paid for; the row's Debit / Credit are never altered.
+            let linksByEntry = {};
+            try {
+                linksByEntry = require('./milk_links').milkLinksForEntries(db, purchaseEntries.map(e => e.id));
+            } catch (e) { linksByEntry = {}; }
             const resolveByBillDate = db.prepare(
                 'SELECT id FROM purchases WHERE party_id = ? AND bill_no = ? AND date = ? ORDER BY id LIMIT 1'
             );
@@ -640,7 +649,18 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
                     const pid = pidByEntry.get(e.id);
                     const rowAmount = Math.abs((e.credit || 0) - (e.debit || 0));
                     let shown = [];
-                    if (pid != null && rowAmount > 0) {
+                    const linked = (linksByEntry[e.id] || []).filter(l => !usedLineIds.has(l.id));
+                    if (linked.length) {
+                        shown = linked;
+                        // The linked milk line is what the bill recorded; it can
+                        // be worth more or less than this ledger line when the
+                        // workbook posted a different figure. Say so once in the
+                        // footnote (the amounts themselves stay as recorded).
+                        if (rowAmount > 0) {
+                            const linkedTotal = linked.reduce((s, l) => s + lineValue(l), 0);
+                            if (Math.abs(linkedTotal - rowAmount) > 0.01) e.qty_link_diff = true;
+                        }
+                    } else if (pid != null && rowAmount > 0) {
                         const candidates = (linesByPid[pid] || []).filter(l => !usedLineIds.has(l.id));
                         const exact = candidates.filter(l => Math.abs(lineValue(l) - rowAmount) <= 0.01);
                         const total = candidates.reduce((s, l) => s + lineValue(l), 0);
@@ -1029,6 +1049,10 @@ function getPartyStatement(db, { party_id, from_date, to_date, transaction_type,
         // How many shown purchase rows could not be tied to a milk collection —
         // named in the footnote, never corrected by guessing quantity or rate.
         qty_unreconciled_count: entriesWithBalance.filter(e => e.qty_unreconciled).length,
+        // Linked milk lines whose recorded value differs from the ledger line
+        // they are posted on (a workbook figure, not a calculation). Disclosed
+        // in the footnote; no amount is changed.
+        qty_link_diff_count: entriesWithBalance.filter(e => e.qty_link_diff).length,
         // The filters applied to THIS statement (echoed into print and PDF).
         filters: {
             transaction_type: transaction_type || '',

@@ -343,6 +343,14 @@ function statementShiftCell(e) {
 }
 
 /**
+ * Marker for a linked milk line whose recorded value differs from the ledger
+ * line it is posted on (the workbook posted a different figure for the bill).
+ */
+function statementLinkDiffMark() {
+    return `<sup style="color:${ST_NOTE};font-weight:700" title="${escapeHtml(rl('Milk line value differs from the ledger line', 'दूध लाइनको रकम लेजर लाइनभन्दा फरक'))}">‡</sup>`;
+}
+
+/**
  * Footnote for a statement whose purchase rows could not be matched to a milk
  * collection. It names the gap and says plainly that nothing was guessed and
  * no amount changed. Shared by the screen, print, PDF and email views.
@@ -353,6 +361,21 @@ function statementUnreconciledNote(data) {
     const text = rl(
         `† ${n} purchase line${n === 1 ? '' : 's'} in this statement could not be matched to a milk collection line, so Milk Type and Quantity are left blank rather than guessed. The Debit / Credit amounts and all totals are exactly as recorded.`,
         `† यो विवरणका ${n} खरिद लाइन दूध सङ्कलन लाइनसँग मिल्न सकेनन्, त्यसैले दूधको प्रकार र परिमाण अनुमान नगरी खाली छाडिएको छ। डेबिट / क्रेडिट र सबै जम्मा रकम यथावत् छन्।`
+    );
+    return `<div class="stmt-note">${escapeHtml(text)}</div>`;
+}
+
+/**
+ * Footnote for milk lines linked to a purchase row whose ledger figure differs
+ * from the milk line. The quantity/rate come from the milk register (the bill's
+ * own record); Debit / Credit and all totals stay exactly as recorded.
+ */
+function statementLinkDiffNote(data) {
+    const n = Number(data && data.qty_link_diff_count) || 0;
+    if (!n) return '';
+    const text = rl(
+        `‡ ${n} purchase line${n === 1 ? '' : 's'} show the milk recorded on the bill. The ledger line for ${n === 1 ? 'that bill was' : 'those bills was'} posted at a different figure, so the milk quantity and rate do not multiply to the line amount shown; the Debit / Credit amounts and all totals are exactly as recorded.`,
+        `‡ ${n} खरिद लाइनमा बिलमै लेखिएको दूध देखाइएको छ। ती बिलको लेजर लाइन फरक रकममा पोस्ट भएकोले दूधको परिमाण र दरले लाइनको रकम दिँदैन; डेबिट / क्रेडिट र सबै जम्मा रकम यथावत् छन्।`
     );
     return `<div class="stmt-note">${escapeHtml(text)}</div>`;
 }
@@ -572,7 +595,7 @@ function statementCellHtml(key, e, line, first, qtyCells, opts) {
             return `<td>${line ? ST_DASH : ST_NA}</td>`;
         }
         case 'qty': {
-            if (line) return `<td class="${num}">${stQty(line.quantity)}</td>`;
+            if (line) return `<td class="${num}">${stQty(line.quantity)}${first && e.qty_link_diff ? statementLinkDiffMark() : ''}</td>`;
             if (first && e.qty_unreconciled) return `<td class="${num}">${statementUnreconciledMark()}</td>`;
             return `<td class="${num}">${qtyCells.qty === ST_DASH ? '' : qtyCells.qty}</td>`;
         }
@@ -884,6 +907,7 @@ function renderStatementResult(data) {
             </table>
         </div>
         ${statementUnreconciledNote(data)}
+        ${statementLinkDiffNote(data)}
         ${statementItemQtySummaryHtml(data)}
         ${statementQtySummaryHtml(data)}
     `;
@@ -1045,6 +1069,7 @@ function buildStatementHtml(data, settings, layout) {
             </tbody>
         </table>
         ${statementUnreconciledNote(data)}
+        ${statementLinkDiffNote(data)}
         <div class="summary no-break">
             <div class="summary-row total"><span>${rlt('closing_balance')}</span><span>${formatCurrency(data.closing_balance)} ${closingLabel}</span></div>
         </div>
