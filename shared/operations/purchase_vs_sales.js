@@ -28,6 +28,7 @@
  */
 
 const bsCalendar = require('../bs-calendar');
+const { lineDisplayUnit } = require('./unit_conversion');
 const { round2, getSaleSettlements } = require('./accounting');
 
 /** Milk collection type → the product name the purchase report shows. */
@@ -173,7 +174,8 @@ function getPurchaseVsSales(db, opts = {}) {
     `).all(...rangeParams);
 
     const purchaseItems = db.prepare(`
-        SELECT pi.purchase_id, pi.product_name, pi.quantity, pi.unit, pi.rate, pi.amount
+        SELECT pi.purchase_id, pi.product_name, pi.quantity, pi.unit, pi.rate, pi.amount,
+               pi.stock_quantity, pi.stock_unit
           FROM purchase_items pi
           JOIN purchases pr ON pr.id = pi.purchase_id
          WHERE 1=1 ${rangeSql.join('')}
@@ -203,7 +205,8 @@ function getPurchaseVsSales(db, opts = {}) {
     `).all(...salesRangeParams);
 
     const salesItems = db.prepare(`
-        SELECT si.sale_id, si.product_name, si.quantity, si.unit, si.rate, si.amount
+        SELECT si.sale_id, si.product_name, si.quantity, si.unit, si.rate, si.amount,
+               si.stock_quantity, si.stock_unit
           FROM sales_items si
           JOIN sales s ON s.id = si.sale_id
          WHERE 1=1 ${salesRangeSql.join('')}
@@ -274,7 +277,7 @@ function getPurchaseVsSales(db, opts = {}) {
                 ...base,
                 product: item.product_name || 'Item',
                 quantity,
-                unit: item.unit || '',
+                unit: lineDisplayUnit(item),
                 rate: round2(item.rate),
                 amount,
                 source: 'purchase_items'
@@ -351,7 +354,7 @@ function getPurchaseVsSales(db, opts = {}) {
                 ...base,
                 product: item.product_name || 'Item',
                 quantity: round2(item.quantity),
-                unit: item.unit || '',
+                unit: lineDisplayUnit(item),
                 rate: round2(item.rate),
                 amount,
                 source: 'sales_items'

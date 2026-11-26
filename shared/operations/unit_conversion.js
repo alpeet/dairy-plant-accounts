@@ -173,7 +173,50 @@ function validateProductUnits(product) {
     return errors;
 }
 
+/**
+ * The unit to SHOW for a stored transaction line. Read-only — it never
+ * rewrites the row, the quantity, the rate or the amount.
+ *
+ * Rule, in order:
+ *   1. The line's own recorded unit.
+ *      EXCEPT when the line's quantity was NOT converted into its stock unit
+ *      (quantity === stock_quantity) and the recorded label contradicts the
+ *      line's own stock_unit. Migration 39 established that every historical
+ *      quantity IS the stock quantity, so in that case the label is the old
+ *      Excel-import default ('kg' on every sales line, 'liter' on every
+ *      purchase line) and the stock unit is what the quantity is really in.
+ *      This is a label correction in the display only; the stored unit stays
+ *      exactly as recorded (and is returned as `unit_recorded`).
+ *   2. The stock unit, when rule 1 applies.
+ *   3. The product's configured unit, when the line has no unit at all.
+ */
+function lineDisplayUnit(line, fallback) {
+    const unit = String((line && line.unit) || '').trim();
+    const stockUnit = String((line && line.stock_unit) || '').trim();
+    const qty = Number(line && line.quantity);
+    const stockQty = Number(line && line.stock_quantity);
+    const notConverted = isFinite(qty) && isFinite(stockQty) && Math.abs(qty - stockQty) <= EPS;
+    if (stockUnit && notConverted && (!unit || !sameUnit(unit, stockUnit))) return stockUnit;
+    if (unit) return unit;
+    if (stockUnit) return stockUnit;
+    return String(fallback || '').trim();
+}
+
+/**
+ * Project stored item rows for display: `unit` becomes the display unit and
+ * `unit_recorded` keeps the stored value (edit forms must save that one, so a
+ * historical label is never overwritten just by opening an old document).
+ * Quantities, rates and amounts are copied untouched.
+ */
+function withDisplayUnits(items, fallback) {
+    return (items || []).map(it => ({
+        ...it,
+        unit_recorded: it.unit,
+        unit: lineDisplayUnit(it, typeof fallback === 'function' ? fallback(it) : fallback)
+    }));
+}
+
 module.exports = {
     normalizeUnit, sameUnit, metricOf, factorToStock, toStock, convert,
-    isAutomatic, validateProductUnits, roundTo
+    isAutomatic, validateProductUnits, roundTo, lineDisplayUnit, withDisplayUnits
 };

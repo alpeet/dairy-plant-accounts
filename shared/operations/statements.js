@@ -10,6 +10,7 @@
 const { todayBSDate } = require('../excel-import');
 const partyLedger = require('./party_ledger');
 const accountingDates = require('./accounting_dates');
+const { withDisplayUnits } = require('./unit_conversion');
 
 // ── Number formatting helpers for statement display ──
 // Kill floating-point noise (97.64999999999999 → "97.65") and trim needless
@@ -307,8 +308,11 @@ function attachEntryItemDetails(db, partyId, entries) {
     let saleItems, purchaseItems, saleByInvoice, saleByInvoiceAny,
         purchaseByBillDate, purchaseByBill, saleStatus, purchaseStatus;
     try {
-        saleItems = db.prepare('SELECT product_name, quantity, unit, rate, amount FROM sales_items WHERE sale_id = ? ORDER BY id');
-        purchaseItems = db.prepare('SELECT product_name, quantity, unit, rate, amount FROM purchase_items WHERE purchase_id = ? ORDER BY id');
+        // stock_quantity / stock_unit travel with the line so the display unit
+        // can be resolved without touching the stored unit (unit_conversion.
+        // lineDisplayUnit). The stored label is kept as `unit_recorded`.
+        saleItems = db.prepare('SELECT product_name, quantity, unit, rate, amount, stock_quantity, stock_unit FROM sales_items WHERE sale_id = ? ORDER BY id');
+        purchaseItems = db.prepare('SELECT product_name, quantity, unit, rate, amount, stock_quantity, stock_unit FROM purchase_items WHERE purchase_id = ? ORDER BY id');
         saleByInvoice = db.prepare('SELECT id, status FROM sales WHERE party_id = ? AND invoice_no = ? AND date = ? ORDER BY id LIMIT 1');
         saleByInvoiceAny = db.prepare('SELECT id, status FROM sales WHERE party_id = ? AND invoice_no = ? ORDER BY id LIMIT 1');
         purchaseByBillDate = db.prepare('SELECT id, status FROM purchases WHERE party_id = ? AND bill_no = ? AND date = ? ORDER BY id LIMIT 1');
@@ -336,7 +340,8 @@ function attachEntryItemDetails(db, partyId, entries) {
                 }
                 if (srcId != null) {
                     e.source_id = srcId;
-                    const items = (type === 'sale' ? saleItems : purchaseItems).all(srcId);
+                    const rawItems = (type === 'sale' ? saleItems : purchaseItems).all(srcId);
+                    const items = withDisplayUnits(rawItems);
                     if (items.length) e.items = items;
                 }
                 if (status) e.payment_status = status;

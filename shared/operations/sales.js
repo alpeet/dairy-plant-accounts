@@ -10,7 +10,7 @@
 
 const { logAudit } = require('./audit');
 const { getSaleSettlements, paymentStatus, round2 } = require('./accounting');
-const { toStock } = require('./unit_conversion');
+const { toStock, withDisplayUnits } = require('./unit_conversion');
 // Lot costing is optional at runtime (tables may pre-date migration 23).
 let _costing = null;
 function lotCosting() {
@@ -97,7 +97,9 @@ function getSale(db, id) {
          FROM sales s LEFT JOIN parties p ON s.party_id = p.id WHERE s.id = ?`
     ).get(id);
     if (!sale) return null;
-    const items = db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id);
+    // `unit` is the display unit; `unit_recorded` is the stored label the edit
+    // form must save back, so opening an old document never rewrites history.
+    const items = withDisplayUnits(db.prepare("SELECT * FROM sales_items WHERE sale_id = ?").all(id));
     const st = getSaleSettlements(db, { party_id: sale.party_id }).by_id.get(Number(id));
     return {
         ...sale,

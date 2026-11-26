@@ -31,6 +31,27 @@ const XLSX = require('xlsx');
 
 const SHEET_DATA_START_ROW = 2;
 
+/**
+ * Unit of a transaction line, taken from the PRODUCT MASTER.
+ * Each import used to write a constant ('kg' on sales, 'liter' on purchases),
+ * so every litre product's history read 'kg' in the party statement even after
+ * its unit was set to Litre. These helpers make the stored line agree with the
+ * product it belongs to; they never convert a quantity.
+ */
+function importUnitFor(db, productId, side) {
+    try {
+        const p = db.prepare(
+            'SELECT unit, purchase_unit, sales_unit, stock_unit FROM products WHERE id = ?'
+        ).get(productId);
+        if (!p) return '';
+        if (side === 'sales') return String(p.sales_unit || p.unit || '').trim();
+        if (side === 'stock') return String(p.stock_unit || p.unit || '').trim();
+        return String(p.purchase_unit || p.unit || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
 // ════════════════════════════════════════════════════════════════
 // BS CALENDAR — one authoritative table (shared/bs-calendar.js)
 // ════════════════════════════════════════════════════════════════
@@ -749,8 +770,8 @@ function importSales(db, sheetData, opts) {
         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertSaleItem = db.prepare(`
-        INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sales_items (sale_id, product_id, product_name, quantity, unit, rate, amount, stock_quantity, stock_unit)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const updateSale = db.prepare(`
         UPDATE sales SET date=?, party_id=?, subtotal=?, discount=?, discount_percent=?,
@@ -922,7 +943,8 @@ function importSales(db, sheetData, opts) {
                 const rate = toNum(row[rateIdx]);
                 const amount = toNum(row[amtIdx]) || (qty * rate);
 
-                insertSaleItem.run(saleId, productId, productName, qty, 'kg', rate, amount);
+                insertSaleItem.run(saleId, productId, productName, qty, importUnitFor(db, productId, 'sales'), rate, amount,
+                    qty, importUnitFor(db, productId, 'stock'));
             }
         }
     });
@@ -955,8 +977,8 @@ function importPurchases(db, sheetData, opts) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertPurchaseItem = db.prepare(`
-        INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, rate, amount, stock_quantity, stock_unit)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     // Milk lines are recorded as milk collections linked back to their bill
     // (purchase_ref_id) so the Milk Collection module and the purchase money
@@ -1127,7 +1149,8 @@ function importPurchases(db, sheetData, opts) {
                 const productId = resolveProduct(productName, db, autoCreate);
                 if (!productId) continue; // unknown product (e.g. OPENING/DISSEL rows) → skip item
 
-                insertPurchaseItem.run(purchaseId, productId, productName, qty, 'liter', rate, amount);
+                insertPurchaseItem.run(purchaseId, productId, productName, qty, importUnitFor(db, productId, 'purchase'), rate, amount,
+                    qty, importUnitFor(db, productId, 'stock'));
             }
         }
     });

@@ -334,7 +334,7 @@ function renderSaleItemRow(item, idx, products) {
             </td>
             <td><input type="number" class="form-control sale-qty" value="${item.quantity}" min="0" step="0.01" style="font-size:13px"></td>
             <td>
-                <select class="form-control sale-unit" style="font-size:13px">${saleUnitSelectHtml(saleUnits, item.unit || 'kg')}</select>
+                <select class="form-control sale-unit" style="font-size:13px">${saleUnitSelectHtml(saleUnits, item.unit_recorded || item.unit || 'kg')}</select>
                 <div class="sale-conv" style="font-size:11px;color:var(--text-light);white-space:nowrap"></div>
             </td>
             <td><input type="number" class="form-control sale-rate" value="${item.rate}" min="0" step="0.01" style="font-size:13px"></td>

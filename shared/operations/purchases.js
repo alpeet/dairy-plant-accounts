@@ -12,7 +12,7 @@ const { logAudit } = require('./audit');
 const { round2 } = require('./accounting');
 const bsCalendar = require('../bs-calendar');
 const accountingDates = require('./accounting_dates');
-const { toStock } = require('./unit_conversion');
+const { toStock, withDisplayUnits } = require('./unit_conversion');
 
 /**
  * List purchases with optional filters.
@@ -41,7 +41,9 @@ function getPurchase(db, id) {
          FROM purchases pr LEFT JOIN parties p ON pr.party_id = p.id WHERE pr.id = ?`
     ).get(id);
     if (!purchase) return null;
-    const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
+    // `unit` is the display unit; `unit_recorded` is the stored label the edit
+    // form must save back, so opening an old bill never rewrites history.
+    const items = withDisplayUnits(db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id));
     return { ...purchase, items };
 }
 
