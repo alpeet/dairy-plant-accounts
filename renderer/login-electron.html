@@ -7,9 +7,23 @@
     <title>Prarambha Account &amp; Stock Management - Login</title>
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="shortcut icon" type="image/png" href="favicon.png">
+    <script src="js/theme.js?v=1"></script>
     <link rel="stylesheet" href="css/login.css?v=4">
+    <link rel="stylesheet" href="css/theme.css?v=1">
 </head>
-<body>
+<body class="login-page">
+    <button type="button" class="theme-toggle login-theme-toggle" onclick="toggleTheme()"
+        aria-label="Switch to dark mode" title="Switch to dark mode" aria-pressed="false">
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" />
+        </svg>
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.5 14.6A8.6 8.6 0 1 1 9.4 3.5a6.9 6.9 0 0 0 11.1 11.1z" />
+        </svg>
+    </button>
     <div class="login-container">
         <div class="login-card">
             <!-- Logo -->
