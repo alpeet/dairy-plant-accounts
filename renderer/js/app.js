@@ -139,6 +139,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Sidebar toggle (collapses on desktop, opens the drawer under 900px)
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', () => {
+            if (typeof window.__uiToggleSidebar === 'function') window.__uiToggleSidebar();
+        });
+    }
+
     // Logout button
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
@@ -174,6 +182,10 @@ function navigateTo(page) {
 
     // Update title
     document.getElementById('pageTitle').textContent = pageTitles[page] || page;
+
+    // Let the React shell (sidebar) mark the active module. The legacy
+    // class toggle below still runs so nothing depends on the React layer.
+    window.dispatchEvent(new CustomEvent('ui:page', { detail: page }));
 
     // Clear top actions
     document.getElementById('topActions').innerHTML = '';

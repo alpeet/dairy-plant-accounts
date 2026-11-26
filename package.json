@@ -1,6 +1,6 @@
 {
   "name": "prarambha-account-stock",
-  "version": "1.4.66",
+  "version": "1.4.67",
   "description": "Prarambha Account & Stock Management (Desktop + Web)",
   "homepage": "https://github.com/alpeet/dairy-plant-accounts",
   "main": "main.js",
@@ -23,7 +23,8 @@
     "data:export": "node data-exchange.js export",
     "data:import": "node data-exchange.js import",
     "data:export-csv": "node data-exchange.js export --csv",
-    "data:import-csv": "node data-exchange.js import --csv"
+    "data:import-csv": "node data-exchange.js import --csv",
+    "build:ui": "node scripts/build-ui.js"
   },
   "build": {
     "appId": "com.prarambha.accountstock",
@@ -186,7 +187,12 @@
   "devDependencies": {
     "electron": "^33.4.11",
     "electron-builder": "^24.13.3",
-    "electron-rebuild": "^3.2.9"
+    "electron-rebuild": "^3.2.9",
+    "esbuild": "^0.24.2",
+    "lucide-react": "^0.468.0",
+    "motion": "^14.14.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
