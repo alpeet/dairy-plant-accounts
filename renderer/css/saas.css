@@ -706,12 +706,37 @@ body {
 .bal-foot b { color: #0f172a; font-variant-numeric: tabular-nums; }
 
 /* Expenses */
-.exp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.exp-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.exp-label { font-size: 12px; color: #475569; }
-.exp-value { font-size: 12px; font-weight: 650; color: #0f172a; font-variant-numeric: tabular-nums; }
-.exp-track { height: 6px; border-radius: 4px; background: #f1f3f9; overflow: hidden; }
-.exp-fill { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #6366f1, #818cf8); }
+/* Spending by category — donut + legend. Same expense heads as the P&L. */
+.donut-panel { display: flex; flex-direction: column; }
+.donut-wrap { display: flex; justify-content: center; padding: 4px 0 10px; }
+.donut-svg { width: 100%; max-width: 208px; height: auto; overflow: visible; }
+.donut-amount { font-family: var(--font); font-size: 14px; font-weight: 700; fill: #0f172a; font-variant-numeric: tabular-nums; }
+.donut-caption { font-family: var(--font); font-size: 10.5px; fill: var(--text-light); }
+.donut-share { font-family: var(--font); font-size: 10px; fill: #94a3b8; }
+.donut-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.donut-row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 9px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 6px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    font-family: var(--font);
+    font-size: 12px;
+    color: #475569;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.14s ease;
+}
+.donut-row:hover, .donut-row.is-on { background: #f4f6fb; }
+.donut-row:focus-visible { outline: none; box-shadow: var(--ring); }
+.donut-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+.donut-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.donut-value { font-weight: 650; color: #0f172a; font-variant-numeric: tabular-nums; }
+.donut-pct { min-width: 42px; text-align: right; color: #94a3b8; font-variant-numeric: tabular-nums; }
 
 /* Stock */
 .stock-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin-bottom: 12px; }

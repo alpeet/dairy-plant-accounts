@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import KpiCard from './KpiCard';
 import RevenueChart from './RevenueChart';
+import ExpenseDonut from './ExpenseDonut';
 import { money, num } from '../format';
 
 async function call(fn, fallback) {
@@ -100,44 +101,6 @@ function Balances({ d, analytics }) {
                 <div className="bal-foot">
                     Total liquid position <b>{money((analytics.cash_bank.cash || 0) + (analytics.cash_bank.bank || 0))}</b>
                 </div>
-            )}
-        </section>
-    );
-}
-
-function ExpenseBreakdown({ heads, monthLabel }) {
-    const list = (heads || []).slice(0, 7);
-    const max = Math.max(1, ...list.map((h) => h.amount));
-    return (
-        <section className="panel">
-            <header className="panel-head">
-                <div>
-                    <h2 className="panel-title">Expense breakdown</h2>
-                    <p className="panel-sub">{monthLabel || 'This month'} to date — P&amp;L heads</p>
-                </div>
-                <SectionLink onClick={() => go('profit-loss')}>P&amp;L</SectionLink>
-            </header>
-            {list.length === 0 ? (
-                <p className="panel-empty">No expenses recorded this month.</p>
-            ) : (
-                <ul className="exp-list">
-                    {list.map((head, i) => (
-                        <li key={head.key}>
-                            <div className="exp-top">
-                                <span className="exp-label">{head.label}</span>
-                                <span className="exp-value">{money(head.amount)}</span>
-                            </div>
-                            <div className="exp-track">
-                                <motion.span
-                                    className="exp-fill"
-                                    initial={{ width: 0 }}
-                                    animate={{ width: `${Math.max(2, (head.amount / max) * 100)}%` }}
-                                    transition={{ duration: 0.5, delay: i * 0.04, ease: 'easeOut' }}
-                                />
-                            </div>
-                        </li>
-                    ))}
-                </ul>
             )}
         </section>
     );
@@ -449,7 +412,7 @@ export default function Dashboard() {
             </div>
 
             <div className="dash-grid dash-grid-3">
-                <ExpenseBreakdown heads={a.expense_heads} monthLabel={monthLabel} />
+                <ExpenseDonut heads={a.expense_heads} monthLabel={monthLabel} />
                 <StockOverview stock={d.stockSummary || { product_count: 0, stock_value: 0 }} lowStock={d.lowStock} />
                 <TopParties d={d} />
             </div>
