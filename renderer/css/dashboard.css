@@ -1,0 +1,203 @@
+/* ============================================================
+   PRARAMBHA — DASHBOARD VISUAL REFRESH
+   ------------------------------------------------------------
+   Presentation only. Loaded last, so it refines the dashboard
+   without touching any module markup, id or accounting figure.
+
+   Three ideas, nothing else:
+     1. A gradient hero band in place of the flat toolbar row.
+     2. Tone accents on the KPI tiles and the "today" chips.
+     3. A hairline under each panel header.
+
+   Every colour has a matching html[data-theme="dark"] rule at
+   the bottom of this file.
+   ============================================================ */
+
+/* ---------- Tone tokens (shared by KPI tiles and today chips) ---------- */
+.tone-indigo  { --tone: #4f46e5; --tone-soft: #eef0ff; --tone-line: rgba(79, 70, 229, 0.55); }
+.tone-sky     { --tone: #0284c7; --tone-soft: #e8f4fd; --tone-line: rgba(2, 132, 199, 0.55); }
+.tone-amber   { --tone: #b45309; --tone-soft: #fdf3e3; --tone-line: rgba(180, 83, 9, 0.55); }
+.tone-emerald { --tone: #0f9d63; --tone-soft: #e7f7f0; --tone-line: rgba(15, 157, 99, 0.55); }
+.tone-rose    { --tone: #dc2626; --tone-soft: #fdecec; --tone-line: rgba(220, 38, 38, 0.55); }
+
+/* ============================================================
+   HERO BAND — replaces the flat toolbar row
+   ============================================================ */
+.dash-hero {
+    position: relative;
+    overflow: hidden;
+    align-items: center;
+    padding: 20px 22px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 18px;
+    background:
+        radial-gradient(120% 170% at 88% -40%, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0) 58%),
+        linear-gradient(118deg, #312e81 0%, #4338ca 38%, #4f46e5 68%, #6d5cf6 100%);
+    box-shadow: 0 22px 46px -30px rgba(49, 46, 129, 0.85), 0 2px 6px -3px rgba(49, 46, 129, 0.35);
+}
+
+/* soft glow, kept to the right so the text stays crisp */
+.dash-hero::before {
+    content: '';
+    position: absolute;
+    right: -60px;
+    top: -110px;
+    width: 340px;
+    height: 340px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.20) 0%, rgba(255, 255, 255, 0) 68%);
+    pointer-events: none;
+}
+
+/* the glow is absolute, so it paints over the band's content */
+.dash-hero .dash-toolbar-text,
+.dash-hero .dash-toolbar-actions { position: relative; z-index: 1; }
+
+.dash-hero .dash-eyebrow {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: rgba(224, 231, 255, 0.92);
+}
+
+.dash-hero-title {
+    display: block;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.18;
+    color: #ffffff;
+}
+
+.dash-hero .dash-period { font-size: 12px; color: rgba(255, 255, 255, 0.74); }
+
+/* Controls sitting on the gradient */
+.dash-hero .quick-search {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.26);
+    box-shadow: none;
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+}
+.dash-hero .quick-search input { color: #ffffff; }
+.dash-hero .quick-search input::placeholder { color: rgba(255, 255, 255, 0.68); }
+.dash-hero .qs-icon,
+.dash-hero .qs-clear { color: rgba(255, 255, 255, 0.78); }
+
+/* …and back to a normal surface once the results list is open */
+.dash-hero .quick-search.is-open {
+    background: #ffffff;
+    border-color: rgba(255, 255, 255, 0.6);
+    box-shadow: 0 10px 26px -14px rgba(15, 23, 42, 0.5);
+}
+.dash-hero .quick-search.is-open input { color: #0f172a; }
+.dash-hero .quick-search.is-open input::placeholder { color: #94a3b8; }
+.dash-hero .quick-search.is-open .qs-icon,
+.dash-hero .quick-search.is-open .qs-clear { color: #94a3b8; }
+
+.dash-hero .btn-secondary {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.26);
+    color: #ffffff;
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+}
+.dash-hero .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.24);
+    border-color: rgba(255, 255, 255, 0.38);
+    color: #ffffff;
+}
+.dash-hero .btn-secondary:disabled { color: rgba(255, 255, 255, 0.65); }
+
+/* ============================================================
+   KPI TILES — a tone accent bar and a tone-tinted icon
+   ============================================================ */
+.kpi-tile {
+    /* fallback so a tile without a tone class still renders */
+    --tone: #4f46e5;
+    --tone-soft: #eef0ff;
+    --tone-line: rgba(79, 70, 229, 0.55);
+    overflow: hidden;
+}
+
+.kpi-tile::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--tone) 0%, var(--tone-line) 45%, rgba(255, 255, 255, 0) 100%);
+}
+
+.kpi-tile .kpi-icon {
+    background: var(--tone-soft);
+    color: var(--tone);
+}
+
+/* ============================================================
+   TODAY CHIPS — tone-tinted icon, same behaviour as before
+   ============================================================ */
+.today-ico {
+    background: var(--tone-soft, #f1f5f9);
+    color: var(--tone, #475569);
+}
+
+/* ============================================================
+   PANELS — hairline under the header only
+   ============================================================ */
+.panel-head {
+    align-items: center;
+    padding-bottom: 11px;
+    margin-bottom: 13px;
+    border-bottom: 1px solid #f1f4f9;
+}
+
+/* ============================================================
+   DARK THEME
+   ============================================================ */
+html[data-theme="dark"] .dash-hero {
+    border-color: rgba(148, 163, 184, 0.20);
+    background:
+        radial-gradient(120% 170% at 88% -40%, rgba(129, 140, 248, 0.30) 0%, rgba(129, 140, 248, 0) 58%),
+        linear-gradient(118deg, #12192a 0%, #17203a 40%, #1d2748 72%, #232f57 100%);
+    box-shadow: 0 22px 46px -30px rgba(0, 0, 0, 0.95), 0 1px 0 rgba(148, 163, 184, 0.08) inset;
+}
+html[data-theme="dark"] .dash-hero::before {
+    background: radial-gradient(circle, rgba(129, 140, 248, 0.24) 0%, rgba(129, 140, 248, 0) 68%);
+}
+html[data-theme="dark"] .dash-hero .dash-eyebrow { color: #a5b4fc; }
+html[data-theme="dark"] .dash-hero-title { color: #f1f5f9; }
+html[data-theme="dark"] .dash-hero .dash-period { color: #8fa0b8; }
+
+html[data-theme="dark"] .dash-hero .quick-search {
+    background: rgba(148, 163, 184, 0.10);
+    border-color: rgba(148, 163, 184, 0.28);
+}
+html[data-theme="dark"] .dash-hero .quick-search.is-open {
+    background: #0f1722;
+    border-color: rgba(129, 140, 248, 0.55);
+    box-shadow: 0 14px 30px -16px rgba(0, 0, 0, 0.85);
+}
+html[data-theme="dark"] .dash-hero .quick-search.is-open input { color: var(--text); }
+html[data-theme="dark"] .dash-hero .quick-search.is-open input::placeholder { color: #6b7a91; }
+
+html[data-theme="dark"] .dash-hero .btn-secondary {
+    background: rgba(148, 163, 184, 0.12);
+    border-color: rgba(148, 163, 184, 0.26);
+    color: #e2e8f0;
+}
+html[data-theme="dark"] .dash-hero .btn-secondary:hover {
+    background: rgba(148, 163, 184, 0.20);
+    border-color: rgba(148, 163, 184, 0.36);
+    color: #ffffff;
+}
+
+/* Tone accents stay readable on the dark surface */
+html[data-theme="dark"] .today-item.tone-indigo .today-ico { background: rgba(129, 140, 248, 0.16); color: #a5b4fc; }
+html[data-theme="dark"] .today-item.tone-sky .today-ico { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+html[data-theme="dark"] .today-item.tone-emerald .today-ico { background: rgba(52, 211, 153, 0.16); color: #6ee7b7; }
+html[data-theme="dark"] .today-item.tone-amber .today-ico { background: rgba(251, 191, 36, 0.16); color: #fcd34d; }
+
+html[data-theme="dark"] .panel-head { border-bottom-color: var(--border); }

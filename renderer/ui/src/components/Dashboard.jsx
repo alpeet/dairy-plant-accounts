@@ -64,6 +64,13 @@ function go(page) {
     if (typeof window.navigateTo === 'function') window.navigateTo(page);
 }
 
+function greetingForNow() {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+}
+
 function Balances({ d, analytics }) {
     const cashBank = analytics.cash_bank || null;
     const rows = [
@@ -274,17 +281,17 @@ function QuickSearch() {
 function TodayStrip({ d, milk, today }) {
     const milkLiters = milk && milk.todayTotal ? milk.todayTotal.total_liters : 0;
     const stats = [
-        { label: 'Milk today', value: `${num(milkLiters, 1)} L`, icon: Milk, page: 'milk' },
-        { label: 'Cash received', value: money(d.todaySales ? d.todaySales.paid : 0), icon: Banknote, page: 'cash-collection' },
-        { label: 'Purchases today', value: money(d.todayPurchases ? d.todayPurchases.total : 0), icon: Package, page: 'purchases' },
-        { label: 'Expenses today', value: money(today && today.todayExpenses ? today.todayExpenses.total : (d.cashPosition ? d.cashPosition.expenses : 0)), icon: ReceiptText, page: 'expenses' }
+        { label: 'Milk today', value: `${num(milkLiters, 1)} L`, icon: Milk, page: 'milk', tone: 'sky' },
+        { label: 'Cash received', value: money(d.todaySales ? d.todaySales.paid : 0), icon: Banknote, page: 'cash-collection', tone: 'emerald' },
+        { label: 'Purchases today', value: money(d.todayPurchases ? d.todayPurchases.total : 0), icon: Package, page: 'purchases', tone: 'indigo' },
+        { label: 'Expenses today', value: money(today && today.todayExpenses ? today.todayExpenses.total : (d.cashPosition ? d.cashPosition.expenses : 0)), icon: ReceiptText, page: 'expenses', tone: 'amber' }
     ];
     return (
         <div className="today-strip">
             {stats.map((s) => {
                 const Icon = s.icon;
                 return (
-                    <button type="button" key={s.label} className="today-item" onClick={() => go(s.page)}>
+                    <button type="button" key={s.label} className={`today-item tone-${s.tone}`} onClick={() => go(s.page)}>
                         <span className="today-ico"><Icon size={15} strokeWidth={1.9} /></span>
                         <span className="today-text">
                             <span className="today-label">{s.label}</span>
@@ -387,9 +394,10 @@ export default function Dashboard() {
 
     return (
         <div className="dash-shell">
-            <div className="dash-toolbar">
+            <div className="dash-toolbar dash-hero">
                 <div className="dash-toolbar-text">
-                    <span className="dash-eyebrow">Financial overview</span>
+                    <span className="dash-eyebrow">{greetingForNow()} · {String(dashboardToday()).replace(/-/g, '/')}</span>
+                    <span className="dash-hero-title">Financial overview</span>
                     <span className="dash-period">{kpiLabel} vs the previous 90 days · {monthLabel} expenses</span>
                 </div>
                 <div className="dash-toolbar-actions">
