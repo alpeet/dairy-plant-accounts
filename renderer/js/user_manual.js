@@ -9,8 +9,6 @@ async function renderUserManual() {
     const container = document.getElementById('page-user-manual');
     document.getElementById('topActions').innerHTML = '';
 
-    const appVersion = '1.0.0';
-
     container.innerHTML = `
         <div class="um-container" style="max-width:900px;margin:0 auto">
             <!-- Header -->
@@ -19,7 +17,7 @@ async function renderUserManual() {
                     <span style="font-size:36px">📖</span>
                     <div>
                         <h1 style="font-size:22px;font-weight:700;margin:0">Prarambha Account &amp; Stock Management — User Manual</h1>
-                        <p style="font-size:13px;color:rgba(255,255,255,0.6);margin-top:4px">Version ${appVersion} &middot; Complete Guide to Daily Accounting</p>
+                        <p style="font-size:13px;color:rgba(255,255,255,0.6);margin-top:4px">Version <span data-app-version></span> &middot; Complete Guide to Daily Accounting</p>
                     </div>
                 </div>
                 <div style="background:rgba(255,255,255,0.1);border-radius:8px;padding:14px 18px;font-size:14px;line-height:1.7;color:rgba(255,255,255,0.85)">
@@ -50,6 +48,9 @@ async function renderUserManual() {
                 </a>
                 <a href="#um-workflow" style="padding:8px 16px;background:#e0f7fa;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;color:#00838f;transition:all 0.2s" onmouseover="this.style.background='#b2ebf2'" onmouseout="this.style.background='#e0f7fa'">
                     ✅ Daily Workflow
+                </a>
+                <a href="#um-examples" style="padding:8px 16px;background:#ede7f6;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;color:#4527a0;transition:all 0.2s" onmouseover="this.style.background='#d1c4e9'" onmouseout="this.style.background='#ede7f6'">
+                    🧾 Worked Examples
                 </a>
             </div>
 
@@ -412,6 +413,9 @@ async function renderUserManual() {
             <!-- ============== WHERE DO I RECORD THIS? ============== -->
             ${umWhereToRecordHtml()}
 
+            <!-- ============== WORKED EXAMPLES ============== -->
+            ${umWorkedExamplesHtml()}
+
             <!-- ==================== MODULE GUIDE ==================== -->
             ${umModuleGuideHtml()}
 
@@ -420,7 +424,7 @@ async function renderUserManual() {
 
             <!-- Footer -->
             <div style="text-align:center;padding:20px;color:var(--text-light);font-size:12px">
-                Prarambha Account &amp; Stock Management v${appVersion} &middot; User Manual &middot; Generated from the app
+                Prarambha Account &amp; Stock Management v<span data-app-version></span> &middot; User Manual &middot; Generated from the app
             </div>
         </div>
     `;
@@ -697,6 +701,297 @@ function umModuleGuideHtml() {
 }
 
 // ============================================================
+// Worked examples — one step-by-step walkthrough per transaction type
+// ============================================================
+// Written for someone with ZERO accounting knowledge: every card answers
+// the same five questions — cash, bank, stock, party balance, profit.
+// [icon, tag, title, story, steps[], rows[[label, value, direction]], check, trap]
+
+const UM_PAY_TYPES = [
+    ['🧾 Collection from Customer', 'A customer pays you for a sale you already recorded.', 'Cash / Bank ↑', 'None — the sale was already income.'],
+    ['💰 Actual Expense', 'A brand-new cost that no bill in the app covers: rent, salary, electricity, diesel paid at the pump.', 'Cash / Bank ↓', 'Expense — profit falls.'],
+    ['✓ Settlement', 'You pay a bill that is ALREADY entered in Purchases or Other Expenses.', 'Cash / Bank ↓', 'None — the cost was booked with the bill.'],
+    ['📥 Advance Payment', 'Money given early, to be recovered later (farmer, staff, supplier).', 'Cash / Bank ↓', 'None — it is an asset, not a cost.'],
+    ['⚡ Advance Adjustment', 'The advance you gave is now used up for a real cost.', 'No money moves', 'Expense — profit falls now.'],
+    ['🤝 Loan / Sapati Given', 'You lend money to somebody.', 'Cash / Bank ↓', 'None — it is an asset to collect.'],
+    ['🏦 Loan / Sapati Received', 'You borrow money.', 'Cash / Bank ↑', 'None — it is a liability, never income.'],
+    ['🔁 Loan Repayment', 'You repay a loan principal.', 'Cash / Bank ↓', 'None — only the interest is an expense.'],
+    ['↩ Advance Returned', 'The party gives your advance back.', 'Cash / Bank ↑', 'None — the asset simply comes back.'],
+    ['✓ Other / Journal', 'Anything the screens above do not cover, recorded with a note.', 'Depends', 'Depends — explain it in the note.']
+];
+
+const UM_EXAMPLES = [
+    {
+        icon: '💰', tag: 'Sale · cash', title: '1. A customer buys for cash',
+        story: 'A walk-in customer takes 10 kg paneer at Rs 450 per kg and pays Rs 4,500 cash at the counter.',
+        steps: ['Open Sales → ＋ New Sale.', 'Customer: pick the buyer (for a one-time buyer use your cash customer).', 'Payment Mode: Cash.', 'Add the line — Paneer, quantity 10, rate 450. The amount 4,500 fills itself.', 'Save. The sale is complete; nothing else is needed.'],
+        rows: [['Cash', '+ 4,500 in the drawer', 'up'], ['Stock', '− 10 kg paneer', 'down'], ['Customer balance', '0 — settled at once', 'flat'], ['Profit & loss', '+ 4,500 income', 'up']],
+        check: 'Dashboard shows cash received today 4,500 and the Daybook has exactly one row for it.',
+        trap: 'Entering the same 4,500 again in Cash Collection makes cash 9,000 and gives the customer a credit balance he never had.'
+    },
+    {
+        icon: '📝', tag: 'Sale · credit', title: '2. A customer takes goods and will pay later',
+        story: 'Krishna Dairy takes 50 L milk at Rs 62 = Rs 3,100 and says he will pay on Saturday.',
+        steps: ['Open Sales → ＋ New Sale.', 'Customer: Krishna Dairy.', 'Payment Mode: Credit.', 'Add the line — Milk, 50 L, rate 62.', 'Save.'],
+        rows: [['Cash / Bank', 'no change yet', 'flat'], ['Stock', '− 50 L milk', 'down'], ['Customer balance', '+ 3,100 he owes you (receivable)', 'up'], ['Profit & loss', '+ 3,100 income — today', 'up']],
+        check: 'Receivable / Payable → Receivable tab lists Krishna Dairy 3,100. His statement shows the bill as a Debit row.',
+        trap: 'A credit sale is income on the day of the sale. Do not wait for the money, and do not post the amount as income again when he pays.'
+    },
+    {
+        icon: '📦', tag: 'Purchase · credit', title: '3. A supplier gives you a bill to pay later',
+        story: 'Himalayan Packaging delivers 5,000 pouches at Rs 2.40 = Rs 12,000, bill HP-208, payment next week.',
+        steps: ['Open Purchases → ＋ New Purchase.', 'Supplier: Himalayan Packaging. Bill No: HP-208.', 'Add the item — Pouches, 5,000, rate 2.40.', 'Payment Mode: Credit.', 'Save.'],
+        rows: [['Stock', '+ 5,000 pouches (value 12,000)', 'up'], ['Supplier balance', '+ 12,000 you owe (payable)', 'up'], ['Cash / Bank', 'no change', 'flat'], ['Profit & loss', 'no change today — the goods are still stock', 'flat']],
+        check: 'Receivable / Payable → Payable tab lists Himalayan 12,000. The supplier statement shows bill HP-208 as a Credit row.',
+        trap: 'An unpaid bill is a debt, not a loss. Do not type the same 12,000 in Other Expenses as well.'
+    },
+    {
+        icon: '💵', tag: 'Purchase · cash', title: '4. You buy something and pay on the spot',
+        story: 'You buy 1,000 pouches at Rs 2.40 = Rs 2,400 from the local shop and pay cash.',
+        steps: ['Open Purchases → ＋ New Purchase.', 'Supplier: local shop. Bill No: the shop slip number.', 'Add the item — 1,000 pouches at 2.40.', 'Payment Mode: Cash.', 'Save.'],
+        rows: [['Cash', '− 2,400', 'down'], ['Stock', '+ 2,400 of pouches', 'up'], ['Supplier balance', '0 — nothing owed', 'flat'], ['Profit & loss', 'no change today', 'flat']],
+        check: 'The Daybook shows one purchase row. The Payment Register shows nothing, because the purchase itself already paid.',
+        trap: 'Adding a Payment Register entry for a cash purchase pays the money twice and leaves the supplier with a credit balance.'
+    },
+    {
+        icon: '🥛', tag: 'Milk in', title: '5. A farmer brings milk',
+        story: 'Ram Bahadur brings 20 L in the morning. Fat 4.2, SNF 8.6, and the rate chart gives Rs 58.40 per litre = Rs 1,168.',
+        steps: ['Open Milk Collection → ＋ New Entry.', 'Farmer: Ram Bahadur. Shift: Morning.', 'Litres 20, Fat 4.2, SNF 8.6 — the rate fills itself from the rate chart.', 'Save.'],
+        rows: [['Stock', '+ 20 L milk', 'up'], ['Farmer balance', '+ 1,168 you owe him (payable)', 'up'], ['Profit & loss', '+ 1,168 milk cost', 'up'], ['Cash / Bank', 'no change — he is not paid yet', 'flat']],
+        check: 'Farmer Payments shows Ram 1,168 to pay, and his statement shows one collection row.',
+        trap: 'Never enter farmers milk as a Purchase: the same milk would then be counted twice as a cost.'
+    },
+    {
+        icon: '🧑‍🌾', tag: 'Milk out · payment', title: '6. You pay the farmer',
+        story: 'On Saturday Ram Bahadur is paid Rs 1,168 in cash.',
+        steps: ['Open Farmer Payments.', 'Choose Ram Bahadur and tick the collections being paid (total 1,168).', 'Payment Mode: Cash.', 'Save.'],
+        rows: [['Cash', '− 1,168', 'down'], ['Farmer balance', '− 1,168 — now settled', 'down'], ['Profit & loss', '0 — the cost was booked when the milk came in', 'flat']],
+        check: 'Ram statement: collections Cr 1,168, payment Dr 1,168, closing nil. P&L is unchanged by the payment.',
+        trap: 'Booking the payout as Other Expenses “milk purchase” expenses the same milk twice.'
+    },
+    {
+        icon: '🧾', tag: 'Money in', title: '7. A customer pays his dues',
+        story: 'Krishna pays Rs 2,000 by QR code against his Rs 3,100 bill.',
+        steps: ['Open Cash Collection (money received) → ＋ New Receipt. The same form is on Payment Register → Record Payment, with Type 🧾 Collection from Customer.', 'Party: Krishna Dairy. Amount: 2,000.', 'Mode: Bank. Bank Reference: QR-0912.', 'Save.'],
+        rows: [['Bank', '+ 2,000', 'up'], ['Customer balance', '− 2,000 — now 1,100 owed', 'down'], ['Profit & loss', '0 — the sale was already income', 'flat'], ['Cash', 'no change', 'flat']],
+        check: 'Krishna statement: sale 3,100 Dr, receipt 2,000 Cr, closing 1,100 Dr (he still owes).',
+        trap: 'Typing a collection as “💰 Actual Expense” or as Other Income double-counts the sale or invents an expense.'
+    },
+    {
+        icon: '💳', tag: 'Money out · bill', title: '8. You pay a supplier bill already recorded',
+        story: 'You transfer Rs 12,000 to Himalayan Packaging for bill HP-208.',
+        steps: ['Open Payment Register → ＋ Record Payment.', 'Party: Himalayan Packaging. Amount: 12,000. Mode: Bank. Bank Reference: the transfer number.', 'Save, then open the saved row with ✏️ and set Type = ✓ Settlement.', 'Settlement is the type that clears a payable without adding a second cost.'],
+        rows: [['Bank', '− 12,000', 'down'], ['Supplier balance', '− 12,000 — bill cleared', 'down'], ['Profit & loss', '0 — bill HP-208 already carried the cost', 'flat'], ['Stock', 'no change', 'flat']],
+        check: 'The Payable tab no longer lists 12,000, and the supplier statement reads bill 12,000 Cr / payment 12,000 Dr / closing nil.',
+        trap: '“💰 Actual Expense” on a bill already in the books counts the same cost twice — once from the bill, once from the payment.'
+    },
+    {
+        icon: '⚡', tag: 'Money out · expense', title: '9. You pay a bill that has no purchase entry (electricity)',
+        story: 'The Nepal Electricity Authority bill of Rs 8,500 for this month is paid from the bank.',
+        steps: ['Open Other Expenses → ＋ New Expense.', 'Category: Utility. Head: Electricity. Description: “NEA bill, Bhadra”.', 'Amount 8,500, Mode Bank, date today.', 'Save.'],
+        rows: [['Bank', '− 8,500', 'down'], ['Profit & loss', '+ 8,500 expense this month', 'up'], ['Stock / Party', 'no change', 'flat']],
+        check: 'P&L → Utility / Electricity shows 8,500 for the month, and the Bank book shows one withdrawal.',
+        trap: 'Do not also record it in the Payment Register — that makes the same bill a second expense.'
+    },
+    {
+        icon: '🧺', tag: 'Money out · small', title: '10. A small expense from the office drawer',
+        story: 'Rs 250 taxi fare to the bank, paid out of the petty cash box.',
+        steps: ['Open Petty Cash → ＋ New Voucher.', 'Voucher no (for example PC-231), date, Head: Travel.', 'Description “Taxi to bank”, Amount 250, Paid to the driver.', 'Save.'],
+        rows: [['Cash (drawer)', '− 250', 'down'], ['Profit & loss', '+ 250 expense', 'up'], ['Party balance', 'no change', 'flat']],
+        check: 'Petty Cash summary adds the voucher to this month expenses; the cash count is 250 lower.',
+        trap: 'Recording petty cash as an Advance hides a real cost and shows an asset that does not exist.'
+    },
+    {
+        icon: '👷', tag: 'Payroll', title: '11. Salary with an advance recovered',
+        story: 'Sita earns basic 15,000 plus 1,000 allowance. She had taken a 2,000 advance earlier, so 14,000 is transferred to her account.',
+        steps: ['Open Salary → ＋ New Salary.', 'Employee Sita, month Shrawan 2083.', 'Basic 15,000, Allowance 1,000, Advance 2,000, Deduction 0 — net shows 14,000.', 'Payment Mode: Bank. Save.'],
+        rows: [['Salary expense (P&L)', '+ 16,000 for the month', 'up'], ['Advance given earlier', '− 2,000 recovered', 'down'], ['Bank', '− 14,000 handed over', 'down']],
+        check: 'P&L → Salary shows 16,000 for Shrawan and Sitas advance balance is 2,000 lower.',
+        trap: 'Typing 14,000 as the salary understates the cost. The 2,000 was never an expense, and recovering it is not a cost either.'
+    },
+    {
+        icon: '🚛', tag: 'Purchase · credit', title: '12. Diesel on credit from a party',
+        story: 'Mukteshwor Enterprises supplies 60 L diesel at Rs 175 = Rs 10,500 for the collection van, bill D-77, to be paid next week.',
+        steps: ['Open Purchases → ＋ New Purchase. This is the screen that creates the payable.', 'Supplier: Mukteshwor Enterprises. Bill No: D-77.', 'Item Diesel, quantity 60, rate 175 → 10,500.', 'Payment Mode: Credit. Save.', 'When you pay, use Payment Register with Type ✓ Settlement (card 8).'],
+        rows: [['Supplier balance', '+ 10,500 payable', 'up'], ['Stock', '+ 60 L diesel', 'up'], ['Profit & loss', 'no change today', 'flat']],
+        check: 'The Payable tab lists Mukteshwor 10,500 until the settlement is posted.',
+        trap: 'Diesel paid cash at the pump is different: use Vehicle Expenses → Fuel, because there is no bill to settle. Never record the same diesel twice.'
+    },
+    {
+        icon: '📥', tag: 'Advance', title: '13. You give money in advance',
+        story: 'You give Ram Bahadur Rs 10,000 cash in Dashain, to be taken back from his milk payments.',
+        steps: ['Open Advances → ＋ New Advance.', 'Party: Ram Bahadur. Amount 10,000. Mode: Cash.', 'Reference and note “recovered from milk payments”.', 'Save.'],
+        rows: [['Advance (asset)', '+ 10,000 — he owes it back to you', 'up'], ['Cash', '− 10,000', 'down'], ['Profit & loss', '0 — an advance is not a cost', 'flat']],
+        check: 'The Advance register lists Ram 10,000 outstanding, and nothing appears in the P&L.',
+        trap: 'Putting an advance in Other Expenses makes this month look 10,000 poorer than it really is.'
+    },
+    {
+        icon: '⚡', tag: 'Advance used', title: '14. The advance is used up',
+        story: 'Ram works a day worth Rs 3,000, and you adjust it against his 10,000 advance instead of paying cash.',
+        steps: ['Open Advances → find Ram → Adjust.', 'Amount 3,000, date today, reason “one day labour”.', 'Save. (The Payment form type ⚡ Advance Adjustment does the same thing.)'],
+        rows: [['Advance (asset)', '− 3,000 — 7,000 left', 'down'], ['Expense (P&L)', '+ 3,000 labour cost', 'up'], ['Cash', 'no change — no money moved', 'flat']],
+        check: 'Advance register shows 7,000 and the P&L shows 3,000 in the head you chose.',
+        trap: 'Adjusting without booking the expense hides the cost; paying cash for it as well double-counts.'
+    },
+    {
+        icon: '🤝', tag: 'Loan given', title: '15. You lend money (sapati dine)',
+        story: 'You lend Rs 50,000 to a neighbouring dairy, to come back in three months.',
+        steps: ['Open Payment Register → Record Payment.', 'Type: 🤝 Loan / Sapati Given.', 'Party, amount 50,000, Mode Bank. Save.'],
+        rows: [['Loan receivable (asset)', '+ 50,000', 'up'], ['Bank', '− 50,000', 'down'], ['Profit & loss', '0', 'flat']],
+        check: 'The Advance / Loan register shows 50,000 receivable and the P&L is untouched.',
+        trap: 'A loan given is not an expense. Writing it off as Other Expenses throws 50,000 of your asset away.'
+    },
+    {
+        icon: '🏦', tag: 'Loan received', title: '16. You borrow money',
+        story: 'The bank sanctions a term loan of Rs 2,00,000 and credits your account.',
+        steps: ['Open Payment Register → Record Payment.', 'Type: 🏦 Loan / Sapati Received.', 'Party: the bank. Amount 2,00,000. Mode Bank. Save.'],
+        rows: [['Loan payable (liability)', '+ 2,00,000 you must repay', 'up'], ['Bank', '+ 2,00,000', 'up'], ['Profit & loss', '0 — a loan is never income', 'flat']],
+        check: 'Balance Sheet shows the loan under liabilities and the bank balance is higher by the same amount.',
+        trap: 'Booking a loan as sales income shows a fake profit and a wrong tax figure.'
+    },
+    {
+        icon: '🔁', tag: 'Loan repaid', title: '17. You repay a loan instalment',
+        story: 'You pay Rs 20,000 towards that loan: 18,000 principal and 2,000 interest.',
+        steps: ['Payment Register → Record Payment. Type 🔁 Loan Repayment, amount 18,000 (principal only).', 'Second entry: Type 💰 Actual Expense, head “Interest”, amount 2,000.', 'Same date and bank account for both.'],
+        rows: [['Loan payable', '− 18,000', 'down'], ['Interest (P&L)', '+ 2,000 expense', 'up'], ['Bank', '− 20,000', 'down']],
+        check: 'The loan balance falls by 18,000 only, and the P&L shows 2,000 interest.',
+        trap: 'Expensing the full 20,000 understates the debt and overstates the loss.'
+    },
+    {
+        icon: '🤝', tag: 'Capital', title: '18. A partner puts money into the business',
+        story: 'Your partner deposits Rs 5,00,000 into the business bank account.',
+        steps: ['Open Partner Capital → ＋ New Entry.', 'Partner, type Contribution, amount 5,00,000, Mode Bank.', 'Reference: the deposit slip. Save.'],
+        rows: [['Partner capital', '+ 5,00,000', 'up'], ['Bank', '+ 5,00,000', 'up'], ['Profit & loss', '0 — investment is not income', 'flat']],
+        check: 'Partner Capital summary shows the new contribution and the Balance Sheet capital line rises.',
+        trap: 'Capital is not sales. Booking it as income inflates profit, and later withdrawals then look like profit taken out.'
+    },
+    {
+        icon: '🏧', tag: 'Transfer', title: '19. You put cash into the bank',
+        story: 'You deposit Rs 20,000 of the days collection at Nabil Bank, slip 4471.',
+        steps: ['Open Cash Deposit → ＋ New.', 'Date today, slip no 4471, bank Nabil.', 'Amount 20,000. Save.'],
+        rows: [['Cash', '− 20,000', 'down'], ['Bank', '+ 20,000', 'up'], ['Profit & loss', '0 — the same money only moved', 'flat']],
+        check: 'Total cash plus bank is unchanged, and the deposit shows in the bank book but not in income.',
+        trap: 'Never book a deposit as income: the sale was already income on the day of the sale.'
+    },
+    {
+        icon: '🏛', tag: 'Cheque', title: '20. A customer gives a cheque for a later date',
+        story: 'Krishna gives a cheque of Rs 25,000 dated next month for his dues.',
+        steps: ['Open Cheque Register (PDC) → ＋ New.', 'Party Krishna, amount 25,000, BS cheque date next month.', 'Allocate it to the bill, then Save as Held.', 'When the money reaches your account: Deposited → Cleared. If the bank returns it: Bounce.'],
+        rows: [['While Held', 'nothing moves — a cheque is only a promise', 'flat'], ['On Cleared', 'Bank + 25,000 and Receivable − 25,000', 'up'], ['Profit & loss', '0 — the sale was already income', 'flat']],
+        check: 'The register shows the due date and the register never touches the bank balance before clearing.',
+        trap: 'Entering a post-dated cheque as a receipt shows money you do not have, and the bank balance stops matching the statement.'
+    },
+    {
+        icon: '🏭', tag: 'Stock', title: '21. Milk is turned into paneer',
+        story: 'In one batch, 300 L milk becomes 60 kg paneer.',
+        steps: ['Open Production → ＋ New Batch.', 'Input: milk 300 L. Output: Paneer 60 kg.', 'Wastage and date, then Save.'],
+        rows: [['Milk stock', '− 300 L', 'down'], ['Paneer stock', '+ 60 kg', 'up'], ['Profit & loss', 'no change — nothing is sold yet', 'flat']],
+        check: 'Stock Statement shows both movements with the same batch reference, and the total stock value stays sensible.',
+        trap: 'Do not enter the paneer as a purchase: that invents stock you made yourself and pays for the milk twice.'
+    },
+    {
+        icon: '📋', tag: 'Stock', title: '22. The physical count is short',
+        story: 'The register says 120 kg paneer, but you count only 114 kg.',
+        steps: ['Open Stock → find Paneer → Adjust Stock.', 'Quantity −6 (shortage).', 'Reason: “physical count shortage”. Date today. Save.'],
+        rows: [['Paneer stock', '− 6 kg', 'down'], ['Stock value', '− 2,700 at Rs 450/kg', 'down'], ['Profit & loss', 'the shortage is shown as a stock loss', 'flat']],
+        check: 'Stock Statement closing equals 114 kg, and the adjustment carries the reason and your name.',
+        trap: 'Deleting a sale to “fix” stock rewrites real income. Adjust the stock, not the sale.'
+    },
+    {
+        icon: '🏁', tag: 'Setup', title: '23. Opening balances on the first day',
+        story: 'You start the app on 2083-04-01 with cash 42,300, bank 1,80,000, stock in hand, and old customer and supplier dues.',
+        steps: ['Parties: add each customer and supplier with his opening balance (what he owes you = receivable, what you owe = payable).', 'Stock: enter the opening stock once so the stock value is right.', 'Cash and bank: enter the opening balance once.', 'From the next day, record only the daily transactions.'],
+        rows: [['Opening balances', 'assets and liabilities as at the start date', 'flat'], ['Profit & loss', '0 — openings are never income or expense', 'flat'], ['After that date', 'only new transactions', 'flat']],
+        check: 'The Balance Sheet opening column matches your handover sheet, and the first days P&L shows no opening line.',
+        trap: 'Never enter opening cash as a “sale” or opening stock as a “purchase” — the P&L then shows profit or loss you never earned.'
+    }
+];
+
+function umWorkedExamplesHtml() {
+    const typeRows = UM_PAY_TYPES.map(([t, when, money, pnl]) => `
+        <tr>
+            <td style="font-weight:600;white-space:nowrap">${t}</td>
+            <td>${when}</td>
+            <td style="white-space:nowrap">${money}</td>
+            <td>${pnl}</td>
+        </tr>`).join('');
+
+    const cards = UM_EXAMPLES.map((x, i) => {
+        const steps = x.steps.map(s => `<li style="margin-bottom:4px;line-height:1.55">${s}</li>`).join('');
+        const rows = x.rows.map(([label, value, dir]) => {
+            const color = dir === 'up' ? '#137333' : dir === 'down' ? '#c5221f' : 'var(--text-light)';
+            const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
+            return `<tr><td style="width:200px;font-weight:600">${label}</td><td style="color:${color}">${arrow} ${value}</td></tr>`;
+        }).join('');
+        return `
+        <details id="um-ex-${i + 1}" style="background:var(--bg-white);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+            <summary style="cursor:pointer;list-style:none;padding:14px 18px;display:flex;align-items:center;gap:12px">
+                <span style="font-size:22px">${x.icon}</span>
+                <span style="flex:1;min-width:0">
+                    <span style="display:block;font-size:14px;font-weight:700">${x.title}</span>
+                    <span style="display:block;font-size:12px;color:var(--text-light);margin-top:2px">${x.story}</span>
+                </span>
+                <span style="font-size:10px;font-weight:700;background:#ede7f6;color:#4527a0;padding:3px 9px;border-radius:10px;white-space:nowrap">${x.tag}</span>
+            </summary>
+            <div style="border-top:1px solid var(--border);padding:14px 18px 18px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <div>
+                        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-light);letter-spacing:.3px;margin-bottom:6px">What you do</div>
+                        <ol style="margin:0 0 0 18px;padding:0;font-size:13px">${steps}</ol>
+                    </div>
+                    <div>
+                        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-light);letter-spacing:.3px;margin-bottom:6px">What the app records</div>
+                        <table class="data-table" style="font-size:12.5px"><tbody>${rows}</tbody></table>
+                    </div>
+                </div>
+                <div style="margin-top:12px;display:grid;gap:8px">
+                    <div style="background:#e8f5e9;border-left:4px solid #2e7d32;border-radius:6px;padding:9px 14px;font-size:12.5px;line-height:1.6"><strong>✅ How to check it worked:</strong> ${x.check}</div>
+                    <div style="background:#fff7ed;border-left:4px solid #f97316;border-radius:6px;padding:9px 14px;font-size:12.5px;line-height:1.6"><strong>⚠️ The mistake to avoid:</strong> ${x.trap}</div>
+                </div>
+            </div>
+        </details>`;
+    }).join('');
+
+    return `
+        <div id="um-examples" style="margin-bottom:28px">
+            <style>
+                #um-examples summary::-webkit-details-marker { display:none; }
+                #um-examples summary:hover { background:var(--bg); }
+                #um-examples details[open] > summary { background:var(--bg); }
+            </style>
+            <div style="background:linear-gradient(135deg,#ede7f6,#f3e5f5);border-radius:12px;padding:22px 26px;margin-bottom:16px;border:1px solid #d1c4e9">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+                    <span style="font-size:26px">🧾</span>
+                    <h2 style="font-size:19px;font-weight:700;margin:0;color:#4527a0">Learn by Example — Every Transaction Type, Step by Step</h2>
+                </div>
+                <p style="font-size:13px;line-height:1.7;color:#4a4a6a;margin:0">
+                    You do not need any accounting knowledge. Open a card, copy the steps, and the numbers come out right.
+                    Every card shows the same five things, so you learn one pattern: <strong>cash, bank, stock, party balance, profit</strong>.
+                    <span style="display:block;margin-top:6px;color:var(--text-light)">▲ = goes up &nbsp;&middot;&nbsp; ▼ = goes down &nbsp;&middot;&nbsp; • = no change. Each card is a complete, separate example.</span>
+                </p>
+            </div>
+            <div style="background:var(--bg-white);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin-bottom:16px">
+                <div style="font-size:14px;font-weight:700;margin-bottom:6px">🔑 The one choice that decides everything: <em>Transaction Type</em></div>
+                <p style="font-size:12.5px;color:var(--text-light);line-height:1.6;margin:0 0 12px">
+                    On the New Payment / Receipt form, the type you pick decides whether the money changes your profit or only moves a balance.
+                    Pick from this list and you will not go wrong.
+                </p>
+                <table class="data-table" style="font-size:12.5px;min-width:640px">
+                    <thead><tr><th>Transaction Type</th><th>Choose it when</th><th>Money</th><th>Profit &amp; Loss</th></tr></thead>
+                    <tbody>${typeRows}</tbody>
+                </table>
+            </div>
+            <div style="font-size:12px;font-weight:600;color:var(--text-light);text-transform:uppercase;letter-spacing:.4px;margin:0 0 8px">23 worked examples — click any card to open it</div>
+            ${cards}
+            <div style="margin-top:14px;padding:14px 18px;background:#eef7ff;border-left:4px solid #1565c0;border-radius:8px;font-size:13px;line-height:1.7">
+                <strong>If you remember only one thing:</strong> ask yourself <em>“has this money already been counted somewhere?”</em>
+                If yes, it is a <strong>settlement, transfer or collection</strong> — it must not change profit.
+                If no, it is a <strong>sale, purchase or new expense</strong> — it changes profit once, on that date.
+            </div>
+        </div>`;
+}
+
+// ============================================================
 // Glossary — every accounting word the app uses, EN + नेपाली
 // ============================================================
 // [English, नेपाली, plain-English meaning, dairy example]
@@ -779,6 +1074,7 @@ function umGlossaryHtml() {
 window.umGlossaryHtml = umGlossaryHtml;
 window.umWhereToRecordHtml = umWhereToRecordHtml;
 window.umModuleGuideHtml = umModuleGuideHtml;
+window.umWorkedExamplesHtml = umWorkedExamplesHtml;
 
 // ============================================================
 // Helper: Render a module card
